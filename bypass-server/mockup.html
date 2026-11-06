@@ -1,0 +1,1348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>egress - redesign mockup</title>
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root{
+  color-scheme:dark;
+  --bg:#06080c;
+  --panel:#0c1119;
+  --panel-2:#111823;
+  --field:rgba(0,0,0,.28);
+  --surface:rgba(255,255,255,.028);
+  --surface-2:rgba(255,255,255,.055);
+  --line:rgba(255,255,255,.08);
+  --line-2:rgba(255,255,255,.15);
+  --ink:#edf1f7;
+  --ink-dim:#a3aec0;
+  --ink-faint:#6b7889;
+  --accent:#8fb6ff;
+  --accent-2:#4d7cff;
+  --accent-soft:rgba(143,182,255,.12);
+  --btn-a:#6e96ff;
+  --btn-b:#3d64e0;
+  --grad-1:#8fb6ff;--grad-2:#c3d4ff;--grad-3:#5ee0b0;
+  --ok:#5ee0b0;
+  --warn:#ffc46b;
+  --bad:#ff8f8f;
+  --radius:18px;
+  --radius-sm:12px;
+  --shadow:0 28px 70px -40px rgba(0,0,0,.95);
+  --shadow-soft:0 20px 50px -40px rgba(0,0,0,.8);
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Hanken Grotesk","Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"IBM Plex Mono",SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    color-scheme:light;
+    --bg:#f4f6fa;
+    --panel:#ffffff;
+    --panel-2:#f7f9fc;
+    --field:#ffffff;
+    --surface:rgba(255,255,255,.7);
+    --surface-2:rgba(15,23,42,.028);
+    --line:rgba(15,23,42,.1);
+    --line-2:rgba(15,23,42,.18);
+    --ink:#0d1420;
+    --ink-dim:#4b5a6f;
+    --ink-faint:#76839a;
+    --accent:#2557c7;
+    --accent-2:#1f4fb8;
+    --accent-soft:rgba(37,87,199,.09);
+    --btn-a:#3a6ce0;
+    --btn-b:#2149ad;
+    --grad-1:#1e4fd0;--grad-2:#2557c7;--grad-3:#0b7a55;
+    --ok:#0f7c55;
+    --warn:#8a5a00;
+    --bad:#b42323;
+    --shadow:0 24px 60px -44px rgba(15,23,42,.5);
+    --shadow-soft:0 18px 40px -36px rgba(15,23,42,.4);
+  }
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#f4f6fa;
+  --panel:#ffffff;
+  --panel-2:#f7f9fc;
+  --field:#ffffff;
+  --surface:rgba(255,255,255,.7);
+  --surface-2:rgba(15,23,42,.028);
+  --line:rgba(15,23,42,.1);
+  --line-2:rgba(15,23,42,.18);
+  --ink:#0d1420;
+  --ink-dim:#4b5a6f;
+  --ink-faint:#76839a;
+  --accent:#2557c7;
+  --accent-2:#1f4fb8;
+  --accent-soft:rgba(37,87,199,.09);
+  --btn-a:#3a6ce0;
+  --btn-b:#2149ad;
+  --grad-1:#1e4fd0;--grad-2:#2557c7;--grad-3:#0b7a55;
+  --ok:#0f7c55;
+  --warn:#8a5a00;
+  --bad:#b42323;
+  --shadow:0 24px 60px -44px rgba(15,23,42,.5);
+  --shadow-soft:0 18px 40px -36px rgba(15,23,42,.4);
+}
+
+/* ------------------------------------------------------------------- base */
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;min-height:100vh;padding-bottom:92px;
+  font:16px/1.62 var(--sans);color:var(--ink);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+body::before{
+  content:"";position:fixed;inset:0;z-index:-2;background:var(--bg);
+}
+body::after{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(1100px 700px at 72% -18%,rgba(77,124,255,.20),transparent 62%),
+    radial-gradient(760px 540px at 8% 4%,rgba(94,224,176,.075),transparent 60%),
+    radial-gradient(900px 600px at 50% 108%,rgba(77,124,255,.06),transparent 70%);
+}
+body::before{
+  background-image:
+    linear-gradient(var(--line) 1px,transparent 1px),
+    linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:72px 72px;
+  mask-image:radial-gradient(1000px 720px at 62% -4%,#000 0%,transparent 78%);
+  opacity:.55;
+}
+img,svg{display:block}
+a{color:var(--accent)}
+button{font:inherit}
+h1,h2,h3,p{margin:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:6px}
+::selection{background:rgba(77,124,255,.35);color:#fff}
+.wrap{max-width:72rem;margin:0 auto;padding:0 1.75rem}
+.mono{font-family:var(--mono)}
+.muted{color:var(--ink-dim)}
+.faint{color:var(--ink-faint)}
+.small{font-size:.85rem}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.skip{position:absolute;left:-9999px;top:0;z-index:99;background:var(--panel);padding:.7rem 1rem;border-radius:0 0 10px 0}
+.skip:focus{left:0}
+
+/* ----------------------------------------------------------------- header */
+.site-header{
+  position:sticky;top:0;z-index:40;
+  border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg) 76%,transparent);
+  backdrop-filter:blur(18px) saturate(1.2);
+}
+.bar{max-width:72rem;margin:0 auto;padding:.85rem 1.75rem;display:flex;align-items:center;gap:1.2rem}
+.brand{display:flex;align-items:center;gap:.7rem;text-decoration:none;color:var(--ink)}
+.brand .mark{
+  width:34px;height:34px;border-radius:11px;display:grid;place-items:center;flex:none;
+  color:var(--accent);border:1px solid rgba(143,182,255,.34);
+  background:linear-gradient(160deg,rgba(143,182,255,.24),rgba(143,182,255,.05));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14);
+}
+.brand .word{display:flex;flex-direction:column;line-height:1.05}
+.brand .word b{font-size:1.06rem;letter-spacing:-.03em;font-weight:750}
+.brand .word span{font:600 .56rem/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--ink-faint);margin-top:.28rem}
+.main-nav{margin-left:auto;display:flex;align-items:center;gap:.2rem}
+.main-nav a{
+  padding:.5rem .85rem;border-radius:10px;text-decoration:none;color:var(--ink-dim);
+  font-size:.9rem;font-weight:600;transition:color .15s,background .15s;
+}
+.main-nav a:hover{color:var(--ink);background:var(--surface-2)}
+.main-nav a.active{color:var(--ink);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
+.net{
+  display:inline-flex;align-items:center;gap:.45rem;margin-right:.5rem;
+  font:600 .68rem var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+  padding:.38rem .6rem;border-radius:999px;border:1px solid var(--line);
+}
+.net .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(94,224,176,.14);animation:breathe 3.2s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ------------------------------------------------------------------ hero */
+.view{padding:3.5rem 0 3rem}
+.view[hidden]{display:none!important}
+.hero{padding:4.2rem 0 3.4rem}
+.hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:3.4rem;align-items:center}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:.55rem;
+  font:600 .68rem var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--ink-dim);
+  padding:.42rem .7rem;border-radius:999px;border:1px solid var(--line);background:var(--surface);
+}
+.eyebrow .pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);animation:breathe 3.2s ease-in-out infinite}
+.hero h1{
+  margin:1.4rem 0 0;font-size:clamp(2.5rem,5.4vw,4.05rem);line-height:1.02;
+  letter-spacing:-.045em;font-weight:750;max-width:19ch;text-wrap:balance;
+}
+.grad{
+  font-style:normal;
+  background:linear-gradient(100deg,var(--grad-1) 8%,var(--grad-2) 55%,var(--grad-3) 118%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.lede{font-size:1.14rem;line-height:1.6;color:var(--ink-dim);max-width:48ch;margin:1.4rem 0 0}
+.hero-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin:2rem 0 0}
+.fineprint{display:flex;align-items:center;gap:.45rem;margin:1rem 0 0;font-size:.82rem;color:var(--ink-faint)}
+
+/* ---------------------------------------------------------------- console */
+.console{
+  border:1px solid var(--line-2);border-radius:22px;overflow:hidden;
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  box-shadow:var(--shadow);
+}
+.console-head{
+  display:flex;align-items:center;gap:.7rem;padding:.72rem .95rem;
+  border-bottom:1px solid var(--line);background:var(--surface-2);
+}
+.console-head .lights{display:flex;gap:.32rem}
+.console-head .lights i{width:8px;height:8px;border-radius:50%;background:var(--line-2)}
+.console-head .lights i:first-child{background:rgba(255,143,143,.6)}
+.console-head .lights i:nth-child(2){background:rgba(255,196,107,.6)}
+.console-head .lights i:nth-child(3){background:rgba(94,224,176,.6)}
+.console-head .path{font:600 .72rem var(--mono);color:var(--ink-faint);letter-spacing:.04em}
+.console-head .pill{margin-left:auto}
+.signal{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:.9rem;padding:1.5rem 1.35rem 1.1rem}
+.node{
+  width:54px;height:54px;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.2rem;
+  border:1px solid var(--line-2);background:var(--panel);
+  color:var(--accent);flex:none;
+}
+.node span{font:600 .5rem var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)}
+.track{position:relative;height:2px;background:var(--line-2);border-radius:2px;overflow:visible}
+.track::before{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(90deg,var(--accent),var(--ok));
+  opacity:.55;border-radius:2px;
+}
+.track .spark{
+  position:absolute;top:50%;left:0;width:9px;height:9px;margin-top:-4.5px;border-radius:50%;
+  background:var(--ok);box-shadow:0 0 14px 3px rgba(94,224,176,.6);
+  animation:travel 3.4s cubic-bezier(.45,0,.55,1) infinite;
+}
+@keyframes travel{0%{left:0;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:100%;opacity:0}}
+.track .lbl{position:absolute;top:1rem;font:600 .58rem var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);white-space:nowrap}
+.track .lbl.a{left:0}
+.track .lbl.b{right:0}
+.kv{list-style:none;margin:0;padding:.2rem 1.35rem 1.2rem}
+.kv li{display:grid;grid-template-columns:6.4rem 1fr auto;gap:.7rem;align-items:center;padding:.62rem 0;border-top:1px solid var(--line)}
+.kv .k{font:600 .62rem var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
+.kv .v{font:500 .78rem var(--mono);color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv .tag{
+  font:700 .56rem var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ok);background:rgba(94,224,176,.1);border:1px solid rgba(94,224,176,.3);
+  padding:.2rem .42rem;border-radius:5px;
+}
+.kv .tag.blue{color:var(--accent);background:var(--accent-soft);border-color:rgba(143,182,255,.3)}
+.console-note{
+  padding:.8rem 1.35rem;border-top:1px solid var(--line);background:var(--surface-2);
+  font-size:.8rem;color:var(--ink-faint);display:flex;gap:.5rem;align-items:flex-start;
+}
+.console-note svg{flex:none;margin-top:.15rem}
+
+/* ------------------------------------------------------------------ pieces */
+.kicker{font:600 .66rem var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint)}
+.card{
+  border:1px solid var(--line);border-radius:var(--radius);padding:1.6rem;
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:var(--shadow);
+}
+.card.quiet{box-shadow:none}
+.card h2{font-size:1.12rem;letter-spacing:-.02em;margin:0 0 .55rem}
+.card h3{font-size:.98rem;letter-spacing:-.01em;margin:0 0 .3rem}
+.card p{color:var(--ink-dim);font-size:.92rem}
+.hr{height:1px;background:var(--line);margin:1.3rem 0;border:0}
+
+/* ------------------------------------------------------------------ buttons */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:.5rem;
+  padding:.72rem 1.1rem;border-radius:11px;border:1px solid transparent;
+  font:650 .92rem/1.2 var(--sans);text-decoration:none;cursor:pointer;
+  transition:transform .14s,filter .14s,border-color .14s,background .14s,color .14s;
+  white-space:nowrap;
+}
+.btn svg{flex:none}
+.btn.primary{
+  color:#fff;background:linear-gradient(180deg,var(--btn-a),var(--btn-b));
+  box-shadow:0 12px 28px -14px rgba(77,124,255,.9),inset 0 1px 0 rgba(255,255,255,.28);
+}
+.btn.primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.btn.ghost{color:var(--ink);background:var(--surface);border-color:var(--line-2);box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn.ghost:hover{border-color:var(--accent);color:var(--ink);background:var(--surface-2)}
+.btn.danger{color:var(--bad);background:transparent;border-color:rgba(255,143,143,.4)}
+.btn.danger:hover{background:rgba(255,143,143,.1)}
+.btn.sm{padding:.42rem .68rem;font-size:.8rem;border-radius:9px}
+.btn.block{width:100%}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+
+/* ------------------------------------------------------------------ pills */
+.pill{
+  display:inline-flex;align-items:center;gap:.42rem;
+  font:600 .68rem/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;
+  padding:.36rem .58rem;border-radius:999px;border:1px solid var(--line-2);
+  background:var(--surface-2);color:var(--ink-dim);white-space:nowrap;
+}
+.pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;flex:none}
+.pill.plain::before{display:none}
+.pill.ok{color:var(--ok);border-color:rgba(94,224,176,.32);background:rgba(94,224,176,.09)}
+.pill.warn{color:var(--warn);border-color:rgba(255,196,107,.32);background:rgba(255,196,107,.09)}
+.pill.bad{color:var(--bad);border-color:rgba(255,143,143,.32);background:rgba(255,143,143,.09)}
+.pill.info{color:var(--accent);border-color:rgba(143,182,255,.32);background:var(--accent-soft)}
+.pill.platform{text-transform:none;letter-spacing:0;font-family:var(--sans);font-weight:600;font-size:.76rem;color:var(--ink-dim);padding:.34rem .62rem}
+.pill.platform::before{display:none}
+
+/* ------------------------------------------------------------------ steps */
+.steps{list-style:none;margin:0;padding:0}
+.steps li{position:relative;padding:0 0 1.45rem 2.75rem}
+.steps li:last-child{padding-bottom:0}
+.steps li::before{
+  content:"";position:absolute;left:.72rem;top:1.65rem;bottom:.1rem;width:1px;
+  background:linear-gradient(color-mix(in srgb,var(--accent) 32%,var(--line-2)),var(--line));
+  opacity:.9;
+}
+.steps li:last-child::before{display:none}
+.steps .dot{
+  position:absolute;left:0;top:.1rem;width:1.5rem;height:1.5rem;border-radius:50%;
+  border:1px solid var(--line-2);background:var(--panel);display:grid;place-items:center;
+  color:transparent;font:700 .62rem var(--mono);
+}
+.steps .dot svg{width:11px;height:11px}
+.steps li.done .dot{background:rgba(94,224,176,.12);border-color:rgba(94,224,176,.45);color:var(--ok)}
+.steps li.current .dot{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.steps .t{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+.steps strong{font-size:.95rem;letter-spacing:-.01em;font-weight:650}
+.steps .when{font:500 .68rem var(--mono);color:var(--ink-faint)}
+.steps p{font-size:.87rem;color:var(--ink-dim);margin:.18rem 0 0}
+
+/* ------------------------------------------------------------------ forms */
+.field{margin:0 0 1.1rem}
+.field:last-child{margin-bottom:0}
+.field label,.lbl{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;font-size:.87rem;font-weight:650;margin:0 0 .45rem}
+.field label .hint{font-size:.78rem;color:var(--ink-faint);font-weight:450}
+input[type=text],input[type=password],input[type=email],textarea,select{
+  width:100%;padding:.82rem .95rem;border-radius:11px;border:1px solid var(--line-2);
+  background:var(--field);color:var(--ink);font:inherit;font-size:.93rem;
+  transition:border-color .15s,box-shadow .15s;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+}
+textarea{resize:vertical;min-height:7.5rem;line-height:1.55}
+input::placeholder,textarea::placeholder{color:var(--ink-faint)}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.field-row{display:flex;gap:.5rem;align-items:stretch}
+.field-row input{flex:1;min-width:0}
+.hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+.os-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.55rem;margin-top:.55rem}
+.os{
+  position:relative;display:flex;flex-direction:column;gap:.25rem;cursor:pointer;
+  padding:.75rem .8rem;border-radius:11px;border:1px solid var(--line-2);background:var(--field);
+  transition:border-color .15s,background .15s,box-shadow .15s;
+}
+.os input{position:absolute;opacity:0;pointer-events:none}
+.os .tag{
+  width:max-content;font:700 .55rem var(--mono);letter-spacing:.1em;color:var(--accent);
+  background:var(--accent-soft);border:1px solid rgba(143,182,255,.28);
+  padding:.18rem .34rem;border-radius:5px;
+}
+.os b{font-size:.85rem;font-weight:650;letter-spacing:-.01em}
+.os small{font-size:.73rem;color:var(--ink-faint);line-height:1.35}
+.os:hover{border-color:var(--line-2);background:var(--surface-2)}
+.os:has(input:checked){
+  border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--field));
+  box-shadow:0 0 0 3px var(--accent-soft);
+}
+.os:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.form-actions{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin-top:1.5rem}
+.form-note{font-size:.8rem;color:var(--ink-faint);margin:0}
+
+/* ------------------------------------------------------------------ alerts */
+.alert{display:flex;gap:.7rem;align-items:flex-start;padding:.85rem 1rem;border-radius:12px;border:1px solid;font-size:.9rem;margin:0 0 1.2rem}
+.alert svg{flex:none;margin-top:.12rem}
+.alert strong{font-weight:650}
+.alert.ok{color:var(--ok);border-color:rgba(94,224,176,.3);background:rgba(94,224,176,.07)}
+.alert.error{color:var(--bad);border-color:rgba(255,143,143,.32);background:rgba(255,143,143,.07)}
+.alert.info{color:var(--ink);border-color:rgba(143,182,255,.3);background:var(--accent-soft)}
+.alert.warn{color:var(--warn);border-color:rgba(255,196,107,.32);background:rgba(255,196,107,.07)}
+.alert a{color:inherit;text-decoration:underline;text-underline-offset:2px}
+
+/* --------------------------------------------------------------- page head */
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:1.5rem;margin:0 0 2rem;flex-wrap:wrap}
+.page-head h1{font-size:clamp(1.8rem,3.4vw,2.35rem);line-height:1.08;letter-spacing:-.04em;font-weight:750;margin:.45rem 0 0}
+.page-head p{color:var(--ink-dim);font-size:.95rem;margin:.55rem 0 0}
+.page-head .side{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.backlink{display:inline-flex;align-items:center;gap:.4rem;font:600 .78rem var(--mono);color:var(--ink-faint);text-decoration:none;margin-bottom:1rem}
+.backlink:hover{color:var(--ink)}
+
+/* ------------------------------------------------------------------ home */
+.specs{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:1.4rem;
+  margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--line);
+}
+.spec .k{display:block;font:600 .62rem var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem}
+.spec .v{font-size:.92rem;color:var(--ink-dim);letter-spacing:-.01em}
+
+/* ------------------------------------------------------------------ apply */
+.split{display:grid;grid-template-columns:1.35fr .85fr;gap:1.3rem;align-items:start}
+.aside-stack{display:flex;flex-direction:column;gap:1rem}
+.aside-card h2{font-size:1rem}
+.mini-steps{list-style:none;margin:.4rem 0 0;padding:0;counter-reset:ms}
+.mini-steps li{counter-increment:ms;position:relative;padding:.55rem 0 .55rem 1.9rem;font-size:.87rem;color:var(--ink-dim);border-bottom:1px dashed var(--line)}
+.mini-steps li:last-child{border-bottom:0;padding-bottom:0}
+.mini-steps li::before{
+  content:counter(ms,decimal-leading-zero);position:absolute;left:0;top:.6rem;
+  font:600 .62rem var(--mono);color:var(--accent);opacity:.85;
+}
+.mini-steps b{color:var(--ink);font-weight:600;display:block;font-size:.88rem}
+.box-list{list-style:none;margin:.5rem 0 0;padding:0}
+.box-list li{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;padding:.58rem 0;border-bottom:1px dashed var(--line);font-size:.88rem}
+.box-list li:last-child{border-bottom:0;padding-bottom:0}
+.box-list b{font-weight:600;letter-spacing:-.01em}
+.box-list span{color:var(--ink-faint);font:500 .72rem var(--mono);text-align:right}
+
+/* ----------------------------------------------------------------- status */
+.status-grid{display:grid;grid-template-columns:1fr .9fr;gap:1.2rem;align-items:start}
+.who-chipline{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin:0 0 1.2rem}
+.cred-row{display:flex;align-items:center;gap:.7rem;justify-content:space-between;padding:.7rem 0;border-bottom:1px dashed var(--line)}
+.cred-row:last-of-type{border-bottom:0}
+.cred-row .k{font:600 .62rem var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint)}
+.cred-row .v{display:flex;align-items:center;gap:.5rem;font-family:var(--mono);font-size:.9rem}
+.copy{
+  display:inline-flex;align-items:center;gap:.3rem;padding:.28rem .45rem;border-radius:7px;
+  border:1px solid var(--line-2);background:transparent;color:var(--ink-faint);
+  font:600 .68rem var(--mono);cursor:pointer;
+}
+.copy:hover{color:var(--ink);border-color:var(--accent)}
+.linkbox{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.linkbox code{flex:1 1 18rem;min-width:0;overflow-wrap:anywhere;padding:.7rem .85rem;border-radius:10px;border:1px solid var(--line-2);background:var(--field);font:.8rem/1.5 var(--mono);color:var(--ink-dim)}
+.filemeta{display:flex;gap:.5rem;flex-wrap:wrap;margin:.9rem 0 0;font:500 .72rem var(--mono);color:var(--ink-faint)}
+.filemeta span{padding:.25rem .5rem;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+
+/* ------------------------------------------------------------- download/login */
+.center-wrap{max-width:29rem;margin:0 auto}
+.auth-card{padding:1.9rem}
+.auth-head{text-align:center;margin:0 0 1.6rem}
+.auth-head .mark{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;margin:0 auto .9rem;color:var(--accent);border:1px solid rgba(143,182,255,.32);background:linear-gradient(160deg,rgba(143,182,255,.22),rgba(143,182,255,.04))}
+.auth-head h1{font-size:1.55rem;letter-spacing:-.035em;font-weight:750}
+.auth-head p{color:var(--ink-dim);font-size:.9rem;margin:.45rem 0 0}
+.auth-foot{margin:1.4rem 0 0;padding-top:1.2rem;border-top:1px solid var(--line);text-align:center;font-size:.82rem;color:var(--ink-faint)}
+.success-ring{
+  width:64px;height:64px;border-radius:50%;display:grid;place-items:center;margin:0 auto 1.1rem;
+  color:var(--ok);background:rgba(94,224,176,.1);border:1px solid rgba(94,224,176,.4);
+  box-shadow:0 0 0 8px rgba(94,224,176,.06);
+}
+
+/* ----------------------------------------------------------------- admin */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin:0 0 1.2rem}
+.stat{
+  position:relative;display:block;overflow:hidden;text-decoration:none;color:inherit;
+  padding:1.15rem 1.2rem;border:1px solid var(--line);border-radius:16px;
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:var(--shadow-soft);
+  transition:border-color .15s,transform .15s;
+}
+.stat:hover{border-color:var(--line-2);transform:translateY(-1px)}
+.stat .k{font:600 .62rem var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
+.stat .v{display:flex;align-items:baseline;gap:.4rem;font-size:2.1rem;font-weight:750;letter-spacing:-.045em;line-height:1.12;margin:.45rem 0 .15rem}
+.stat .v small{font-size:.78rem;font-weight:500;color:var(--ink-faint);letter-spacing:0}
+.stat .n{font-size:.8rem;color:var(--ink-dim)}
+.stat.warn .v{color:var(--warn)}
+.stat.ok .v{color:var(--ok)}
+.stat::after{
+  content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;
+  background:radial-gradient(circle,var(--accent-soft),transparent 68%);
+}
+.status-strip{
+  display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
+  padding:.7rem 1rem;border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  font:500 .76rem var(--mono);color:var(--ink-faint);margin:0 0 1.4rem;
+}
+.status-strip .sep{width:1px;height:14px;background:var(--line-2)}
+.status-strip b{color:var(--ink-dim);font-weight:600}
+.status-strip .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(94,224,176,.12)}
+.panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.panel{padding:0;overflow:hidden}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 1.2rem;border-bottom:1px solid var(--line)}
+.panel-head h2{font-size:.95rem;margin:0;letter-spacing:-.01em}
+.panel-head a{font:600 .76rem var(--mono);text-decoration:none;color:var(--ink-dim)}
+.panel-head a:hover{color:var(--accent)}
+.panel-body{padding:.35rem 1.2rem}
+.attn-row{display:flex;gap:.8rem;align-items:flex-start;padding:.85rem 0;border-bottom:1px solid var(--line)}
+.attn-row:last-child{border-bottom:0}
+.attn-row .body{flex:1;min-width:0}
+.attn-row .body b{font-size:.9rem;display:block}
+.attn-row .body p{font-size:.82rem;color:var(--ink-dim);margin:.15rem 0 0}
+.attn-row .meta{font:500 .7rem var(--mono);color:var(--ink-faint);white-space:nowrap}
+.mini-app{display:flex;align-items:center;gap:.75rem;padding:.75rem 0;border-bottom:1px solid var(--line)}
+.mini-app:last-child{border-bottom:0}
+.mini-app .body{flex:1;min-width:0}
+.mini-app .body b{display:block;font-size:.88rem}
+.mini-app .body span{font:500 .7rem var(--mono);color:var(--ink-faint)}
+.avatar{
+  flex:none;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+  font:700 .78rem var(--mono);color:var(--tint,var(--accent));
+  background:color-mix(in srgb,var(--tint,var(--accent)) 15%,transparent);
+  border:1px solid color-mix(in srgb,var(--tint,var(--accent)) 32%,transparent);
+}
+.tabs{display:flex;gap:.15rem;border-bottom:1px solid var(--line);margin:0 0 1.5rem;overflow-x:auto}
+.tabs a{
+  padding:.62rem .9rem;color:var(--ink-dim);text-decoration:none;font-size:.88rem;font-weight:600;
+  border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
+}
+.tabs a:hover{color:var(--ink)}
+.tabs a.active{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs .count{font:600 .66rem var(--mono);color:var(--ink-faint);margin-left:.35rem}
+
+/* ----------------------------------------------------------------- tables */
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:var(--shadow-soft)}
+table{width:100%;border-collapse:collapse;font-size:.88rem;min-width:46rem}
+th{
+  position:sticky;top:0;text-align:left;white-space:nowrap;
+  font:600 .64rem var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint);
+  padding:.8rem 1rem;border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg) 55%,var(--panel));backdrop-filter:blur(8px);
+}
+td{padding:.95rem 1rem;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
+.who{display:flex;gap:.7rem;align-items:flex-start}
+.who b{display:block;font-size:.9rem;font-weight:650;letter-spacing:-.01em}
+.who span{display:block;font:500 .7rem var(--mono);color:var(--ink-faint);margin-top:.2rem}
+.why{min-width:15rem;max-width:26rem;color:var(--ink-dim);font-size:.85rem;line-height:1.5}
+.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.actions{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+.file-name{max-width:15rem;overflow-wrap:anywhere;line-height:1.4}
+.nowrap{white-space:nowrap}
+.actions form{margin:0;display:inline-flex;gap:.3rem;align-items:center}
+.mini-input{width:6.6rem;padding:.4rem .5rem!important;font-size:.78rem!important;border-radius:8px!important}
+.empty{padding:3rem 1.5rem;text-align:center;color:var(--ink-dim)}
+.empty b{display:block;color:var(--ink);font-size:1rem;margin-bottom:.3rem}
+.table-note{margin:1rem 0 0;font-size:.8rem;color:var(--ink-faint)}
+.filters{display:flex;gap:.35rem;flex-wrap:wrap;margin:0 0 1rem}
+.chip{
+  padding:.32rem .65rem;border-radius:999px;border:1px solid var(--line);background:transparent;
+  color:var(--ink-dim);font:600 .73rem var(--mono);text-decoration:none;
+}
+.chip:hover{color:var(--ink);border-color:var(--line-2)}
+.chip.active{color:var(--ink);border-color:var(--accent);background:var(--surface-2)}
+
+/* ----------------------------------------------------------------- report */
+.meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:0 0 1.2rem}
+.meta-grid div{background:var(--panel);padding:.85rem 1rem}
+.meta-grid .k{font:600 .6rem var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.3rem}
+.meta-grid .v{font:500 .82rem var(--mono);color:var(--ink-dim);overflow-wrap:anywhere}
+.report-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+.check-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.6rem 0;border-bottom:1px dashed var(--line)}
+.check-row:last-child{border-bottom:0}
+.check-row .name{font:500 .82rem var(--mono);color:var(--ink-dim)}
+.check-row .val{display:inline-flex;align-items:center;gap:.4rem;font:600 .78rem var(--mono);color:var(--ok)}
+.check-row .val.warn{color:var(--warn)}
+.term{border:1px solid rgba(255,255,255,.14);border-radius:14px;overflow:hidden;background:#080c12;box-shadow:var(--shadow);color:#c7d3e4}
+.term-head{display:flex;align-items:center;gap:.5rem;padding:.6rem .9rem;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);font:600 .66rem var(--mono);letter-spacing:.12em;text-transform:uppercase;color:#8194ad}
+.term pre{margin:0;padding:.9rem 1.05rem;font:400 .78rem/1.7 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.term .prompt{color:#7ea6ff}
+.term .warnline{color:#ffc46b}
+
+/* ----------------------------------------------------------------- footer */
+.footer{border-top:1px solid var(--line);margin-top:2rem;padding:1.5rem 0 2rem}
+.footer .wrap{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;color:var(--ink-faint);font-size:.8rem}
+.footer nav{display:flex;gap:1rem}
+.footer a{color:var(--ink-faint);text-decoration:none}
+.footer a:hover{color:var(--ink)}
+
+/* ------------------------------------------------------------------- dock */
+.dock{
+  position:fixed;left:50%;bottom:1rem;transform:translateX(-50%);z-index:60;
+  display:flex;align-items:center;gap:.15rem;padding:.32rem .42rem;border-radius:999px;
+  border:1px solid var(--line-2);background:color-mix(in srgb,var(--panel) 86%,transparent);
+  backdrop-filter:blur(18px) saturate(1.2);box-shadow:0 20px 60px -22px rgba(0,0,0,.85);
+  max-width:calc(100vw - 1.5rem);overflow-x:auto;scrollbar-width:none;
+}
+.dock::-webkit-scrollbar{display:none}
+.dock .tag{font:700 .56rem var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);padding:0 .5rem;white-space:nowrap}
+.dock .sep{width:1px;height:16px;background:var(--line-2);margin:0 .25rem;flex:none}
+.dock a{
+  padding:.36rem .6rem;border-radius:999px;text-decoration:none;color:var(--ink-dim);
+  font:600 .72rem var(--mono);white-space:nowrap;
+}
+.dock a:hover{color:var(--ink)}
+.dock a.active{color:#fff;background:var(--accent-2);box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
+@media print{.dock{display:none}body{padding-bottom:0}}
+
+/* ------------------------------------------------------------------- small */
+@media (max-width:1000px){
+  .hero-grid{grid-template-columns:1fr;gap:2.2rem}
+  .hero h1{max-width:24ch}
+  .stats{grid-template-columns:1fr 1fr}
+  .split,.status-grid,.report-grid,.panel-grid{grid-template-columns:1fr}
+}
+@media (max-width:760px){
+  .specs{grid-template-columns:1fr 1fr;gap:1.1rem;margin-top:2.4rem}
+  .wrap,.bar{padding-left:1.15rem;padding-right:1.15rem}
+  .hero{padding-top:2.8rem}
+  .net{display:none}
+  .main-nav{gap:.1rem}
+  .main-nav a{padding:.45rem .6rem;font-size:.85rem}
+  .brand .word span{display:none}
+  .os-grid{grid-template-columns:1fr 1fr}
+  .meta-grid{grid-template-columns:1fr 1fr}
+  .stats{grid-template-columns:1fr 1fr;gap:.7rem}
+  .stat .v{font-size:1.8rem}
+  .page-head{flex-direction:column;align-items:flex-start}
+  .table-note{font-size:.76rem}
+  .view{padding:2.2rem 0}
+  .linkbox code{flex-basis:100%}
+}
+@media (max-width:460px){
+  .stats{grid-template-columns:1fr}
+  .os-grid{grid-template-columns:1fr}
+  .hero-actions .btn{width:100%}
+  .meta-grid{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9"/><path d="m17 6 3 3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 2.5 15.4 0 18"/><path d="M12 3c-2.5 2.6-2.5 15.4 0 18"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v8l-9 5-9-5V8l9-5 9 5Z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/></symbol>
+    <symbol id="i-windows" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 5.5 10.5 4v7H3z"/><path d="M12.5 3.6 21 2v9h-8.5z"/><path d="M3 13h7.5v7L3 18.5z"/><path d="M12.5 13H21v9l-8.5-1.6z"/></symbol>
+    <symbol id="i-linux" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0c0 2 .8 3 2 4.5 1.4 1.7 2 4 2 6.5 0 2-1.5 3-4 3H9c-2.5 0-4-1-4-3 0-2.5.6-4.8 2-6.5C8.2 9 9 8 9 6Z"/><path d="M9 7c-1.5 0-2.5-1-2.5-3M15 7c1.5 0 2.5-1 2.5-3"/><path d="M10 12h.01M14 12h.01"/></symbol>
+    <symbol id="i-apple" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3c-1.4 0-2.8.8-3.6 2-.5.8-.8 1.7-.7 2.6 1 0 2-.5 2.7-1.2.9-.9 1.5-2.1 1.6-3.4Z"/><path d="M19.5 16.5c-.5 1.2-1 2.3-1.9 3.3-.9 1-1.8 1.3-2.9.9-1.1-.4-2.1-.4-3.2 0-1.1.4-2 0-2.9-.9-2.2-2.3-3.3-6.5-2-9.2.9-1.9 2.6-3 4.4-3 .9 0 1.7.3 2.4.6.5.2.9.3 1.2.3.3 0 .8-.1 1.4-.4.7-.3 1.4-.5 2.1-.4 1.5.1 2.8.8 3.6 2-1.5.9-2.2 2.4-2.2 4 0 1.1.4 2.1 1 2.8Z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  </defs>
+</svg>
+
+<header class="site-header">
+  <div class="bar">
+    <a class="brand" href="#" data-goto="home" aria-label="egress home">
+      <span class="mark"><svg width="19" height="19"><use href="#i-shield"/></svg></span>
+      <span class="word"><b>egress</b><span>private exit</span></span>
+    </a>
+    <span class="net"><span class="dot"></span>network online</span>
+    <nav class="main-nav" aria-label="Primary">
+      <a href="#" data-goto="apply">Apply</a>
+      <a href="#" data-goto="download">Download</a>
+      <a href="#" data-goto="admin">Admin</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ================================================================= HOME -->
+<section class="view hero" data-view="home">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <span class="eyebrow"><span class="pulse"></span>Private egress network</span>
+        <h1>A clean exit from <em class="grad">hostile networks.</em></h1>
+        <p class="lede">Encrypted DNS, a full-tunnel exit, and an automatic fallback when UDP is blocked.</p>
+        <div class="hero-actions">
+          <a class="btn primary" href="#" data-goto="apply">Apply for access <svg width="16" height="16"><use href="#i-arrow"/></svg></a>
+          <a class="btn ghost" href="#" data-goto="download"><svg width="16" height="16"><use href="#i-download"/></svg>Download installer</a>
+        </div>
+        <p class="fineprint">Approved devices only.</p>
+      </div>
+
+      <div class="console" aria-label="Example tunnel status">
+        <div class="console-head">
+          <span class="lights"><i></i><i></i><i></i></span>
+          <span class="path">egress status</span>
+          <span class="pill ok">tunnel up</span>
+        </div>
+        <div class="signal">
+          <div class="node">
+            <svg width="20" height="20"><use href="#i-box"/></svg>
+            <span>you</span>
+          </div>
+          <div class="track">
+            <span class="spark"></span>
+            <span class="lbl a">encrypted</span>
+            <span class="lbl b">aegis</span>
+          </div>
+          <div class="node">
+            <svg width="20" height="20"><use href="#i-shield"/></svg>
+            <span>exit</span>
+          </div>
+        </div>
+        <ul class="kv">
+          <li><span class="k">DNS</span><span class="v">127.0.0.1:7103</span><span class="tag blue">DoH</span></li>
+          <li><span class="k">Exit</span><span class="v">152.69.174.7</span><span class="tag">WG</span></li>
+          <li><span class="k">Fallback</span><span class="v">wss://dns.breadway.dev/wg-tunnel</span><span class="tag blue">auto</span></li>
+          <li><span class="k">Route</span><span class="v">0.0.0.0/0</span><span class="tag">pinned</span></li>
+        </ul>
+        <div class="console-note">
+          <svg width="14" height="14" style="color:var(--accent)"><use href="#i-info"/></svg>
+          <span>UDP blocked? Transport switches automatically.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="specs">
+      <div class="spec"><span class="k">DNS</span><span class="v">DoH on 127.0.0.1:7103</span></div>
+      <div class="spec"><span class="k">Exit</span><span class="v">WireGuard via Aegis</span></div>
+      <div class="spec"><span class="k">Fallback</span><span class="v">WSS when UDP is blocked</span></div>
+      <div class="spec"><span class="k">Build</span><span class="v">Windows and Linux</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ APPLY -->
+<section class="view" data-view="apply" hidden>
+  <div class="wrap">
+    <div class="page-head">
+      <div><span class="kicker">Enrollment</span><h1>Apply for access</h1></div>
+    </div>
+
+    <div class="split">
+      <form class="card" method="post" action="#">
+        <div class="field">
+          <label for="name">Name</label>
+          <input id="name" name="name" type="text" autocomplete="name" placeholder="Sam Whitfield" value="Sam Whitfield">
+        </div>
+        <div class="field">
+          <label for="why">Reason</label>
+          <textarea id="why" name="why" rows="4" placeholder="Where you are and what is blocking you.">Filtered school network next week. Need DNS and the tunnel for my dev machine.</textarea>
+        </div>
+        <div class="field">
+          <span class="lbl">Platform</span>
+          <div class="os-grid">
+            <label class="os">
+              <input type="radio" name="os" value="windows" checked>
+              <span class="tag">WIN</span>
+              <b>Windows</b>
+            </label>
+            <label class="os">
+              <input type="radio" name="os" value="linux">
+              <span class="tag">LNX</span>
+              <b>Linux</b>
+            </label>
+            <label class="os">
+              <input type="radio" name="os" value="mac-arm64">
+              <span class="tag">MAC</span>
+              <b>macOS</b>
+            </label>
+            <label class="os">
+              <input type="radio" name="os" value="mac-amd64">
+              <span class="tag">MAC</span>
+              <b>macOS Intel</b>
+            </label>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Submit <svg width="16" height="16"><use href="#i-arrow"/></svg></button>
+          <p class="form-note">You will get a private status link.</p>
+        </div>
+      </form>
+
+      <aside class="aside-stack">
+        <div class="card aside-card">
+          <span class="kicker">What happens next</span>
+          <ol class="mini-steps">
+            <li><b>Apply</b>Reason and platform.</li>
+            <li><b>Review</b>Approved by hand.</li>
+            <li><b>Provision</b>Peer key created.</li>
+            <li><b>Install</b>Download and run.</li>
+          </ol>
+        </div>
+        <div class="card aside-card">
+          <div class="alert warn" style="margin-bottom:0">
+            <svg width="17" height="17"><use href="#i-key"/></svg>
+            <span>The installer is a credential. Do not share the file.</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== APPLIED -->
+<section class="view" data-view="applied" hidden>
+  <div class="wrap">
+    <div class="center-wrap" style="max-width:36rem">
+      <div class="card auth-card">
+        <div class="auth-head">
+          <div class="success-ring"><svg width="26" height="26"><use href="#i-check"/></svg></div>
+          <h1>Application received</h1>
+          <p>Bookmark this link. It is the only way back.</p>
+        </div>
+        <div class="linkbox">
+          <code>https://bypass.breadway.dev/status?app=a1b2c3d4e5f60718&amp;key=9f3c2a7d41e8b605c2de91a7f04b8e36</code>
+          <button class="btn ghost sm" data-copy="https://bypass.breadway.dev/status?app=a1b2c3d4e5f60718&amp;key=9f3c2a7d41e8b605c2de91a7f04b8e36"><svg width="14" height="14"><use href="#i-copy"/></svg>Copy</button>
+        </div>
+        <div class="alert info" style="margin:1.2rem 0 0">
+          <svg width="17" height="17"><use href="#i-lock"/></svg>
+          <span>Anyone with this link can see your application.</span>
+        </div>
+        <div class="form-actions" style="margin-top:1.4rem">
+          <a class="btn primary block" href="#" data-goto="status">Open status page <svg width="16" height="16"><use href="#i-arrow"/></svg></a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =============================================================== STATUS -->
+<section class="view" data-view="status" hidden>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <span class="kicker">Application a1b2c3d4</span>
+        <h1>Device status</h1>
+        <p>Sam Whitfield &middot; Windows &middot; 5 Nov</p>
+      </div>
+      <div class="side"><span class="pill ok">ready to install</span></div>
+    </div>
+
+    <div class="status-grid">
+      <div class="card">
+        <h2 style="margin-bottom:1.2rem">Progress</h2>
+        <ol class="steps">
+          <li class="done">
+            <span class="dot"><svg><use href="#i-check"/></svg></span>
+            <div class="t"><strong>Applied</strong><span class="when">5 Nov, 09:12</span></div>
+            <p>In the queue.</p>
+          </li>
+          <li class="done">
+            <span class="dot"><svg><use href="#i-check"/></svg></span>
+            <div class="t"><strong>Reviewed</strong><span class="when">5 Nov, 11:40</span></div>
+            <p>Approved.</p>
+          </li>
+          <li class="done">
+            <span class="dot"><svg><use href="#i-check"/></svg></span>
+            <div class="t"><strong>Provisioned</strong><span class="when">5 Nov, 11:42</span></div>
+            <p>Peer <code>10.88.0.11</code> reserved.</p>
+          </li>
+          <li class="current">
+            <span class="dot"></span>
+            <div class="t"><strong>Ready</strong><span class="when">now</span></div>
+            <p>Download below.</p>
+          </li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <div class="who-chipline"><span class="pill ok plain">installer ready</span><span class="faint small mono">egress-sam-10.88.0.11.exe</span></div>
+        <h2>Install</h2>
+        <div class="cred-row">
+          <span class="k">Username</span>
+          <span class="v">sam <button class="copy" data-copy="sam"><svg width="12" height="12"><use href="#i-copy"/></svg>copy</button></span>
+        </div>
+        <div class="cred-row">
+          <span class="k">Password</span>
+          <span class="v">k7Qm2xVb9tRn4wLz <button class="copy" data-copy="k7Qm2xVb9tRn4wLz"><svg width="12" height="12"><use href="#i-copy"/></svg>copy</button></span>
+        </div>
+        <a class="btn primary block" href="#" style="margin-top:1.2rem"><svg width="16" height="16"><use href="#i-download"/></svg>Download installer</a>
+        <div class="filemeta"><span>24.7 MB</span><span>SHA-256 9c1f4a7e</span><span>build 0.9.4</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= DOWNLOAD -->
+<section class="view" data-view="download" hidden>
+  <div class="wrap">
+    <div class="split" style="grid-template-columns:1fr .95fr;max-width:64rem;margin:0 auto">
+      <form class="card" method="post" action="#" style="padding:1.9rem">
+        <span class="kicker">Approved devices</span>
+        <h1 style="font-size:1.8rem;letter-spacing:-.04em;margin:.5rem 0 1.6rem">Download</h1>
+        <div class="field">
+          <label for="dl-user">Username</label>
+          <input id="dl-user" name="username" type="text" autocomplete="username" placeholder="sam">
+        </div>
+        <div class="field">
+          <label for="dl-pass">Password</label>
+          <div class="field-row">
+            <input id="dl-pass" name="password" type="password" autocomplete="current-password" placeholder="••••••••••••••••">
+            <button type="button" class="btn ghost sm" data-reveal="dl-pass">Show</button>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary block" type="submit"><svg width="16" height="16"><use href="#i-download"/></svg>Download installer</button>
+        </div>
+      </form>
+
+      <aside class="aside-stack">
+        <div class="card">
+          <span class="kicker">In the box</span>
+          <ul class="box-list">
+            <li><b>WireGuard</b><span>signed client</span></li>
+            <li><b>DNS over HTTPS</b><span>:7103</span></li>
+            <li><b>Fallback</b><span>wstunnel 11.1.0</span></li>
+            <li><b>Peer key</b><span>one device</span></li>
+          </ul>
+        </div>
+        <div class="card quiet">
+          <div class="alert info" style="margin:0">
+            <svg width="17" height="17"><use href="#i-key"/></svg>
+            <span>The file is a credential. Do not share it.</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================= ADMIN LOGIN -->
+<section class="view" data-view="login" hidden>
+  <div class="wrap">
+    <div class="center-wrap">
+      <div class="card auth-card">
+        <div class="auth-head">
+          <div class="mark" style="width:46px;height:46px;border-radius:14px;display:grid;place-items:center;margin:0 auto .9rem;color:var(--accent);border:1px solid rgba(143,182,255,.32);background:linear-gradient(160deg,rgba(143,182,255,.22),rgba(143,182,255,.04))"><svg width="22" height="22"><use href="#i-shield"/></svg></div>
+          <h1>Admin</h1>
+        </div>
+        <form method="post" action="#">
+          <div class="field">
+            <label for="a-user">Username</label>
+            <input id="a-user" name="username" type="text" autocomplete="username" placeholder="admin">
+          </div>
+          <div class="field">
+            <label for="a-pass">Password</label>
+            <div class="field-row">
+              <input id="a-pass" name="password" type="password" autocomplete="current-password" placeholder="••••••••••••">
+              <button type="button" class="btn ghost sm" data-reveal="a-pass">Show</button>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn primary block" type="submit">Log in</button>
+          </div>
+        </form>
+        <p class="auth-foot">Sessions expire after 12 hours.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================= ADMIN OVERVIEW -->
+<section class="view" data-view="admin" hidden>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <span class="kicker">Operator</span>
+        <h1>Overview</h1>
+        <p>7 Nov 2026</p>
+      </div>
+      <div class="side">
+        <button class="btn ghost sm" type="button">Log out</button>
+      </div>
+    </div>
+
+    <nav class="tabs" aria-label="Admin">
+      <a href="#" data-goto="admin" class="active">Overview</a>
+      <a href="#" data-goto="applications">Applications <span class="count">3</span></a>
+      <a href="#" data-goto="logins">Logins <span class="count">2</span></a>
+    </nav>
+
+    <div class="status-strip">
+      <span style="display:inline-flex;align-items:center;gap:.45rem"><span class="dot"></span>provisioner idle</span>
+      <span class="sep"></span>
+      <span>last run <b>42s ago</b></span>
+      <span class="sep"></span>
+      <span><b>3</b> peers</span>
+    </div>
+
+    <div class="stats">
+      <a class="stat warn" href="#" data-goto="applications">
+        <span class="k">Pending</span>
+        <span class="v">1</span>
+        <span class="n">Waiting for review</span>
+      </a>
+      <a class="stat" href="#" data-goto="logins">
+        <span class="k">Logins</span>
+        <span class="v">2</span>
+        <span class="n">Devices</span>
+      </a>
+      <a class="stat ok" href="#" data-goto="logins">
+        <span class="k">Reporting</span>
+        <span class="v">2<small>/2</small></span>
+        <span class="n">1 partial</span>
+      </a>
+      <a class="stat warn" href="#" data-goto="report">
+        <span class="k">Attention</span>
+        <span class="v">1</span>
+        <span class="n">Degraded install</span>
+      </a>
+    </div>
+
+    <div class="panel-grid">
+      <div class="card panel">
+        <div class="panel-head">
+          <h2>Needs attention</h2>
+          <span class="pill warn">1 device</span>
+        </div>
+        <div class="panel-body">
+          <div class="attn-row">
+            <div class="avatar" style="--tint:#ffc46b">PR</div>
+            <div class="body">
+              <b>priya</b>
+              <p>UDP handshake timed out.</p>
+            </div>
+            <div class="meta">6m ago</div>
+          </div>
+          <div style="padding:.8rem 0">
+            <a class="btn ghost sm" href="#" data-goto="report">View report <svg width="13" height="13"><use href="#i-chevron"/></svg></a>
+          </div>
+        </div>
+      </div>
+
+      <div class="card panel">
+        <div class="panel-head">
+          <h2>Recent applications</h2>
+          <a href="#" data-goto="applications">View all</a>
+        </div>
+        <div class="panel-body">
+          <div class="mini-app">
+            <div class="avatar" style="--tint:#8fb6ff">SW</div>
+            <div class="body"><b>Sam Whitfield</b><span>Windows</span></div>
+            <span class="pill warn">new</span>
+          </div>
+          <div class="mini-app">
+            <div class="avatar" style="--tint:#b59cff">PR</div>
+            <div class="body"><b>Priya Raman</b><span>macOS</span></div>
+            <span class="pill">approved</span>
+          </div>
+          <div class="mini-app">
+            <div class="avatar" style="--tint:#5ee0b0">TL</div>
+            <div class="body"><b>Tomas Lind</b><span>Linux</span></div>
+            <span class="pill ok">linked</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================= APPLICATIONS -->
+<section class="view" data-view="applications" hidden>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <span class="kicker">Admin</span>
+        <h1>Applications</h1>
+      </div>
+      <div class="side"><span class="pill warn">1 pending</span></div>
+    </div>
+
+    <nav class="tabs" aria-label="Admin">
+      <a href="#" data-goto="admin">Overview</a>
+      <a href="#" data-goto="applications" class="active">Applications <span class="count">3</span></a>
+      <a href="#" data-goto="logins">Logins <span class="count">2</span></a>
+    </nav>
+
+    <div class="filters">
+      <a class="chip active" href="#">All 3</a>
+      <a class="chip" href="#">New 1</a>
+      <a class="chip" href="#">Approved 1</a>
+      <a class="chip" href="#">Linked 1</a>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Applicant</th><th>Platform</th><th>Submitted</th><th>Reason</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div class="who">
+                <div class="avatar" style="--tint:#8fb6ff">SW</div>
+                <div><b>Sam Whitfield</b><span>a1b2c3d4e5f60718</span></div>
+              </div>
+            </td>
+            <td><span class="pill platform">Windows</span></td>
+            <td class="faint nowrap">5 Nov, 09:12</td>
+            <td class="why"><div class="clamp">Filtered school network next week.</div></td>
+            <td><span class="pill warn">new</span></td>
+            <td>
+              <div class="actions">
+                <form><button class="btn ghost sm" type="button">Approve</button></form>
+                <form><input class="mini-input" type="text" placeholder="login" aria-label="Download login to link"><button class="btn ghost sm" type="button">Link</button></form>
+                <form><button class="btn danger sm" type="button">Delete</button></form>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <div class="who">
+                <div class="avatar" style="--tint:#b59cff">PR</div>
+                <div><b>Priya Raman</b><span>b2c3d4e5f6071829</span></div>
+              </div>
+            </td>
+            <td><span class="pill platform">macOS</span></td>
+            <td class="faint nowrap">4 Nov, 18:40</td>
+            <td class="why"><div class="clamp">Hotel blocks UDP and forged DNS.</div></td>
+            <td><span class="pill">approved</span></td>
+            <td>
+              <div class="actions">
+                <form><input class="mini-input" type="text" placeholder="login" aria-label="Download login to link"><button class="btn ghost sm" type="button">Link</button></form>
+                <form><button class="btn danger sm" type="button">Delete</button></form>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <div class="who">
+                <div class="avatar" style="--tint:#5ee0b0">TL</div>
+                <div><b>Tomas Lind</b><span>c3d4e5f60718293a</span></div>
+              </div>
+            </td>
+            <td><span class="pill platform">Linux</span></td>
+            <td class="faint nowrap">2 Nov, 07:05</td>
+            <td class="why"><div class="clamp">Admin a home server from campus.</div></td>
+            <td><span class="pill ok">linked: tomas</span></td>
+            <td>
+              <div class="actions">
+                <form><button class="btn danger sm" type="button">Delete</button></form>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-note">Approval usually provisions in under a minute.</p>
+  </div>
+</section>
+
+<!-- =============================================================== LOGINS -->
+<section class="view" data-view="logins" hidden>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <span class="kicker">Admin</span>
+        <h1>Logins</h1>
+      </div>
+      <div class="side"><span class="pill plain">2 devices</span></div>
+    </div>
+
+    <nav class="tabs" aria-label="Admin">
+      <a href="#" data-goto="admin">Overview</a>
+      <a href="#" data-goto="applications">Applications <span class="count">3</span></a>
+      <a href="#" data-goto="logins" class="active">Logins <span class="count">2</span></a>
+    </nav>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Login</th><th>Platform</th><th>Created</th><th>Downloads</th><th>Password</th><th>Health</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div class="who">
+                <div class="avatar" style="--tint:#b59cff">PR</div>
+                <div><b>priya</b><span class="file-name">fort-bypass-priya-10.88.0.11.exe</span></div>
+              </div>
+            </td>
+            <td><span class="pill platform">Windows</span></td>
+            <td class="faint nowrap">4 Nov, 19:02</td>
+            <td><b>3</b><div class="faint small nowrap">6 Nov, 08:31</div></td>
+            <td><span class="mono small">k7Qm2xVb9tRn4wLz</span></td>
+            <td><span class="pill warn">partial</span><div class="faint small">6m ago</div></td>
+            <td>
+              <div class="actions">
+                <form><button class="btn ghost sm" type="button"><svg width="12" height="12"><use href="#i-refresh"/></svg>Reset</button></form>
+                <form><button class="btn danger sm" type="button">Revoke</button></form>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <div class="who">
+                <div class="avatar" style="--tint:#5ee0b0">TL</div>
+                <div><b>tomas</b><span class="file-name">fort-bypass-tomas-10.88.0.12</span></div>
+              </div>
+            </td>
+            <td><span class="pill platform">Linux</span></td>
+            <td class="faint nowrap">2 Nov, 09:20</td>
+            <td><b>1</b><div class="faint small nowrap">2 Nov, 09:44</div></td>
+            <td><span class="faint small">hashed only</span></td>
+            <td><span class="pill">unknown</span></td>
+            <td>
+              <div class="actions">
+                <form><button class="btn ghost sm" type="button"><svg width="12" height="12"><use href="#i-refresh"/></svg>Reset</button></form>
+                <form><button class="btn danger sm" type="button">Revoke</button></form>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-note">Reset shows a new password once. Revoke removes the peer and installer.</p>
+  </div>
+</section>
+
+<!-- =============================================================== REPORT -->
+<section class="view" data-view="report" hidden>
+  <div class="wrap" style="max-width:64rem">
+    <a class="backlink" href="#" data-goto="logins"><svg width="13" height="13" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg>Logins</a>
+    <div class="page-head">
+      <div>
+        <span class="kicker">Device report</span>
+        <h1>priya</h1>
+        <p>Windows amd64</p>
+      </div>
+      <div class="side"><span class="pill warn">partial</span></div>
+    </div>
+
+    <div class="meta-grid">
+      <div><div class="k">Reported</div><div class="v">6 Nov 2026, 08:03</div></div>
+      <div><div class="k">Build</div><div class="v">0.9.4</div></div>
+      <div><div class="k">Tunnel</div><div class="v">10.88.0.11</div></div>
+    </div>
+
+    <div class="alert warn">
+      <svg width="17" height="17"><use href="#i-alert"/></svg>
+      <span><strong>WebSocket fallback engaged.</strong> UDP timed out; DNS and the tunnel are still up.</span>
+    </div>
+
+    <div class="report-grid">
+      <div class="card">
+        <h2 style="margin-bottom:.7rem">Checks</h2>
+        <div class="check-row"><span class="name">dns</span><span class="val"><svg width="13" height="13"><use href="#i-check"/></svg>ok</span></div>
+        <div class="check-row"><span class="name">doh</span><span class="val"><svg width="13" height="13"><use href="#i-check"/></svg>ok</span></div>
+        <div class="check-row"><span class="name">wireguard</span><span class="val"><svg width="13" height="13"><use href="#i-check"/></svg>up</span></div>
+        <div class="check-row"><span class="name">fallback</span><span class="val"><svg width="13" height="13"><use href="#i-check"/></svg>up</span></div>
+        <div class="check-row"><span class="name">route</span><span class="val"><svg width="13" height="13"><use href="#i-check"/></svg>ok</span></div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><span class="mono">diagnose</span></div>
+        <pre><span class="prompt">$</span> egress verify
+wg0 peer reachable
+resolver 127.0.0.1:7103
+<span class="warnline">udp handshake timed out</span>
+fallback wss connected</pre>
+      </div>
+    </div>
+
+    <div class="term" style="margin-top:1rem">
+      <div class="term-head"><span>log tail</span></div>
+      <pre>07:58:12 supervisor: udp probe failed
+07:58:12 supervisor: switching to wss
+08:03:00 verify: partial</pre>
+    </div>
+  </div>
+</section>
+
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>egress &middot; private exit through Aegis</span>
+    <nav>
+      <a href="#" data-goto="apply">Apply</a>
+      <a href="#" data-goto="download">Download</a>
+      <a href="#" data-goto="login">Admin</a>
+    </nav>
+  </div>
+</footer>
+
+<div class="dock" role="navigation" aria-label="Mockup pages">
+  <span class="tag">Mockup</span>
+  <a href="#" data-goto="home">Home</a>
+  <a href="#" data-goto="apply">Apply</a>
+  <a href="#" data-goto="applied">Applied</a>
+  <a href="#" data-goto="status">Status</a>
+  <a href="#" data-goto="download">Download</a>
+  <span class="sep"></span>
+  <a href="#" data-goto="login">Login</a>
+  <a href="#" data-goto="admin">Overview</a>
+  <a href="#" data-goto="applications">Applications</a>
+  <a href="#" data-goto="logins">Logins</a>
+  <a href="#" data-goto="report">Report</a>
+</div>
+
+<script>
+(function(){
+  var views = Array.prototype.slice.call(document.querySelectorAll('.view'));
+  var dockLinks = Array.prototype.slice.call(document.querySelectorAll('.dock a'));
+
+  // Review-only theme override: append ?theme=dark or ?theme=light.
+  var forced = new URLSearchParams(location.search).get('theme');
+  if (forced === 'dark' || forced === 'light') {
+    document.documentElement.setAttribute('data-theme', forced);
+  }
+
+  function show(name){
+    if(!views.some(function(v){ return v.dataset.view === name; })) name = 'home';
+    views.forEach(function(v){ v.hidden = v.dataset.view !== name; });
+    document.body.dataset.view = name;
+
+    document.querySelectorAll('.main-nav a').forEach(function(a){
+      var target = a.dataset.goto;
+      var on = target === name || (target === 'admin' && name !== 'home' && name !== 'apply' && name !== 'applied' && name !== 'status' && name !== 'download');
+      a.classList.toggle('active', on);
+      if(on) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');
+    });
+    // Header "Admin" should not light up on the public status pages.
+    if(name === 'login') {
+      var adminLink = document.querySelector('.main-nav a[data-goto="admin"]');
+      if(adminLink){ adminLink.classList.add('active'); adminLink.setAttribute('aria-current','page'); }
+    }
+    document.querySelectorAll('.tabs a').forEach(function(a){
+      a.classList.toggle('active', a.dataset.goto === name);
+    });
+    dockLinks.forEach(function(a){
+      a.classList.toggle('active', a.dataset.goto === name);
+    });
+    window.scrollTo(0,0);
+    if(history.replaceState) history.replaceState(null, '', '#' + name);
+  }
+
+  document.addEventListener('click', function(e){
+    var go = e.target.closest('[data-goto]');
+    if(go){ e.preventDefault(); show(go.dataset.goto); return; }
+
+    var copy = e.target.closest('[data-copy]');
+    if(copy){
+      e.preventDefault();
+      var text = copy.getAttribute('data-copy');
+      var label = copy.querySelector('svg') ? copy.lastChild : null;
+      function done(){
+        if(label){ var old = label.textContent; label.textContent = ' copied'; setTimeout(function(){ label.textContent = old; }, 1400); }
+      }
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done, function(){ window.prompt('Copy this', text); });
+      } else {
+        window.prompt('Copy this', text);
+      }
+      return;
+    }
+
+    var reveal = e.target.closest('[data-reveal]');
+    if(reveal){
+      e.preventDefault();
+      var input = document.getElementById(reveal.getAttribute('data-reveal'));
+      if(!input) return;
+      var showing = input.type === 'password';
+      input.type = showing ? 'text' : 'password';
+      reveal.textContent = showing ? 'Hide' : 'Show';
+      return;
+    }
+  });
+
+  show((location.hash || '#home').replace('#',''));
+})();
+</script>
+</body>
+</html>
