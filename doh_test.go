@@ -227,6 +227,13 @@ func TestSameRouteSet(t *testing.T) {
 	if !sameRouteSet(nil, nil) {
 		t.Error("two empty sets should match")
 	}
+	dup := []Route{{Iface: "eth0", Gateway: "1.1.1.1"}, {Iface: "eth0", Gateway: "1.1.1.1"}}
+	if !sameRouteSet(dup, append([]Route(nil), dup...)) {
+		t.Error("identical duplicates should match")
+	}
+	if sameRouteSet(dup, dup[:1]) {
+		t.Error("duplicate count must matter")
+	}
 }
 
 func TestDohStagesDescribe(t *testing.T) {
