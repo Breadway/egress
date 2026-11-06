@@ -1,0 +1,61 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  root:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: go vet ./...
+      - name: vet windows
+        run: GOOS=windows go vet ./...
+      - name: vet darwin
+        run: GOOS=darwin go vet ./...
+      - name: test
+        run: go test -count=1 ./...
+      - name: clean-tree build
+        # A fresh clone has no gitignored vendor assets; the default build
+        # must compile and test without them (delivery tag embeds them).
+        run: |
+          rm -rf /tmp/clean-egress
+          mkdir -p /tmp/clean-egress
+          git ls-files | tar -T - -c | tar -x -C /tmp/clean-egress
+          cd /tmp/clean-egress
+          go build ./... && go vet ./... && go test -count=1 ./...
+
+  bypass-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - name: check
+        run: |
+          cd bypass-server
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -count=1 ./...
+
+  dnscloak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - name: check
+        run: |
+          cd dnscloak
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -count=1 ./...

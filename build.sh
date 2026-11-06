@@ -186,7 +186,7 @@ if [ "$debug_build" -eq 1 ]; then
 fi
 
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-    go build -trimpath -buildvcs=false \
+    go build -tags delivery -trimpath -buildvcs=false \
     -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$(date +%Y%m%d)${debug_ldflag}" \
     -o "$out" .
 

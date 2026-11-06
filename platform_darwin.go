@@ -23,6 +23,23 @@ const (
 	darwinLogPath   = "/var/log/egress.log"
 )
 
+// SHA-256 of the pinned wstunnel 11.1.0 darwin binaries, per arch. Kept
+// here (not in the delivery-tagged asset files) so dev builds that extract
+// nothing still verify downloads against the same pins.
+const (
+	wstunnelDarwinAmd64SHA256 = "72349e8eda9b80762e809b51dbe3c81aea8094b57da6ab6bb97274f048be4adb"
+	wstunnelDarwinArm64SHA256 = "3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb"
+)
+
+// wstunnelDarwinSHA selects the pin matching this build's arch, so
+// InstallWstunnel and Remove agree on what counts as ours.
+func wstunnelDarwinSHA() string {
+	if runtime.GOARCH == "amd64" {
+		return wstunnelDarwinAmd64SHA256
+	}
+	return wstunnelDarwinArm64SHA256
+}
+
 type darwinPlatform struct{}
 
 func newPlatform() platform { return darwinPlatform{} }
@@ -345,7 +362,7 @@ func (p darwinPlatform) Remove() error {
 	_ = os.Remove(darwinLogPath)
 	_ = os.Remove(darwinLogPath + ".old")
 
-	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA256) {
+	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA()) {
 		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
 	} else {
 		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
@@ -365,7 +382,7 @@ func (darwinPlatform) WstunnelPath() (string, error) { return findWstunnel() }
 func (darwinPlatform) InstallWstunnel() (string, error) {
 	if len(embeddedWstunnel) > 0 {
 		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelDarwinSHA256); err != nil {
+		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelDarwinSHA()); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {
