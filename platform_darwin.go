@@ -291,6 +291,16 @@ func (darwinPlatform) StopService() error {
 	return nil
 }
 
+// ServiceActive is a quiet check: verification calls it on every run and a
+// failing service must not spam the log.
+func (darwinPlatform) ServiceActive() bool {
+	out, err := exec.Command("launchctl", "print", "system/"+darwinLabel).Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "state = running")
+}
+
 func (darwinPlatform) Enable() error {
 	if _, err := os.Stat(darwinPlistPath); err != nil {
 		return errors.New("egress is not installed; run install first")

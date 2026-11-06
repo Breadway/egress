@@ -269,7 +269,11 @@ func (r *dohResolver) serve(ctx context.Context) error {
 
 	go r.serveTCP(tcp)
 	r.log.Printf("DoH resolver listening on %s", r.listenAddr)
+	if err := writeReadyMarker(); err != nil {
+		r.log.Printf("could not write the readiness marker: %v", err)
+	}
 	r.serveUDP(udp)
+	removeReadyMarker()
 	return nil
 }
 

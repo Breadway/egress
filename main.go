@@ -246,6 +246,13 @@ func cmdInstall(args []string) error {
 		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), fmt.Errorf("%w (run `egress diagnose`)", err))
 		return fmt.Errorf("%w (run `egress diagnose`)", err)
 	}
+	// The port answering does not prove it is us: a foreign resolver already
+	// on 7103 satisfies every probe while our service crash-loops. Require
+	// the service active with a fresh marker from this start.
+	if err := checkSupervisorLive(plat, readyMarkerMaxAge); err != nil {
+		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+		return fmt.Errorf("supervisor is not healthy: %w (run `egress diagnose`)", err)
+	}
 	if err := plat.ApplyDNS(iface, gateway); err != nil {
 		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
 		return err
