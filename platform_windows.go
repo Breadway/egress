@@ -128,7 +128,7 @@ func verifyWireGuardSignature(path string) error {
 	return nil
 }
 
-func (windowsPlatform) WriteTunnelConfig(c tunnelConfig) error {
+func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) error {
 	if err := os.MkdirAll(winProgramData, 0700); err != nil {
 		return err
 	}
@@ -146,13 +146,31 @@ func (windowsPlatform) WriteTunnelConfig(c tunnelConfig) error {
 	}
 
 	// The directory holds private keys in plain text because the fallback swaps
-	// tunnel services at runtime. Restrict it to SYSTEM and Administrators by
-	// SID, so it works on non-English installs too.
-	_ = runLogged("icacls", winProgramData,
+	// tunnel services at runtime. It always holds the installed binary too,
+	// whose embedded key is recoverable with strings. Restrict it in every
+	// mode, not just when tunnel configs are written.
+	if err := p.SecureInstallDir(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// installDirACLArgs builds the icacls invocation that locks the install
+// directory to SYSTEM and Administrators by SID, so it works on non-English
+// installs too. Pure function so the exact SIDs and flags stay testable.
+func installDirACLArgs(dir string) []string {
+	return []string{
+		dir,
 		"/inheritance:r",
 		"/grant:r", "*S-1-5-18:(OI)(CI)F",
-		"/grant:r", "*S-1-5-32-544:(OI)(CI)F")
-	return nil
+		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+	}
+}
+
+// SecureInstallDir applies installDirACLArgs. Unlike most install steps this
+// one fails closed: a permissive directory must never pass silently.
+func (windowsPlatform) SecureInstallDir() error {
+	return runLogged("icacls", installDirACLArgs(winProgramData)...)
 }
 
 func (p windowsPlatform) StartTunnel() error {
@@ -491,6 +509,9 @@ func writeDiagnosePlatform(w io.Writer) error {
 	section(w, "files")
 	show(w, "powershell", "-NoProfile", "-Command",
 		fmt.Sprintf("Get-ChildItem '%s' -ErrorAction SilentlyContinue | Format-Table Name,Length,LastWriteTime -AutoSize", winProgramData))
+
+	section(w, "install directory acl")
+	show(w, "icacls", winProgramData)
 
 	section(w, "log tail")
 	tailLog(w, 60)
