@@ -31,6 +31,15 @@ const (
 	wstunnelDarwinArm64SHA256 = "3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb"
 )
 
+// wstunnelDarwinSHA selects the pin matching this build's arch, so
+// InstallWstunnel and Remove agree on what counts as ours.
+func wstunnelDarwinSHA() string {
+	if runtime.GOARCH == "amd64" {
+		return wstunnelDarwinAmd64SHA256
+	}
+	return wstunnelDarwinArm64SHA256
+}
+
 type darwinPlatform struct{}
 
 func newPlatform() platform { return darwinPlatform{} }
@@ -342,7 +351,7 @@ func (p darwinPlatform) Remove() error {
 	_ = os.Remove(darwinLogPath)
 	_ = os.Remove(darwinLogPath + ".old")
 
-	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA256) {
+	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA()) {
 		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
 	} else {
 		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
@@ -361,12 +370,8 @@ func (darwinPlatform) WstunnelPath() (string, error) { return findWstunnel() }
 // embedded assets still falls back to the pinned download.
 func (darwinPlatform) InstallWstunnel() (string, error) {
 	if len(embeddedWstunnel) > 0 {
-		want := wstunnelDarwinArm64SHA256
-		if runtime.GOARCH == "amd64" {
-			want = wstunnelDarwinAmd64SHA256
-		}
 		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, embeddedWstunnel, want); err != nil {
+		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelDarwinSHA()); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {
