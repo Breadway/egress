@@ -186,7 +186,12 @@ func (s *supervisor) loop(ctx context.Context) {
 			}
 			failures++
 			s.log.Printf("probe %s failed (%d in a row)", aegisTunnelIP, failures)
-			s.rotatePin()
+			// Rotate only on sustained failure: two routes with
+			// intermittent loss would otherwise flap the Aegis pin
+			// every tick instead of riding it out.
+			if failures >= 2 {
+				s.rotatePin()
+			}
 			threshold := 2
 			if changed {
 				threshold = 1

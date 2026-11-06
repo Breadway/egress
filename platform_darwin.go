@@ -396,9 +396,9 @@ func (darwinPlatform) InstallWstunnel() (string, error) {
 func writeDiagnosePlatform(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	if _, err := exec.LookPath("wg"); err == nil {
-		fmt.Printf("  wireguard-tools: present\n")
+		fmt.Fprintf(w, "  wireguard-tools: present\n")
 	} else {
-		fmt.Printf("  wireguard-tools: not found (brew install wireguard-tools)\n")
+		fmt.Fprintf(w, "  wireguard-tools: not found (brew install wireguard-tools)\n")
 	}
 
 	section(w, "default route")
@@ -409,7 +409,7 @@ func writeDiagnosePlatform(w io.Writer) error {
 		if service, err := serviceForDevice(iface); err == nil {
 			show(w, "networksetup", "-getdnsservers", service)
 		} else {
-			fmt.Printf("  %v\n", err)
+			fmt.Fprintf(w, "  %v\n", err)
 		}
 	}
 

@@ -538,9 +538,9 @@ func digits(s string) bool {
 func writeDiagnosePlatform(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	if exe := wireguardExe(); exe != "" {
-		fmt.Printf("  wireguard.exe: %s\n", exe)
+		fmt.Fprintf(w, "  wireguard.exe: %s\n", exe)
 	} else {
-		fmt.Printf("  wireguard.exe: not found\n")
+		fmt.Fprintf(w, "  wireguard.exe: not found\n")
 	}
 
 	section(w, "default route")

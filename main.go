@@ -174,7 +174,9 @@ func runInstall(plat platform, args []string) (err error) {
 		}
 	}
 
-	if err := plat.InstallTools(); err != nil {
+	if *noTunnel {
+		debugf("dns-only install: skipping wireguard-tools")
+	} else if err := plat.InstallTools(); err != nil {
 		return err
 	}
 
