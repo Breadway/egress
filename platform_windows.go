@@ -34,6 +34,13 @@ func newPlatform() platform { return windowsPlatform{} }
 
 func installDir() string { return winProgramData }
 
+// spoolDir holds the pending install report. TempDir is per-user on
+// Windows: the elevated installer and the SYSTEM supervisor would use
+// different directories and never see each other's reports. The install
+// directory is restricted to SYSTEM and Administrators and writable by
+// both, so both sides share it.
+func spoolDir() string { return winProgramData }
+
 func logPath() string { return filepath.Join(winProgramData, "egress.log") }
 
 func (windowsPlatform) RequirePrivilege() error {
