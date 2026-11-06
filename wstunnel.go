@@ -161,6 +161,11 @@ type wstunnelProc struct {
 	mu    sync.Mutex
 	cmd   *exec.Cmd
 	alive bool
+	// done is closed by the Wait goroutine when the current child exits.
+	// Stop waits on it so the supervised state is settled by the time Stop
+	// returns; otherwise a stale alive flag can make the next Ensure a
+	// no-op while the relay port is already free.
+	done chan struct{}
 }
 
 func newWstunnelProc(path string, logger *log.Logger) *wstunnelProc {
@@ -171,17 +176,41 @@ func newWstunnelProc(path string, logger *log.Logger) *wstunnelProc {
 // local relay accepts traffic.
 func (w *wstunnelProc) Ensure(ctx context.Context) error {
 	w.mu.Lock()
-	if w.alive {
-		w.mu.Unlock()
-		return nil
-	}
-	// A leftover client from a previous run is fine to reuse: it speaks to the
-	// same server and exposes the same relay.
-	if w.cmd == nil && relayListening() {
-		w.mu.Unlock()
-		return nil
-	}
+	alive := w.alive
+	leftover := w.cmd == nil && relayListening()
 	w.mu.Unlock()
+	if alive {
+		// The flag can outlive the child: Stop only kills, and the Wait
+		// goroutine clears the fields a moment later. Verify the port is
+		// actually held instead of trusting the flag, or the tunnel can be
+		// pointed at a relay that no longer exists.
+		for i := 0; i < 8; i++ {
+			if relayListening() {
+				return nil
+			}
+			w.mu.Lock()
+			stillAlive := w.alive
+			w.mu.Unlock()
+			if !stillAlive {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+		if relayListening() {
+			return nil
+		}
+		// Stale: the child is gone or never opened the port. Settle the
+		// state before starting fresh so two clients never race.
+		w.Stop()
+	} else if leftover {
+		// A leftover client from a previous run is fine to reuse: it speaks to the
+		// same server and exposes the same relay.
+		return nil
+	}
 
 	if w.path == "" {
 		return errors.New("wstunnel is not installed")
@@ -209,6 +238,8 @@ func (w *wstunnelProc) Ensure(ctx context.Context) error {
 	w.mu.Lock()
 	w.cmd = cmd
 	w.alive = true
+	done := make(chan struct{})
+	w.done = done
 	w.mu.Unlock()
 
 	go func(cmd *exec.Cmd) {
@@ -217,6 +248,9 @@ func (w *wstunnelProc) Ensure(ctx context.Context) error {
 		if w.cmd == cmd {
 			w.cmd = nil
 			w.alive = false
+		}
+		if w.done == done {
+			close(done)
 		}
 		w.mu.Unlock()
 		if err != nil {
@@ -243,8 +277,18 @@ func (w *wstunnelProc) Ensure(ctx context.Context) error {
 func (w *wstunnelProc) Stop() {
 	w.mu.Lock()
 	cmd := w.cmd
+	done := w.done
 	w.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
+	}
+	// Wait for the reaper so alive/cmd are settled on return. Without this,
+	// trialUDP's Stop can leave a stale alive flag that makes the next
+	// Ensure a no-op while the relay is already dead.
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
