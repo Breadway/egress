@@ -134,7 +134,10 @@ if [ -n "$request_ip" ]; then
     [[ "$request_ip" =~ ^${base//./\\.}\.([0-9]{1,3})$ ]] \
         || die "--ip $request_ip is not in $base.0/24"
     octet=$((10#${BASH_REMATCH[1]}))
-    [ "$octet" -ge 2 ] && [ "$octet" -le 254 ] \
+    if [ "$octet" -eq 254 ]; then
+        die "--ip $request_ip is reserved for the Microsoft relay (dnscloak); pick another address"
+    fi
+    [ "$octet" -ge 2 ] && [ "$octet" -le 253 ] \
         || die "--ip $request_ip is the network, the server, or the broadcast address"
     ip="$base.$octet"
     if printf '%s\n' "$used" | grep -qx "$octet"; then
@@ -142,7 +145,8 @@ if [ -n "$request_ip" ]; then
     fi
 else
     ip=""
-    for n in $(seq 2 254); do
+    # Octets 1 (server) and 254 (Microsoft relay) are never allocated.
+    for n in $(seq 2 253); do
         if ! printf '%s\n' "$used" | grep -qx "$n"; then
             ip="$base.$n"
             break
