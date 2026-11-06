@@ -56,6 +56,10 @@ func (s *supervisor) Run(ctx context.Context) error {
 	go func() { errCh <- s.resolver.serve(ctx) }()
 	if s.manageTunnel {
 		go s.loop(ctx)
+	} else {
+		// DNS-only mode still owns the resolver: DHCP renews and roams
+		// reset the adapter resolver, and nothing else restores 127.0.0.1.
+		go s.dnsLoop(ctx)
 	}
 
 	select {
@@ -207,6 +211,62 @@ func (s *supervisor) loop(ctx context.Context) {
 					failures = 0
 					s.log.Printf("udp path is back")
 				}
+			}
+		}
+	}
+}
+
+// dnsLoop keeps the resolver applied on DNS-only machines. It mirrors the
+// resolver half of loop without touching the tunnel, the fallback, or the
+// endpoint pin: without a tunnel there is nothing to move, but DHCP renews
+// still need ApplyDNS/EnsureDNS or the machine silently stops using the
+// listener.
+func (s *supervisor) dnsLoop(ctx context.Context) {
+	var lastDNSCheck time.Time
+
+	if s.iface != "" {
+		if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
+			s.log.Printf("dns apply at startup failed: %v", err)
+		}
+	}
+
+	ticker := time.NewTicker(probeInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		flushPendingReport()
+
+		if routes, err := s.plat.DefaultRoutes(); err == nil {
+			if !sameRouteSet(routes, s.routes) {
+				bestChanged := len(routes) == 0 || len(s.routes) == 0 ||
+					routes[0] != s.routes[0]
+				s.routes = routes
+				if bestChanged && len(routes) > 0 {
+					s.iface, s.gateway = routes[0].Iface, routes[0].Gateway
+					s.resolver.SetGateway(s.gateway)
+					s.resolver.CloseIdle()
+					if err := s.plat.ApplyDNS(s.iface, s.gateway); err != nil {
+						s.log.Printf("dns re-apply failed: %v", err)
+					}
+					s.pinIdx = 0
+					s.log.Printf("network changed: interface %s, gateway %s", s.iface, s.gateway)
+				} else if len(routes) > 0 {
+					s.log.Printf("routes changed, best still %s via %s (%d candidates)",
+						routes[0].Iface, routes[0].Gateway, len(routes))
+				}
+			}
+		}
+
+		if time.Since(lastDNSCheck) >= dnsCheckEvery {
+			lastDNSCheck = time.Now()
+			if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
+				s.log.Printf("dns check failed: %v", err)
 			}
 		}
 	}

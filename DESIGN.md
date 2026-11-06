@@ -182,7 +182,9 @@ Three commands share one teardown path:
   `wstunnel`, the log and the binary stay.
 - **enable** re-enables the unit or task and starts it. The supervisor
   re-applies DNS at startup, so DNS is correct immediately rather than after the
-  first 60-second check.
+  first 60-second check. DNS-only installs (`--no-tunnel`) run a resolver-only
+  watchdog with the same startup and periodic re-apply, so DHCP renews cannot
+  silently drop protection.
 - **remove** (alias `uninstall`) runs disable, deletes the unit or task, the
   tunnel configs, the resolved drop-in, `wstunnel`, the log (including the
   rotated copy) and the canonical installed binary. Windows empties
