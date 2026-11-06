@@ -7,3 +7,5 @@ dist/
 assets/wstunnel-*
 assets/*.msi
 __pycache__/
+bypass-server/bypass-server
+dnscloak/dnscloak
