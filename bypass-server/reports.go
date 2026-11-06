@@ -202,9 +202,13 @@ This device has not reported an install. Older binaries predate reporting.</div>
 		return
 	}
 	rep := stored.Report
+	deviceTime := esc(displayTime(rep.TS))
+	if rep.TS == "" {
+		deviceTime = "unknown device time"
+	}
 	fmt.Fprintf(&b, `<div class="card tight"><p style="margin:0">Status: %s<br>
-<span class="muted">Reported %s &middot; %s/%s &middot; build %s &middot; tunnel %s</span></p></div>`,
-		reportPill(stored), esc(displayTime(stored.Received)),
+<span class="muted">Reported %s &middot; device time %s &middot; %s/%s &middot; build %s &middot; tunnel %s</span></p></div>`,
+		reportPill(stored), esc(displayTime(stored.Received)), deviceTime,
 		esc(rep.OS), esc(rep.Arch), esc(rep.Version), esc(rep.IP))
 
 	var names []string
