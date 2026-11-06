@@ -384,16 +384,48 @@ func (p linuxPlatform) Remove() error {
 // restoreDNS removes the local resolver drop-in and restores /etc/resolv.conf
 // if this tool had rewritten it.
 func (linuxPlatform) restoreDNS() error {
-	_ = os.Remove(linuxResolved)
+	if err := os.Remove(linuxResolved); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", linuxResolved, err)
+	}
+	hadBackup := false
 	if _, err := os.Stat(linuxResolvBak); err == nil {
-		_ = os.Rename(linuxResolvBak, linuxResolvConf)
+		hadBackup = true
+		if err := os.Rename(linuxResolvBak, linuxResolvConf); err != nil {
+			return fmt.Errorf("restore %s: %w", linuxResolvConf, err)
+		}
 	}
-	if runLogged("systemctl", "restart", "systemd-resolved") != nil {
-		// No systemd-resolved: resolv.conf is the only resolver state.
-		return nil
+	if err := runLogged("systemctl", "restart", "systemd-resolved"); err != nil {
+		// No systemd-resolved is the common case there: resolv.conf is
+		// the only resolver state, verified below. A present-but-broken
+		// unit is a real failure, not an absence.
+		if resolvedUnitPresent() {
+			return fmt.Errorf("restart systemd-resolved: %w", err)
+		}
+	} else {
+		_ = runLogged("resolvectl", "flush-caches")
 	}
-	_ = runLogged("resolvectl", "flush-caches")
+	if hadBackup {
+		// Read back: the restored file must not point at our listener, or
+		// disable would claim success with dead DNS.
+		data, err := os.ReadFile(linuxResolvConf)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", linuxResolvConf, err)
+		}
+		if resolvConfPointsAtListener(data) {
+			return fmt.Errorf("%s still points at the egress listener", linuxResolvConf)
+		}
+	}
 	return nil
+}
+
+// resolvedUnitPresent reports whether systemd-resolved is installed at all,
+// separating a missing resolver (benign) from a broken one (fatal).
+func resolvedUnitPresent() bool {
+	out, err := exec.Command("systemctl", "show", "-p", "LoadState", "--value", "systemd-resolved").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "loaded"
 }
 
 func (linuxPlatform) Ping(host string) bool {

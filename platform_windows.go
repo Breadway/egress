@@ -336,8 +336,7 @@ func (p windowsPlatform) Disable() error {
 	_ = p.StopTunnel()
 	stopWstunnel()
 	removeHostRoute()
-	p.restoreDNS()
-	return nil
+	return p.restoreDNS()
 }
 
 // Remove is Disable plus the file system. The install directory is emptied
@@ -353,12 +352,30 @@ func (p windowsPlatform) Remove() error {
 
 // restoreDNS resets the adapter that currently carries the default route to
 // DHCP/automatic DNS, which is where install changed it.
-func (p windowsPlatform) restoreDNS() {
-	if iface, _, err := p.DefaultRoute(); err == nil && digits(iface) {
-		script := fmt.Sprintf(
-			`Set-DnsClientServerAddress -InterfaceIndex %s -ResetServerAddresses -ErrorAction SilentlyContinue`, iface)
-		_, _ = powershell(script)
+func (p windowsPlatform) restoreDNS() error {
+	iface, _, err := p.DefaultRoute()
+	if err != nil {
+		return fmt.Errorf("find the default route: %w", err)
 	}
+	if !digits(iface) {
+		return fmt.Errorf("no numeric default-route adapter to reset (got %q)", iface)
+	}
+	script := fmt.Sprintf(
+		`Set-DnsClientServerAddress -InterfaceIndex %s -ResetServerAddresses -ErrorAction Stop`, iface)
+	if _, err := powershell(script); err != nil {
+		return fmt.Errorf("reset DNS on adapter %s: %w", iface, err)
+	}
+	// Read back: the adapter must not still point at our listener, or
+	// disable would claim success with dead DNS.
+	out, err := powershell(`(Get-DnsClientServerAddress -InterfaceIndex ` + iface +
+		` -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses`)
+	if err != nil {
+		return fmt.Errorf("read back DNS on adapter %s: %w", iface, err)
+	}
+	if dnsServersPointAtListener(out) {
+		return fmt.Errorf("adapter %s still points at the egress listener", iface)
+	}
+	return nil
 }
 
 // stopWstunnel terminates only the copy installed in the egress
