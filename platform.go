@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
 
 // Route is one default route: the interface identifier plus its gateway.
@@ -97,6 +98,55 @@ type platform interface {
 
 	WstunnelPath() (string, error)
 	InstallWstunnel() (string, error)
+}
+
+// egressConfigMarker heads every tunnel config this tool writes, so install
+// can tell its own files from a foreign wg0.conf it must not destroy.
+const egressConfigMarker = "# managed by egress"
+
+// carriesEgressMarker reports whether data is a config this tool wrote.
+func carriesEgressMarker(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == egressConfigMarker {
+			return true
+		}
+	}
+	return false
+}
+
+// backupForeignConfig copies path to backupPath when path exists and is not
+// ours. The first backup wins: it is the user's original, never our output.
+func backupForeignConfig(path, backupPath string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	if carriesEgressMarker(data) {
+		return nil
+	}
+	if _, err := os.Stat(backupPath); err == nil {
+		return nil
+	}
+	return os.WriteFile(backupPath, data, 0600)
+}
+
+// restoreBackedConfig puts the backup back when the live file is ours and a
+// backup exists. A foreign live file is left alone: overwriting it with a
+// stale backup would destroy the user's newer setup.
+func restoreBackedConfig(path, backupPath string) (bool, error) {
+	bak, err := os.ReadFile(backupPath)
+	if err != nil {
+		return false, nil
+	}
+	live, err := os.ReadFile(path)
+	if err != nil || !carriesEgressMarker(live) {
+		return false, nil
+	}
+	if err := os.WriteFile(path, bak, 0600); err != nil {
+		return false, err
+	}
+	_ = os.Remove(backupPath)
+	return true, nil
 }
 
 // writeFileChanged writes data to path with mode 0600 and reports whether

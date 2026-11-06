@@ -17,6 +17,7 @@ import (
 const (
 	linuxUnitPath    = "/etc/systemd/system/egress.service"
 	linuxWGPath      = "/etc/wireguard/" + wgInterface + ".conf"
+	linuxWGBak       = "/etc/wireguard/" + wgInterface + ".conf.egress.bak"
 	linuxResolvedDir = "/etc/systemd/resolved.conf.d"
 	linuxResolved    = linuxResolvedDir + "/egress.conf"
 	linuxResolvConf  = "/etc/resolv.conf"
@@ -33,6 +34,10 @@ type linuxPlatform struct{}
 func newPlatform() platform { return linuxPlatform{} }
 
 func installDir() string { return "/usr/local/bin" }
+
+// spoolDir holds the pending install report. Both install and the boot
+// service run as root on Linux, so the shared temp directory works.
+func spoolDir() string { return os.TempDir() }
 
 func logPath() string { return linuxLogPath }
 
@@ -137,6 +142,11 @@ func installPackage(name string) error {
 
 func (linuxPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
+		return false, err
+	}
+	// A foreign wg0.conf (corporate VPN, another tool) is backed up before
+	// it is replaced, so installing here cannot silently destroy it.
+	if err := backupForeignConfig(linuxWGPath, linuxWGBak); err != nil {
 		return false, err
 	}
 	return writeFileChanged(linuxWGPath, []byte(renderWGConfig(c)))
@@ -382,7 +392,11 @@ func (p linuxPlatform) Remove() error {
 
 	_ = os.Remove(linuxUnitPath)
 	_ = runLogged("systemctl", "daemon-reload")
-	_ = os.Remove(linuxWGPath)
+	if restored, _ := restoreBackedConfig(linuxWGPath, linuxWGBak); restored {
+		debugf("restored the pre-existing %s", linuxWGPath)
+	} else {
+		_ = os.Remove(linuxWGPath)
+	}
 	_ = os.Remove(linuxResolvBak)
 
 	// Close the debug log before deleting it, or the inode would stay alive
@@ -391,7 +405,13 @@ func (p linuxPlatform) Remove() error {
 	_ = os.Remove(linuxLogPath)
 	_ = os.Remove(linuxLogPath + ".old")
 
-	_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
+	// Only remove the fallback client when this tool put it there: a
+	// pre-existing wstunnel that findWstunnel reused is not ours to delete.
+	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelLinuxSHA256) {
+		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
+	} else {
+		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
+	}
 	removeInstalledBinary()
 	return nil
 }
