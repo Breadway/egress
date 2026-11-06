@@ -34,6 +34,10 @@ func (f *dnsWatchdogFake) EnsureDNS(string, string) error {
 	atomic.AddInt32(&f.ensureCalls, 1)
 	return nil
 }
+
+// SecureInstallDir is a no-op here to satisfy the platform interface; the
+// DNS watchdog never touches the install directory.
+func (f *dnsWatchdogFake) SecureInstallDir() error               { return nil }
 func (f *dnsWatchdogFake) InstallService(string, []string) error { return nil }
 func (f *dnsWatchdogFake) StartService() error                   { return nil }
 func (f *dnsWatchdogFake) StopService() error                    { return nil }
