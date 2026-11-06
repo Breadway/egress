@@ -106,6 +106,17 @@ if registry_has_label "$label"; then
     die "label '$label' is already registered; use another --name or run ./remove-device.sh --name '$label'"
 fi
 
+# Serialize against concurrent runs before the used-address scan: the scan
+# and the peer append below must be atomic, or two runs can enroll the same
+# /32 for different keys. mkdir is atomic; the trap releases on any exit,
+# including dry runs.
+lockdir="${registry}.lock"
+mkdir -p "$(dirname "$lockdir")" || die "cannot create $HOME/.keys"
+if ! mkdir "$lockdir" 2>/dev/null; then
+    die "another provisioning run is in progress ($lockdir exists)"
+fi
+trap 'rmdir "$lockdir" 2>/dev/null' EXIT
+
 command -v ssh >/dev/null 2>&1 || die "ssh is not on PATH"
 command -v wg  >/dev/null 2>&1 || die "wg is not on PATH; install wireguard-tools"
 command -v go  >/dev/null 2>&1 || die "go is not on PATH"
@@ -165,15 +176,6 @@ if [ "$dry_run" -eq 1 ]; then
     note "dry run; no key was generated and nothing was changed"
     exit 0
 fi
-
-# Serialize allocation against concurrent runs: the used-address scan above
-# and the peer append below must be atomic, or two runs can enroll the same
-# /32 for different keys. mkdir is atomic; the trap releases on any exit.
-lockdir="${registry}.lock"
-if ! mkdir "$lockdir" 2>/dev/null; then
-    die "another provisioning run is in progress ($lockdir exists)"
-fi
-trap 'rmdir "$lockdir" 2>/dev/null' EXIT
 
 key=$(wg genkey)
 pub=$(printf '%s' "$key" | wg pubkey)

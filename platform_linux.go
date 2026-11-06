@@ -261,78 +261,14 @@ func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
 	return nil
 }
 
-// resolvSymlinkPrefix marks a resolv.conf backup that records a symlink
-// target instead of file contents. The backup is a single line, so a
-// foreign file can only collide by containing exactly that line.
-const resolvSymlinkPrefix = "egress-symlink "
-
-// backupResolvConf saves confPath for later restore when this tool did not
-// write it: a symlink is recorded as its target (writing through it would
-// scribble on systemd-resolved or NetworkManager state), other contents are
-// copied unless they already point at our listener. An existing backup wins.
-func backupResolvConf(confPath, bakPath string) error {
-	fi, err := os.Lstat(confPath)
-	if err != nil {
-		return nil
-	}
-	if _, err := os.Stat(bakPath); err == nil {
-		return nil
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(confPath)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(bakPath, []byte(resolvSymlinkPrefix+target+"\n"), 0644)
-	}
-	data, err := os.ReadFile(confPath)
-	if err != nil {
-		return err
-	}
-	if strings.Contains(string(data), "127.0.0.1") {
-		return nil
-	}
-	return os.WriteFile(bakPath, data, 0644)
-}
-
-// restoreResolvConf undoes backupResolvConf: a recorded symlink is
-// re-created, saved contents are moved back. Anything else is left alone.
-func restoreResolvConf(confPath, bakPath string) error {
-	data, err := os.ReadFile(bakPath)
-	if err != nil {
-		return nil
-	}
-	if target, ok := strings.CutPrefix(string(data), resolvSymlinkPrefix); ok {
-		target = strings.TrimSpace(target)
-		_ = os.Remove(confPath)
-		if err := os.Symlink(strings.TrimSpace(target), confPath); err != nil {
-			return err
-		}
-		_ = os.Remove(bakPath)
-		return nil
-	}
-	if err := os.Rename(bakPath, confPath); err != nil {
-		return err
-	}
-	return nil
-}
-
 func writeResolvConf() error {
-	return writeResolvConfAt(linuxResolvConf, linuxResolvBak)
-}
-
-// writeResolvConfAt points the resolver at the local listener, preserving a
-// pre-existing symlink instead of writing through it or paving over it.
-func writeResolvConfAt(confPath, bakPath string) error {
-	if err := backupResolvConf(confPath, bakPath); err != nil {
-		return err
-	}
-	if fi, err := os.Lstat(confPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(confPath); err != nil {
-			return err
+	data, err := os.ReadFile(linuxResolvConf)
+	if err == nil && !strings.Contains(string(data), "127.0.0.1") {
+		if _, statErr := os.Stat(linuxResolvBak); statErr != nil {
+			_ = os.WriteFile(linuxResolvBak, data, 0644)
 		}
 	}
-	return os.WriteFile(confPath, []byte("nameserver 127.0.0.1\noptions edns0 trust-ad\n"), 0644)
+	return os.WriteFile(linuxResolvConf, []byte("nameserver 127.0.0.1\noptions edns0 trust-ad\n"), 0644)
 }
 
 // resolvedActive reports whether systemd-resolved is running. Plain exec, no
@@ -469,7 +405,9 @@ func (p linuxPlatform) Remove() error {
 // if this tool had rewritten it.
 func (linuxPlatform) restoreDNS() error {
 	_ = os.Remove(linuxResolved)
-	_ = restoreResolvConf(linuxResolvConf, linuxResolvBak)
+	if _, err := os.Stat(linuxResolvBak); err == nil {
+		_ = os.Rename(linuxResolvBak, linuxResolvConf)
+	}
 	if runLogged("systemctl", "restart", "systemd-resolved") != nil {
 		// No systemd-resolved: resolv.conf is the only resolver state.
 		return nil

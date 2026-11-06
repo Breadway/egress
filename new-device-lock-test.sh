@@ -25,7 +25,14 @@ exit 0
 STUB
 cat > "$work/bin/wg" <<'STUB'
 #!/usr/bin/env bash
-exit 0
+if [ "$1" = "genkey" ]; then
+    # Hold the lock a while so a concurrent run overlaps inside it.
+    sleep 2
+    printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n' | head -c 44
+elif [ "$1" = "pubkey" ]; then
+    cat >/dev/null
+    printf 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=\n' | head -c 44
+fi
 STUB
 cat > "$work/bin/go" <<'STUB'
 #!/usr/bin/env bash
@@ -48,6 +55,32 @@ if compgen -G "$HOME/.keys/egress-t3-*" > /dev/null; then
     fail=1
 fi
 rmdir "$HOME/.keys/egress-peers.tsv.lock"
+
+# Phase 2: two concurrent runs must not both enroll. The stubbed Aegis looks
+# empty to both, so without the lock they would pick the same /32; with it,
+# exactly one dies at acquisition.
+"$repo/new-device.sh" --name race1 --os linux >/dev/null 2>"$work/race1.err" &
+p1=$!
+sleep 0.5
+"$repo/new-device.sh" --name race2 --os linux >/dev/null 2>"$work/race2.err" &
+p2=$!
+wait $p1 || s1=$?
+wait $p2 || s2=$?
+refused=0
+for f in "$work/race1.err" "$work/race2.err"; do
+    if grep -q 'another provisioning run is in progress' "$f"; then
+        refused=$((refused+1))
+    fi
+done
+if [ "$refused" -ne 1 ]; then
+    printf 'FAIL: concurrent runs: statuses %s/%s, %s lock refusal(s), want exactly 1\n' "$s1" "$s2" "$refused"
+    fail=1
+fi
+rows=$(awk -F'\t' '/^race/ {print}' "$HOME/.keys/egress-peers.tsv" 2>/dev/null | wc -l) || rows=0
+if [ "$rows" -ne 1 ]; then
+    printf 'FAIL: concurrent runs left %s registry rows, want 1\n' "$rows"
+    fail=1
+fi
 
 if [ "$fail" -eq 0 ]; then
     printf 'new-device lock tests passed\n'
