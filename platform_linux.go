@@ -226,6 +226,12 @@ func (linuxPlatform) RepinEndpoint(gateway, iface string) error {
 }
 
 func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
+	if !resolvedActive() {
+		// No systemd-resolved: resolv.conf is the only resolver state. Skip
+		// the drop-in tree entirely so a later-installed resolved does not
+		// suddenly honor a stale file, and skip the doomed restart.
+		return writeResolvConf()
+	}
 	if err := os.MkdirAll(linuxResolvedDir, 0755); err != nil {
 		return err
 	}
@@ -251,7 +257,38 @@ func writeResolvConf() error {
 	return os.WriteFile(linuxResolvConf, []byte("nameserver 127.0.0.1\noptions edns0 trust-ad\n"), 0644)
 }
 
+// resolvedActive reports whether systemd-resolved is running. Plain exec, no
+// logging: EnsureDNS calls this every minute and a failing service would
+// otherwise spam the log.
+func resolvedActive() bool {
+	return exec.Command("systemctl", "is-active", "--quiet", "systemd-resolved").Run() == nil
+}
+
+// resolvConfPointsAtListener reports whether resolv.conf already directs
+// queries at the local DoH listener. Pure and unit-tested.
+func resolvConfPointsAtListener(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 2 && fields[0] == "nameserver" && fields[1] == "127.0.0.1" {
+			return true
+		}
+	}
+	return false
+}
+
 func (p linuxPlatform) EnsureDNS(iface, gateway string) error {
+	if !resolvedActive() {
+		// Fallback path converges on resolv.conf contents: no rewrite when
+		// the listener is already the resolver.
+		if data, err := os.ReadFile(linuxResolvConf); err == nil && resolvConfPointsAtListener(data) {
+			return nil
+		}
+		return p.ApplyDNS(iface, gateway)
+	}
 	data, err := os.ReadFile(linuxResolved)
 	if err == nil && strings.Contains(string(data), dohListenAddr) {
 		return nil
