@@ -58,6 +58,7 @@ func TestGrade(t *testing.T) {
 		{"wrong exit", checkResults{Tunnel: "up", Probe: "ok", Exit: "got 1.2.3.4, expected " + aegisIPv4}, "partial"},
 		{"dns down", checkResults{DNS: "i/o timeout", Tunnel: "down", Probe: "failed", Exit: "no result"}, "failed"},
 		{"foreign resolver on port", checkResults{Probe: "ok", Exit: aegisIPv4, Supervisor: "egress service is not active"}, "failed"},
+		{"checker unreachable", checkResults{Tunnel: "up", Probe: "ok", Exit: exitUnverifiedPrefix + "timeout"}, "partial"},
 	}
 	for _, c := range cases {
 		if got := c.r.grade(); got != c.want {

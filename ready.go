@@ -18,7 +18,11 @@ import (
 const readyMarkerMaxAge = 2 * time.Minute
 
 func readyMarkerPath() string {
-	return filepath.Join(os.TempDir(), "egress-ready")
+	// Shared with the installer through spoolDir, not TempDir: on Windows
+	// TempDir is per-user while install runs elevated and the supervisor
+	// runs as SYSTEM, so the two sides would never see the same marker
+	// (the EGRESS-33 trap).
+	return filepath.Join(spoolDir(), "egress-ready")
 }
 
 // writeReadyMarker records our PID once both DNS sockets are bound. Install

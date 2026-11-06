@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -9,6 +11,23 @@ import (
 func spoolPayload(ts string) []byte {
 	data, _ := json.Marshal(map[string]string{"ts": ts})
 	return data
+}
+
+// TestSpoolPathContract pins the cross-process promise: install, the
+// supervisor and flush must all resolve the same file, inside a directory
+// both sides can use. On Windows that rules out TempDir, which is per-user
+// while install runs elevated and the supervisor runs as SYSTEM.
+func TestSpoolPathContract(t *testing.T) {
+	path := pendingReportPath()
+	if filepath.Base(path) != "egress-pending-report.json" {
+		t.Errorf("spool file = %q", path)
+	}
+	if filepath.Dir(path) != spoolDir() {
+		t.Errorf("spool dir = %q, want spoolDir %q", filepath.Dir(path), spoolDir())
+	}
+	if info, err := os.Stat(spoolDir()); err == nil && !info.IsDir() {
+		t.Errorf("spoolDir %q is not a directory", spoolDir())
+	}
 }
 
 func TestSpooledReportStale(t *testing.T) {
