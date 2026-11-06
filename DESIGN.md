@@ -261,7 +261,10 @@ the only side that connects out. See `bypass-server/` and
   privilege) runs `supervise`. The tunnel services are
   `WireGuardTunnel$wg0` / `WireGuardTunnel$wg0ws`.
 - The install directory on Windows is restricted to SYSTEM and Administrators
-  by SID, because it holds plaintext configs that the fallback rewrites.
+  by SID in every install mode, including `--no-tunnel`, because it always
+  holds the installed binary whose embedded key is recoverable with strings.
+  Restriction failures fail the install rather than passing silently, and
+  `diagnose` prints the directory ACL.
 - `wstunnelSums` pins the GitHub archives for `linux/amd64` and `windows/amd64`
   for dev builds without embedded assets. Delivery builds never download:
   they extract the embedded binary after checking its own SHA-256. Another

@@ -31,6 +31,13 @@ type platform interface {
 	// both the direct and relay variants.
 	WriteTunnelConfig(tunnelConfig) error
 
+	// SecureInstallDir restricts the install directory to administrators.
+	// It must hold in every install mode, including --no-tunnel, because the
+	// directory always receives the installed binary, whose embedded key is
+	// recoverable with strings. Failures are fatal: a permissive directory
+	// must not pass silently.
+	SecureInstallDir() error
+
 	StartTunnel() error
 	StopTunnel() error
 	TunnelUp() bool

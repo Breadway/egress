@@ -178,6 +178,10 @@ func (darwinPlatform) TunnelConfigured() bool {
 	return err == nil
 }
 
+// SecureInstallDir is a no-op on macOS: the install directory is the shared
+// /usr/local/bin, which must keep its system ACLs.
+func (darwinPlatform) SecureInstallDir() error { return nil }
+
 func (darwinPlatform) EnsureEndpoint(endpoint string) error {
 	out, err := execLogged("wg", "show", wgInterface, "endpoints")
 	if err != nil {

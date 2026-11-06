@@ -190,6 +190,10 @@ func (linuxPlatform) TunnelConfigured() bool {
 	return err == nil
 }
 
+// SecureInstallDir is a no-op on Linux: the install directory is the shared
+// /usr/local/bin, which must keep its system ACLs.
+func (linuxPlatform) SecureInstallDir() error { return nil }
+
 func (linuxPlatform) EnsureEndpoint(endpoint string) error {
 	out, err := execLogged("wg", "show", wgInterface, "endpoints")
 	if err != nil {
