@@ -43,6 +43,7 @@ request_ip=""
 target_os="windows"
 target_arch=""
 dry_run=0
+debug_build=0
 aegis_host="${AEGIS_HOST:-aegis}"
 registry="$HOME/.keys/egress-peers.tsv"
 
@@ -53,6 +54,7 @@ while [ $# -gt 0 ]; do
         --os)      target_os="$2"; shift 2 ;;
         --arch)    target_arch="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
+        --debug-build) debug_build=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *)         die "unknown option: $1" ;;
     esac
@@ -199,7 +201,12 @@ note "enrolled and live"
 
 build_one() {
     # $1 = goos, $2 = goarch, $3 = out path
-    if ! ./build.sh --key-file "$key_path" --ip "$ip" --os "$1" --arch "$2" --out "$3" --quiet; then
+    if [ "$debug_build" -eq 1 ]; then
+        debug_arg="--debug-build"
+    else
+        debug_arg=""
+    fi
+    if ! ./build.sh --key-file "$key_path" --ip "$ip" --os "$1" --arch "$2" --out "$3" --quiet $debug_arg; then
         cat >&2 <<EOF
 
 build failed, but the peer is already live on $aegis_host and the key is saved at
