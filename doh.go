@@ -37,6 +37,9 @@ type dohResolver struct {
 
 	client *http.Client
 	log    *log.Logger
+	// lookup swaps in tests: production is exchange, tests echo canned
+	// answers so TCP/UDP framing is covered without network.
+	lookup func(context.Context, []byte) ([]byte, error)
 }
 
 func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
@@ -61,6 +64,7 @@ func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
 		ExpectContinueTimeout: time.Second,
 	}
 	r.client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	r.lookup = r.exchange
 	return r
 }
 
@@ -281,7 +285,7 @@ func (r *dohResolver) serveUDP(conn net.PacketConn) {
 		go func(query []byte, addr net.Addr) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			resp, err := r.exchange(ctx, query)
+			resp, err := r.lookup(ctx, query)
 			if err != nil {
 				r.log.Printf("DoH lookup failed: %v", err)
 				return
@@ -322,7 +326,7 @@ func (r *dohResolver) handleTCP(conn net.Conn) {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		resp, err := r.exchange(ctx, query)
+		resp, err := r.lookup(ctx, query)
 		cancel()
 		if err != nil {
 			r.log.Printf("DoH lookup failed: %v", err)
