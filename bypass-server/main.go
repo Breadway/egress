@@ -217,6 +217,7 @@ func (s *server) allow(bucket map[string][]time.Time, ip string, max int, window
 	now := time.Now()
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
+	s.evictBucketsLocked(bucket, window)
 	events := bucket[ip][:0]
 	for _, t := range bucket[ip] {
 		if now.Sub(t) < window {
@@ -229,6 +230,26 @@ func (s *server) allow(bucket map[string][]time.Time, ip string, max int, window
 	}
 	bucket[ip] = append(bucket[ip], now)
 	return true
+}
+
+// evictBucketsLocked drops entries older than window from every bucket in
+// the map, so distinct source addresses cannot grow it without bound on a
+// public endpoint. Callers hold s.mtx.
+func (s *server) evictBucketsLocked(bucket map[string][]time.Time, window time.Duration) {
+	now := time.Now()
+	for ip, events := range bucket {
+		kept := events[:0]
+		for _, t := range events {
+			if now.Sub(t) < window {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			delete(bucket, ip)
+		} else {
+			bucket[ip] = kept
+		}
+	}
 }
 
 func hashClaim(raw string) string {

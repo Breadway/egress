@@ -9,5 +9,3 @@ assets/*.msi
 __pycache__/
 bypass-server/bypass-server
 dnscloak/dnscloak
-bypass-server/bypass-server
-dnscloak/dnscloak
