@@ -32,14 +32,27 @@ func checkLocalDNS() error {
 	return nil
 }
 
-func checkExitIP() (string, error) {
+// exitCheckAttempts bounds how many times the exit lookup retries, and
+// exitCheckBackoff spaces the attempts. One blip of a third-party checker
+// must not destroy an otherwise working install.
+const (
+	exitCheckAttempts = 3
+	exitCheckBackoff  = 2 * time.Second
+)
+
+// exitUnverifiedPrefix marks an Exit value where the checker was
+// unreachable: the address is unknown, not wrong. verifyAll warns instead
+// of failing, and grade stays partial instead of rolling back.
+const exitUnverifiedPrefix = "unverified: "
+
+func checkExitIPOnce(timeout time.Duration) (string, error) {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			d := &net.Dialer{Timeout: 8 * time.Second}
 			return d.DialContext(ctx, "tcp4", addr)
 		},
 	}
-	client := &http.Client{Transport: transport, Timeout: 20 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: timeout}
 
 	req, err := http.NewRequest(http.MethodGet, "https://api.ipify.org", nil)
 	if err != nil {
@@ -60,6 +73,24 @@ func checkExitIP() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(body)), nil
+}
+
+// checkExitIP asks the checker for the exit address, retrying transient
+// failures. A wrong answer is returned as-is (fatal); an unreachable
+// checker is an error the caller downgrades to unverified.
+func checkExitIP() (string, error) {
+	var err error
+	var ip string
+	for attempt := 0; attempt < exitCheckAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(exitCheckBackoff)
+		}
+		if ip, err = checkExitIPOnce(10 * time.Second); err == nil {
+			return ip, nil
+		}
+		debugf("exit check attempt %d failed: %v", attempt+1, err)
+	}
+	return "", err
 }
 
 // checkResults holds one install verification as data, so the CLI output and
@@ -94,7 +125,10 @@ func runChecks(p platform, tcfg tunnelConfig) checkResults {
 	ip, err := checkExitIP()
 	switch {
 	case err != nil:
-		r.Exit = err.Error()
+		// The checker was unreachable, not wrong: the tunnel and probe
+		// checks already establish traffic enters the tunnel, so record
+		// uncertainty instead of destroying the install.
+		r.Exit = exitUnverifiedPrefix + err.Error()
 	case ip == aegisIPv4:
 		r.Exit = ip
 	default:
@@ -155,6 +189,9 @@ func verifyAll(p platform, tcfg tunnelConfig) error {
 		case r.Exit == "":
 			fmt.Printf("[FAIL] exit address: no result\n")
 			failed = true
+		case strings.HasPrefix(r.Exit, exitUnverifiedPrefix):
+			fmt.Printf("[warn] exit address %s; tunnel and probe passed so keeping the install\n",
+				strings.TrimPrefix(r.Exit, exitUnverifiedPrefix))
 		default:
 			fmt.Printf("[FAIL] exit address: %s\n", r.Exit)
 			failed = true

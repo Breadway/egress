@@ -16,8 +16,11 @@ import (
 
 const (
 	winProgramData = `C:\ProgramData\egress`
-	winTaskName    = "egress"
-	wireGuardMSI   = `wireguard-amd64-1.1.1.msi`
+	// Backups of pre-existing tunnel configs live beside the install
+	// directory, not inside it: remove wipes the directory contents.
+	winConfigBakDir = `C:\ProgramData\egress-preinstall-bak`
+	winTaskName     = "egress"
+	wireGuardMSI    = `wireguard-amd64-1.1.1.msi`
 
 	// SHA-256 is computed from the exact vendor artifacts embedded at build
 	// time. The MSI is additionally Authenticode-verified before execution.
@@ -30,6 +33,13 @@ type windowsPlatform struct{}
 func newPlatform() platform { return windowsPlatform{} }
 
 func installDir() string { return winProgramData }
+
+// spoolDir holds the pending install report. TempDir is per-user on
+// Windows: the elevated installer and the SYSTEM supervisor would use
+// different directories and never see each other's reports. The install
+// directory is restricted to SYSTEM and Administrators and writable by
+// both, so both sides share it.
+func spoolDir() string { return winProgramData }
 
 func logPath() string { return filepath.Join(winProgramData, "egress.log") }
 
@@ -132,17 +142,28 @@ func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 	if err := os.MkdirAll(winProgramData, 0700); err != nil {
 		return false, err
 	}
+	if err := os.MkdirAll(winConfigBakDir, 0700); err != nil {
+		return false, err
+	}
 
 	direct := c
 	direct.Endpoint = c.DirectEndpoint()
 	relay := c
 	relay.Endpoint = c.RelayEndpoint()
 
-	changedDirect, err := writeFileChanged(filepath.Join(winProgramData, "wg0.conf"), []byte(renderWGConfig(direct)))
+	wgConf := filepath.Join(winProgramData, "wg0.conf")
+	wsConf := filepath.Join(winProgramData, "wg0ws.conf")
+	if err := backupForeignConfig(wgConf, filepath.Join(winConfigBakDir, "wg0.conf")); err != nil {
+		return false, err
+	}
+	if err := backupForeignConfig(wsConf, filepath.Join(winConfigBakDir, "wg0ws.conf")); err != nil {
+		return false, err
+	}
+	changedDirect, err := writeFileChanged(wgConf, []byte(renderWGConfig(direct)))
 	if err != nil {
 		return false, err
 	}
-	changedRelay, err := writeFileChanged(filepath.Join(winProgramData, "wg0ws.conf"), []byte(renderWGConfig(relay)))
+	changedRelay, err := writeFileChanged(wsConf, []byte(renderWGConfig(relay)))
 	if err != nil {
 		return false, err
 	}
@@ -346,8 +367,29 @@ func (p windowsPlatform) Remove() error {
 	_ = p.Disable()
 	_ = runLogged("schtasks", "/delete", "/tn", winTaskName, "/f")
 
+	// Decide restores before the wipe and apply them after: the backups
+	// live outside the directory precisely so they survive it, and the
+	// wipe would destroy anything restored first.
+	restored := map[string][]byte{}
+	for _, name := range []string{"wg0.conf", "wg0ws.conf"} {
+		live := filepath.Join(winProgramData, name)
+		bak := filepath.Join(winConfigBakDir, name)
+		liveData, liveErr := os.ReadFile(live)
+		bakData, bakErr := os.ReadFile(bak)
+		if liveErr == nil && bakErr == nil && carriesEgressMarker(liveData) {
+			restored[live] = bakData
+			_ = os.Remove(bak)
+		}
+	}
+
 	closeLog()
 	removeWindowsDir()
+	for live, data := range restored {
+		_ = os.MkdirAll(winProgramData, 0700)
+		if err := os.WriteFile(live, data, 0600); err == nil {
+			debugf("restored the pre-existing %s", filepath.Base(live))
+		}
+	}
 	return nil
 }
 
@@ -379,6 +421,7 @@ func removeWindowsDir() {
 	}
 
 	var leftover string
+	var kept string
 	entries, err := os.ReadDir(winProgramData)
 	if err != nil {
 		return
@@ -389,16 +432,23 @@ func removeWindowsDir() {
 			leftover = path
 			continue
 		}
+		// A pre-existing fallback client that findWstunnel reused is not
+		// ours to delete.
+		if strings.EqualFold(entry.Name(), wstunnelExeName()) && !wstunnelIsOurs(path, wstunnelWindowsSHA256) {
+			kept = path
+			fmt.Printf("leaving %s: not installed by this tool\n", path)
+			continue
+		}
 		if err := os.RemoveAll(path); err != nil {
 			fmt.Printf("could not delete %s: %v\n", path, err)
 		}
 	}
 
-	if leftover == "" {
+	if leftover == "" && kept == "" {
 		if err := os.Remove(winProgramData); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("could not delete %s: %v\n", winProgramData, err)
 		}
-	} else {
+	} else if leftover != "" {
 		fmt.Printf("the running binary is %s; delete it after this command exits\n", leftover)
 	}
 }

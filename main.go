@@ -121,6 +121,10 @@ Build with a key compiled in:
 }
 
 func cmdInstall(args []string) error {
+	return runInstall(newPlatform(), args)
+}
+
+func runInstall(plat platform, args []string) (err error) {
 	fs := newFlagSet("install")
 	keyFlag := fs.String("key", "", "private key")
 	keyFile := fs.String("key-file", "", "file containing the private key")
@@ -133,23 +137,18 @@ func cmdInstall(args []string) error {
 	}
 	setupLogging(resolveDebug(*debug))
 
-	plat := newPlatform()
 	if err := plat.RequirePrivilege(); err != nil {
 		return err
 	}
 
-	// Stop an older supervisor before replacing files it may be executing.
-	// wstunnel.exe cannot be overwritten while it is running on Windows.
-	_ = plat.StopService()
-
-	// Deliver an older spooled install report before doing anything else.
-	flushPendingReport()
-
+	// Validate everything that can fail without touching the system before
+	// stopping the running supervisor: while the old service is up, DNS
+	// keeps working, so a bad key, address or missing route must refuse
+	// before changing anything.
 	iface, gateway, err := plat.DefaultRoute()
 	if err != nil {
 		return fmt.Errorf("find the default route: %w", err)
 	}
-	fmt.Printf("interface %s, gateway %s\n", iface, gateway)
 
 	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort}
 	if validIPv4(embeddedClientIP) {
@@ -162,24 +161,49 @@ func cmdInstall(args []string) error {
 		return fmt.Errorf("invalid tunnel address %q", tcfg.ClientIP)
 	}
 
+	var pub string
 	if !*noTunnel {
 		key, err := resolveKey(*keyFlag, *keyFile)
 		if err != nil {
 			return err
 		}
 		tcfg.PrivateKey = key
-		pub, err := publicKey(key)
+		pub, err = publicKey(key)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("\npublic key: %s\n", pub)
-		fmt.Printf("add it on Aegis with allowed-ips %s/32 before this device will work\n\n", tcfg.ClientIP)
 	}
 
 	if *noTunnel {
 		debugf("dns-only install: skipping wireguard-tools")
 	} else if err := plat.InstallTools(); err != nil {
 		return err
+	}
+
+	// Stop an older supervisor before replacing files it may be executing.
+	// wstunnel.exe cannot be overwritten while it is running on Windows.
+	_ = plat.StopService()
+
+	// From here on, every failure must leave DNS working. Once the new unit
+	// is installed the rollback path owns recovery; before that, put the
+	// previous service back so an early exit cannot strand the resolver on
+	// a dead listener.
+	pastInstallService := false
+	defer func() {
+		if err != nil && !pastInstallService {
+			debugf("install failed before the new service; restarting the previous service")
+			_ = plat.StartService()
+		}
+	}()
+
+	// Deliver an older spooled install report before doing anything else.
+	flushPendingReport()
+
+	fmt.Printf("interface %s, gateway %s\n", iface, gateway)
+
+	if !*noTunnel {
+		fmt.Printf("\npublic key: %s\n", pub)
+		fmt.Printf("add it on Aegis with allowed-ips %s/32 before this device will work\n\n", tcfg.ClientIP)
 	}
 
 	if !*noTunnel {
@@ -240,6 +264,8 @@ func cmdInstall(args []string) error {
 	if err := plat.InstallService(exe, serviceArgs); err != nil {
 		return err
 	}
+	// The new unit is on disk: from here the rollback path owns recovery.
+	pastInstallService = true
 	if err := plat.StartService(); err != nil {
 		return err
 	}

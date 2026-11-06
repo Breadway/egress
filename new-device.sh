@@ -99,7 +99,8 @@ registry_init() {
     chmod 0600 "$registry" || return 1
 }
 
-# registry_add is defined after the builds, once the binary paths are known.
+# The provisional row is written right after enrollment; the binaries are
+# filled in after the builds.
 
 if registry_has_label "$label"; then
     die "label '$label' is already registered; use another --name or run ./remove-device.sh --name '$label'"
@@ -212,6 +213,31 @@ ssh "${ssh_opts[@]}" "$aegis_host" "sudo -n grep -qF '$pub' /etc/wireguard/wg0.c
 
 note "enrolled and live"
 
+# Record the peer immediately, before the build: if the build fails or the
+# process dies here, the device keeps a live peer with no registry row and
+# remove-device cannot undo it. The row carries no binaries yet, so publish
+# refuses it until the build fills them in below.
+registry_add_pending() {
+    registry_init || return 1
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$label" "$ip" "$pub" "$key_path" "" "$aegis_host" "$created" "$comment" \
+        >> "$registry" || return 1
+}
+
+registry_add_pending || die "peer is live but the registry is unwritable; remove it on $aegis_host manually"
+
+# Fill in the built binaries on the provisional row. A second process adding
+# the same label would have died at the top guard, so label+pub match at
+# most this row.
+registry_update_binaries() {
+    local tmp
+    tmp=$(mktemp "${registry}.XXXXXX") || return 1
+    awk -F'\t' -v l="$label" -v p="$pub" -v b="$binaries_abs" 'BEGIN { OFS="\t" } /^#/ { print; next } $1 == l && $3 == p { $5 = b } { print }' \
+        "$registry" > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+    mv "$tmp" "$registry" || { rm -f "$tmp"; return 1; }
+}
+
 build_one() {
     # $1 = goos, $2 = goarch, $3 = out path
     if [ "$debug_build" -eq 1 ]; then
@@ -222,10 +248,11 @@ build_one() {
     if ! ./build.sh --key-file "$key_path" --ip "$ip" --os "$1" --arch "$2" --out "$3" --quiet $debug_arg; then
         cat >&2 <<EOF
 
-build failed, but the peer is already live on $aegis_host and the key is saved at
+build failed, but the peer is already live on $aegis_host and recorded in
+$registry, and the key is saved at
   $key_path
 To undo the enrollment before retrying:
-  ./remove-device.sh --name '$label' --keep-files
+  ./remove-device.sh --name '$label'
 Then rerun this script.
 EOF
         return 1
@@ -265,14 +292,7 @@ for o in $outs; do
 done
 binaries_abs=${binaries_abs# }
 
-registry_add() {
-    registry_init || return 1
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$label" "$ip" "$pub" "$key_path" "$binaries_abs" "$aegis_host" "$created" "$comment" \
-        >> "$registry" || return 1
-}
-
-registry_add || die "binaries built, but could not update $registry; peer remains enrolled"
+registry_update_binaries || die "binaries built, but could not update $registry; peer remains enrolled"
 note "registered as '$label' in $registry"
 
 report_bins=""

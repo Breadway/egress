@@ -38,6 +38,12 @@ type supervisor struct {
 	// interface cannot strand the tunnel, DNS and fallback together.
 	routes []Route
 	pinIdx int
+
+	// Consecutive failed probes while on the relay path. A listening relay
+	// port does not prove the WebSocket underneath is alive, so the relay
+	// gets its own short-window probes and a restart after sustained
+	// failure instead of silence until the next UDP trial.
+	relayFailures int
 }
 
 func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
@@ -209,6 +215,17 @@ func (s *supervisor) loop(ctx context.Context) {
 			if err := s.plat.EnsureEndpoint(s.tcfg.RelayEndpoint()); err != nil {
 				s.log.Printf("could not keep the relay endpoint: %v", err)
 			}
+			s.probeRelay()
+			if s.relayFailures >= relayFailThreshold {
+				s.log.Printf("relay path failed %d probes in a row; restarting wstunnel and retrying udp early",
+					s.relayFailures)
+				s.wst.Stop()
+				if err := s.wst.Ensure(ctx); err != nil {
+					s.log.Printf("wstunnel restart failed: %v", err)
+				}
+				s.relayFailures = 0
+				lastTrial = time.Time{}
+			}
 			if time.Since(lastTrial) >= trialInterval {
 				lastTrial = time.Now()
 				if s.trialUDP(ctx) {
@@ -275,6 +292,20 @@ func (s *supervisor) dnsLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// probeRelay runs one short health probe on the relay path and counts
+// consecutive failures. A listening relay port does not prove the WebSocket
+// underneath is alive, so the relay gets the same treatment as the direct
+// path: short probes, and the caller restarts the child past the threshold.
+func (s *supervisor) probeRelay() bool {
+	if s.probe(relayProbeWindow) {
+		s.relayFailures = 0
+		return true
+	}
+	s.relayFailures++
+	s.log.Printf("probe %s failed on the relay path (%d in a row)", aegisTunnelIP, s.relayFailures)
+	return false
 }
 
 // sameRouteSet reports whether two route lists contain the same entries,
