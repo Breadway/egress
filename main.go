@@ -23,6 +23,17 @@ var (
 	buildVersion     string
 )
 
+// defaultDebug is set to "true" at build time for delivery builds where the
+// recipient cannot be relied on to pass --debug (see build.sh --debug-build).
+// There is no opt-out flag: a debug-default binary always logs. Rebuild
+// without the flag for a quiet binary.
+var defaultDebug = "false"
+
+// resolveDebug ORs an explicit --debug flag with the build-time default.
+func resolveDebug(cmdline bool) bool {
+	return cmdline || defaultDebug == "true"
+}
+
 func reportVersion() string {
 	if buildVersion == "" {
 		return "dev"
@@ -120,7 +131,7 @@ func cmdInstall(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
 	if err := plat.RequirePrivilege(); err != nil {
@@ -207,7 +218,7 @@ func cmdInstall(args []string) error {
 	if *noFallback {
 		serviceArgs = append(serviceArgs, "--no-fallback")
 	}
-	if *debug {
+	if resolveDebug(*debug) {
 		serviceArgs = append(serviceArgs, "--debug")
 	}
 
@@ -276,7 +287,7 @@ func cmdSupervise(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
 	if err := plat.RequirePrivilege(); err != nil {
@@ -314,7 +325,7 @@ func cmdVerify(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
 	tcfg := tunnelConfig{ClientIP: defaultClientIP}
@@ -330,7 +341,7 @@ func cmdDiagnose(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 	return diagnose()
 }
 
@@ -342,7 +353,7 @@ func cmdPubkey(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	private, err := resolveKey(*key, *keyFile)
 	if err != nil {
@@ -362,7 +373,7 @@ func cmdDisable(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
 	if err := plat.RequirePrivilege(); err != nil {
@@ -381,7 +392,7 @@ func cmdEnable(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
 	if err := plat.RequirePrivilege(); err != nil {
@@ -400,7 +411,7 @@ func cmdRemove(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging(*debug)
+	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
 	if err := plat.RequirePrivilege(); err != nil {

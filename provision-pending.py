@@ -23,6 +23,7 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 API = os.environ.get("BYPASS_API", "https://aegis-1.tail4806cb.ts.net:7221")
 POLL_SECONDS = int(os.environ.get("BYPASS_POLL_SECONDS", "30"))
 ONLY = os.environ.get("BYPASS_ONLY", "")
+DEBUG_BUILD = os.environ.get("BYPASS_DEBUG_BUILD", "") not in ("", "0", "false", "no")
 TOKEN = None
 
 
@@ -132,19 +133,20 @@ def main():
             "arm64" if target_os == "darwin" else "amd64"
         )
         log(f"provisioning {claimed['id']} as {label} ({target_os}/{target_arch})")
+        new_device_args = [
+            "./new-device.sh",
+            "--name",
+            label,
+            "--os",
+            target_os,
+            "--arch",
+            target_arch,
+        ]
+        if DEBUG_BUILD:
+            new_device_args.append("--debug-build")
         ok = True
         if not registered(label):
-            ok = run(
-                [
-                    "./new-device.sh",
-                    "--name",
-                    label,
-                    "--os",
-                    target_os,
-                    "--arch",
-                    target_arch,
-                ]
-            )
+            ok = run(new_device_args)
         if ok:
             ok = run(
                 [
