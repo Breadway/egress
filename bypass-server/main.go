@@ -13,7 +13,7 @@
 // There are no user sessions: POST /download verifies the password and
 // returns the file in the same response. Status links are capability URLs
 // (128-bit claim tokens, stored hashed). The admin UI uses a signed session
-// cookie plus per-form CSRF tokens; the machine API (used by
+// cookie (per-login nonce) plus per-session CSRF tokens; the machine API (used by
 // publish-device.sh) keeps bearer-token auth. Secrets and client IPs are
 // never logged. The only external module is x/crypto.
 package main
@@ -481,11 +481,57 @@ func (s *server) renderStatus(w http.ResponseWriter, admin bool, title string, s
 
 // ----------------------------------------------------------------- session ---
 
-// csrfToken is derived from the server secret, so only this server can mint
-// form tokens and only for as long as the secret stands.
-func (s *server) csrfToken() string {
+// sessionParts extracts the session identity from the request cookie. New
+// sessions carry nonce|exp|sig; pre-rotation sessions carry exp|sig and are
+// still honored until they expire.
+func (s *server) sessionParts(r *http.Request) (nonce, exp string, ok bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return "", "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	if err != nil {
+		return "", "", false
+	}
+	parts := strings.Split(string(raw), "|")
+	switch len(parts) {
+	case 3:
+		return parts[0], parts[1], true
+	case 2:
+		return "", parts[0], true
+	default:
+		return "", "", false
+	}
+}
+
+func sessionMAC(token, nonce, exp string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	if nonce != "" {
+		mac.Write([]byte(nonce + "|" + exp))
+	} else {
+		mac.Write([]byte(exp))
+	}
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// csrfToken is bound to the admin session, not just the server secret: a
+// disclosed token works only with the session that minted it. The comparison
+// in checkCSRF stays constant-time.
+func (s *server) csrfToken(r *http.Request) string {
+	nonce, exp, ok := s.sessionParts(r)
+	if !ok {
+		// No session: mint nothing usable. Callers only render forms for
+		// authenticated sessions; this value will never verify.
+		mac := hmac.New(sha256.New, []byte(s.token))
+		mac.Write([]byte("csrf|no-session"))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
 	mac := hmac.New(sha256.New, []byte(s.token))
-	mac.Write([]byte("csrf"))
+	if nonce != "" {
+		mac.Write([]byte("csrf|" + nonce + "|" + exp))
+	} else {
+		mac.Write([]byte("csrf|" + exp))
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -494,15 +540,20 @@ func (s *server) checkCSRF(r *http.Request) bool {
 	if given == "" {
 		return false
 	}
-	return hmac.Equal([]byte(given), []byte(s.csrfToken()))
+	return hmac.Equal([]byte(given), []byte(s.csrfToken(r)))
 }
 
 func (s *server) mintSession() *http.Cookie {
-	exp := time.Now().Add(sessionTTL).Unix()
-	mac := hmac.New(sha256.New, []byte(s.token))
-	mac.Write([]byte(strconv.FormatInt(exp, 10)))
-	val := base64.RawURLEncoding.EncodeToString([]byte(
-		strconv.FormatInt(exp, 10) + "|" + hex.EncodeToString(mac.Sum(nil))))
+	var nonceBytes [16]byte
+	if _, err := rand.Read(nonceBytes[:]); err != nil {
+		// Session must be unique per login; without randomness fail the
+		// login rather than minting duplicate CSRF namespaces.
+		return nil
+	}
+	nonce := hex.EncodeToString(nonceBytes[:])
+	exp := strconv.FormatInt(time.Now().Add(sessionTTL).Unix(), 10)
+	sig := sessionMAC(s.token, nonce, exp)
+	val := base64.RawURLEncoding.EncodeToString([]byte(nonce + "|" + exp + "|" + sig))
 	return &http.Cookie{
 		Name: sessionCookie, Value: val, Path: "/admin",
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
@@ -519,17 +570,25 @@ func (s *server) validSession(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	expStr, sig, ok := strings.Cut(string(raw), "|")
-	if !ok {
+	parts := strings.Split(string(raw), "|")
+	var nonce, expStr, sig string
+	switch len(parts) {
+	case 3:
+		nonce, expStr, sig = parts[0], parts[1], parts[2]
+		if !validID.MatchString(nonce) && len(nonce) != 32 {
+			// Nonce is 16 random bytes hex-encoded; reject garbage early.
+			return false
+		}
+	case 2:
+		expStr, sig = parts[0], parts[1]
+	default:
 		return false
 	}
 	exp, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil || time.Now().Unix() > exp {
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(s.token))
-	mac.Write([]byte(expStr))
-	return hmac.Equal([]byte(sig), []byte(hex.EncodeToString(mac.Sum(nil))))
+	return hmac.Equal([]byte(sig), []byte(sessionMAC(s.token, nonce, expStr)))
 }
 
 // bearerOK reports whether the request carries the machine API token.
@@ -1017,7 +1076,12 @@ func (s *server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		s.render(w, false, "Admin login", loginPage("Wrong username or password."))
 		return
 	}
-	http.SetCookie(w, s.mintSession())
+	cookie := s.mintSession()
+	if cookie == nil {
+		http.Error(w, "could not create session", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, cookie)
 	next := r.URL.Query().Get("next")
 	if next == "" || !strings.HasPrefix(next, "/admin") {
 		next = "/admin"
@@ -1075,7 +1139,7 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 <div class="stats">
 <a class="stat" href="/admin/applications"><span class="num">%d</span><span class="lbl">pending</span></a>
 <a class="stat" href="/admin/users"><span class="num">%d</span><span class="lbl">logins</span></a>
-</div>`, s.csrfToken(), adminSubnav("overview"), alert, pending, usersN)
+</div>`, s.csrfToken(r), adminSubnav("overview"), alert, pending, usersN)
 	s.renderNav(w, true, "admin", "Admin", body)
 }
 
@@ -1180,13 +1244,13 @@ func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(&b, `<form method="post" action="/admin/applications">
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s">
 <input type="hidden" name="action" value="review">
-<button class="btn ghost small" type="submit">Approve</button></form>`, s.csrfToken(), a.ID)
+<button class="btn ghost small" type="submit">Approve</button></form>`, s.csrfToken(r), a.ID)
 			}
 			if a.ProvisionError != "" {
 				fmt.Fprintf(&b, `<form method="post" action="/admin/applications">
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s">
 <input type="hidden" name="action" value="retry">
-<button class="btn ghost small" type="submit">Retry</button></form>`, s.csrfToken(), a.ID)
+<button class="btn ghost small" type="submit">Retry</button></form>`, s.csrfToken(r), a.ID)
 			}
 			fmt.Fprintf(&b, `<form method="post" action="/admin/applications">
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s">
@@ -1197,7 +1261,7 @@ func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s">
 <input type="hidden" name="action" value="delete">
 <button class="btn danger small" type="submit">Delete</button></form></div></td></tr>`,
-				s.csrfToken(), a.ID, esc(a.LinkedUser), s.csrfToken(), a.ID)
+				s.csrfToken(r), a.ID, esc(a.LinkedUser), s.csrfToken(r), a.ID)
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
@@ -1342,7 +1406,7 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 <input type="hidden" name="action" value="revoke">
 <button class="btn danger small" type="submit">Revoke</button></form></div></td></tr>`,
 				esc(name), esc(u.Label), osLabel(u.OS, u.Arch), esc(u.Binary), esc(displayTime(u.Created)), downloads, password, status,
-				s.csrfToken(), esc(name), s.csrfToken(), esc(name))
+				s.csrfToken(r), esc(name), s.csrfToken(r), esc(name))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
