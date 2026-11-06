@@ -189,6 +189,12 @@ func cmdInstall(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Lock the install directory in every mode, including --no-tunnel: it
+	// always holds the installed binary, whose embedded key is recoverable
+	// with strings. Fail closed rather than leave it permissive.
+	if err := plat.SecureInstallDir(); err != nil {
+		return fmt.Errorf("secure install directory: %w", err)
+	}
 	// The boot service and the scheduled task both reference this exact path,
 	// which is always the permanent install location regardless of where the
 	// user ran this command from.
