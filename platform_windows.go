@@ -128,9 +128,9 @@ func verifyWireGuardSignature(path string) error {
 	return nil
 }
 
-func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) error {
+func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 	if err := os.MkdirAll(winProgramData, 0700); err != nil {
-		return err
+		return false, err
 	}
 
 	direct := c
@@ -138,11 +138,13 @@ func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) error {
 	relay := c
 	relay.Endpoint = c.RelayEndpoint()
 
-	if err := os.WriteFile(filepath.Join(winProgramData, "wg0.conf"), []byte(renderWGConfig(direct)), 0600); err != nil {
-		return err
+	changedDirect, err := writeFileChanged(filepath.Join(winProgramData, "wg0.conf"), []byte(renderWGConfig(direct)))
+	if err != nil {
+		return false, err
 	}
-	if err := os.WriteFile(filepath.Join(winProgramData, "wg0ws.conf"), []byte(renderWGConfig(relay)), 0600); err != nil {
-		return err
+	changedRelay, err := writeFileChanged(filepath.Join(winProgramData, "wg0ws.conf"), []byte(renderWGConfig(relay)))
+	if err != nil {
+		return false, err
 	}
 
 	// The directory holds private keys in plain text because the fallback swaps
@@ -150,9 +152,9 @@ func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) error {
 	// whose embedded key is recoverable with strings. Restrict it in every
 	// mode, not just when tunnel configs are written.
 	if err := p.SecureInstallDir(); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return changedDirect || changedRelay, nil
 }
 
 // installDirACLArgs builds the icacls invocation that locks the install
