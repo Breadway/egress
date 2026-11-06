@@ -395,3 +395,5 @@ endpoint. `go test -short ./...` skips the live checks.
   switches between Wi-Fi and Ethernet the supervisor re-applies DNS on the new
   default route, but the old adapter keeps its setting until reboot.
 - `10.88.0.2` is hermes. Do not reuse it for another device.
+- `10.88.0.1` is Aegis and `10.88.0.254` is the Microsoft relay; `new-device.sh`
+  never allocates either.

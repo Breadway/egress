@@ -80,6 +80,33 @@ func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error) ([]by
 	return json.Marshal(payload)
 }
 
+// maxSpoolAge bounds how long a spooled install report stays deliverable.
+// A report spooled months ago describes a device state that no longer exists;
+// delivering it as current health misdirects troubleshooting, so flush drops
+// it instead of sending.
+const maxSpoolAge = 7 * 24 * time.Hour
+
+// spooledReportStale reports whether a spooled payload should be dropped
+// rather than sent. The embedded TS decides when present; the file mtime is
+// the fallback for payloads that predate the TS field or carry garbage.
+func spooledReportStale(data []byte, modTime, now time.Time) bool {
+	if len(data) == 0 {
+		return true
+	}
+	var payload struct {
+		TS string `json:"ts"`
+	}
+	if err := json.Unmarshal(data, &payload); err == nil && payload.TS != "" {
+		if ts, err := time.Parse(time.RFC3339, payload.TS); err == nil {
+			return now.Sub(ts) > maxSpoolAge
+		}
+	}
+	if modTime.IsZero() {
+		return false
+	}
+	return now.Sub(modTime) > maxSpoolAge
+}
+
 func spoolReport(data []byte) {
 	_ = os.WriteFile(pendingReportPath(), data, 0600)
 }
@@ -131,14 +158,25 @@ func postReportWith(data []byte, transport *http.Transport) error {
 }
 
 // flushPendingReport sends a spooled install report, if any. It is cheap when
-// there is nothing to send: one stat call.
+// there is nothing to send: one stat call. Spooled reports older than
+// maxSpoolAge are dropped: a stale failure resurrected months later would
+// arrive looking like current device health.
 func flushPendingReport() {
 	path := pendingReportPath()
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 	if len(data) == 0 || len(data) > 128<<10 {
+		_ = os.Remove(path)
+		return
+	}
+	if spooledReportStale(data, info.ModTime(), time.Now()) {
+		debugf("dropping stale spooled report")
 		_ = os.Remove(path)
 		return
 	}
