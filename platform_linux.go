@@ -34,6 +34,10 @@ func newPlatform() platform { return linuxPlatform{} }
 
 func installDir() string { return "/usr/local/bin" }
 
+// spoolDir holds the pending install report. Both install and the boot
+// service run as root on Linux, so the shared temp directory works.
+func spoolDir() string { return os.TempDir() }
+
 func logPath() string { return linuxLogPath }
 
 func (linuxPlatform) RequirePrivilege() error {

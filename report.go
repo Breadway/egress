@@ -35,9 +35,12 @@ type reportPayload struct {
 }
 
 // pendingReportPath is deliberately boring: TempDir survives long enough for
-// the supervisor to flush it, and needs no new platform surface.
+// the supervisor to flush it, and needs no new platform surface. On Windows
+// the spool lives next to the log under the install directory instead:
+// TempDir is per-user there, so a report spooled by the elevated installer
+// would never be seen by the SYSTEM supervisor, or vice versa.
 func pendingReportPath() string {
-	return filepath.Join(os.TempDir(), "egress-pending-report.json")
+	return filepath.Join(spoolDir(), "egress-pending-report.json")
 }
 
 func collectDiagnose() string {
@@ -108,6 +111,9 @@ func spooledReportStale(data []byte, modTime, now time.Time) bool {
 }
 
 func spoolReport(data []byte) {
+	// The spool directory is the install directory on Windows, which may
+	// not exist yet on the very first failure paths.
+	_ = os.MkdirAll(spoolDir(), 0700)
 	_ = os.WriteFile(pendingReportPath(), data, 0600)
 }
 

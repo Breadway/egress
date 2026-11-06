@@ -28,6 +28,10 @@ func newPlatform() platform { return darwinPlatform{} }
 
 func installDir() string { return "/usr/local/bin" }
 
+// spoolDir holds the pending install report. Both install and the boot
+// service run as root on macOS, so the shared temp directory works.
+func spoolDir() string { return os.TempDir() }
+
 func logPath() string { return darwinLogPath }
 
 func (darwinPlatform) RequirePrivilege() error {
