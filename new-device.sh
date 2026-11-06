@@ -26,6 +26,7 @@ Usage: ./new-device.sh [options]
   --ip <addr>      Use this tunnel address instead of picking a free one.
   --os <target>    windows (default), linux, darwin, or both (windows+linux).
   --arch <goarch>  amd64 or arm64 (default: arm64 for darwin, amd64 otherwise).
+  --debug-build    Pass --debug-build to build.sh so the binary logs by default.
   --dry-run        Check Aegis and print the address that would be used, then stop.
   -h, --help
 

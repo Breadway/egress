@@ -37,6 +37,9 @@ Usage: ./build.sh [options]
   --out <path>         Output path (default: dist/egress-<os>-<arch>[.exe])
   --save-key <path>    Also write the private key to this file, mode 0600
   --quiet              Do not print the private key, next steps or warnings
+  --debug-build        Bake in debug mode: the binary behaves as if --debug
+                       were passed to every command. For diagnosing other
+                       people's machines; there is no opt-out flag.
   -h, --help
 
 The public key is printed before the build. Add it to Aegis as a peer with the
@@ -56,6 +59,7 @@ goarch="amd64"
 out=""
 save_key=""
 quiet=0
+debug_build=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -68,6 +72,7 @@ while [ $# -gt 0 ]; do
         --out)        out="$2"; shift 2 ;;
         --save-key)   save_key="$2"; shift 2 ;;
         --quiet)      quiet=1; shift ;;
+        --debug-build) debug_build=1; shift ;;
         -h|--help)    usage; exit 0 ;;
         *)            die "unknown option: $1" ;;
     esac
@@ -175,9 +180,14 @@ printf 'public key:  %s\n' "$pubkey"
 printf 'tunnel ip:   %s/32\n' "$ip"
 printf 'building:    %s/%s -> %s\n\n' "$goos" "$goarch" "$out"
 
+debug_ldflag=""
+if [ "$debug_build" -eq 1 ]; then
+    debug_ldflag=" -X main.defaultDebug=true"
+fi
+
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
     go build -trimpath -buildvcs=false \
-    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$(date +%Y%m%d)" \
+    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$(date +%Y%m%d)${debug_ldflag}" \
     -o "$out" .
 
 case "$goos" in

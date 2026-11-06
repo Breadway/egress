@@ -16,7 +16,8 @@ param(
     [ValidateSet("linux", "windows", "darwin")][string]$OS = "windows",
     [ValidateSet("amd64", "arm64")][string]$Arch = "amd64",
     [string]$Out,
-    [string]$SaveKey
+    [string]$SaveKey,
+    [switch]$DebugBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -101,8 +102,11 @@ Write-Host "tunnel ip:   $IP/32"
 Write-Host "building:    $OS/$Arch -> $Out"
 Write-Host ""
 
+$debugLdflag = ""
+if ($DebugBuild) { $debugLdflag = " -X main.defaultDebug=true" }
+
 & go build -trimpath -buildvcs=false `
-    -ldflags "-s -w -X main.embeddedKey=$Key -X main.embeddedClientIP=$IP -X main.buildVersion=$(Get-Date -Format 'yyyyMMdd')" `
+    -ldflags "-s -w -X main.embeddedKey=$Key -X main.embeddedClientIP=$IP -X main.buildVersion=$(Get-Date -Format 'yyyyMMdd')$debugLdflag" `
     -o $Out .
 if ($LASTEXITCODE -ne 0) { Fail "go build failed" }
 

@@ -243,6 +243,10 @@ Install flags:
 
 `disable`, `enable`, `remove` and `uninstall` also accept `--debug`.
 
+Delivery builds made with `build.sh --debug-build` (or `new-device.sh
+--debug-build`) log by default, so a first run on someone else's machine
+always leaves a log file behind.
+
 The key resolution order is: `--key`, `--key-file`, the key compiled in at build
 time, then an interactive prompt.
 

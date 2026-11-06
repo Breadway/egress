@@ -142,7 +142,10 @@ Linker contract: two package-level string variables in `package main` named
 `main.embeddedKey` and `main.embeddedClientIP`, empty in source. `install`
 prefers the embedded key over prompting, and the embedded address over the
 built-in default. `build.sh` byte-searches the output and fails if the key did
-not land, which catches a renamed variable.
+not land, which catches a renamed variable. A third variable,
+`main.defaultDebug`, is `"false"` in source; `build.sh --debug-build` sets it
+to `"true"`, which makes every command behave as if `--debug` were passed.
+There is no opt-out flag: rebuild without it for a quiet binary.
 
 For `--os windows`, the build also requires `assets/wstunnel-windows-amd64.exe`
 and `assets/wireguard-amd64-1.1.1.msi` and refuses to build if either is missing
