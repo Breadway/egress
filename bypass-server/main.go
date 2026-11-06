@@ -1486,7 +1486,17 @@ func (s *server) adminAddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Never overwrite: replacing the row would orphan the previous WireGuard
+	// peer (full tunnel access, linked from no admin screen) and reset the
+	// download audit trail. The operator revokes first, which removes the
+	// peer, then re-publishes.
+	s.usersMu.Lock()
+	defer s.usersMu.Unlock()
 	users := s.loadUsers()
+	if _, exists := users[username]; exists {
+		http.Error(w, "username exists; revoke it in the admin UI first, then re-publish", http.StatusConflict)
+		return
+	}
 	users[username] = user{
 		Hash: string(hash), Password: password, Binary: binary, Label: label,
 		OS: targetOS, Arch: targetArch, Peer: peer,
