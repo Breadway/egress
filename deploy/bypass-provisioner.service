@@ -1,0 +1,19 @@
+[Unit]
+Description=Provision approved bypass enrollment applications
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=breadway
+Group=breadway
+Environment=HOME=/home/breadway
+WorkingDirectory=/home/breadway/Projects/egress
+ExecStart=/home/breadway/Projects/egress/provision-pending.py
+Restart=always
+RestartSec=10
+ProtectSystem=full
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

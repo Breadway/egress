@@ -1,0 +1,510 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// Set at build time:
+//
+//	go build -ldflags "-X main.embeddedKey=... -X main.embeddedClientIP=... -X main.buildVersion=..."
+var (
+	embeddedKey      string
+	embeddedClientIP string
+	buildVersion     string
+)
+
+func reportVersion() string {
+	if buildVersion == "" {
+		return "dev"
+	}
+	return buildVersion
+}
+
+func main() {
+	if err := realMain(); err != nil {
+		fmt.Fprintf(os.Stderr, "egress: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func realMain() error {
+	args := os.Args[1:]
+
+	if len(args) > 0 {
+		switch args[0] {
+		case "-h", "--help", "help":
+			usage()
+			return nil
+		}
+	}
+
+	command := "install"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		command = args[0]
+		args = args[1:]
+	}
+
+	switch command {
+	case "install":
+		return cmdInstall(args)
+	case "supervise":
+		return cmdSupervise(args)
+	case "verify":
+		return cmdVerify(args)
+	case "diagnose":
+		return cmdDiagnose(args)
+	case "pubkey", "key":
+		return cmdPubkey(args)
+	case "disable":
+		return cmdDisable(args)
+	case "enable":
+		return cmdEnable(args)
+	case "remove", "uninstall":
+		return cmdRemove(args)
+	default:
+		usage()
+		return fmt.Errorf("unknown command %q", command)
+	}
+}
+
+func usage() {
+	fmt.Print(`egress: DNS over HTTPS resolver and WireGuard exit.
+
+Usage:
+  egress [command] [flags]
+
+Commands:
+  install      configure this machine (default)
+  supervise    run the resolver and the fallback supervisor; used by the boot service
+  verify       check the installed setup
+  diagnose     print routing, DNS, tunnel and log state
+  disable      stop now, restore DNS, and do not start at boot; keep the config
+  enable       let it start at boot again and start it now
+  remove       remove every installed part, including configs, logs and wstunnel
+  uninstall    alias for remove
+  pubkey       print the public key for a key, change nothing
+
+install flags:
+  --key <base64>      private key (fallback: the embedded key, then a prompt)
+  --key-file <path>   read the private key from a file
+  --ip <addr>         tunnel address for this device (default 10.88.0.4)
+  --no-tunnel         DNS only
+  --no-fallback       never use the WebSocket fallback
+  --debug             trace every command and its output, and log to a file
+
+disable, enable, remove and uninstall also accept --debug.
+
+Build with a key compiled in:
+  ./build.sh --generate --ip 10.88.0.4 --os windows
+`)
+}
+
+func cmdInstall(args []string) error {
+	fs := newFlagSet("install")
+	keyFlag := fs.String("key", "", "private key")
+	keyFile := fs.String("key-file", "", "file containing the private key")
+	ipFlag := fs.String("ip", "", "tunnel address for this device")
+	noTunnel := fs.Bool("no-tunnel", false, "configure DNS only")
+	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
+	debug := fs.Bool("debug", false, "trace commands and log to a file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	plat := newPlatform()
+	if err := plat.RequirePrivilege(); err != nil {
+		return err
+	}
+
+	// Stop an older supervisor before replacing files it may be executing.
+	// wstunnel.exe cannot be overwritten while it is running on Windows.
+	_ = plat.StopService()
+
+	// Deliver an older spooled install report before doing anything else.
+	flushPendingReport()
+
+	iface, gateway, err := plat.DefaultRoute()
+	if err != nil {
+		return fmt.Errorf("find the default route: %w", err)
+	}
+	fmt.Printf("interface %s, gateway %s\n", iface, gateway)
+
+	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort}
+	if validIPv4(embeddedClientIP) {
+		tcfg.ClientIP = embeddedClientIP
+	}
+	if *ipFlag != "" {
+		tcfg.ClientIP = *ipFlag
+	}
+	if !validIPv4(tcfg.ClientIP) {
+		return fmt.Errorf("invalid tunnel address %q", tcfg.ClientIP)
+	}
+
+	if !*noTunnel {
+		key, err := resolveKey(*keyFlag, *keyFile)
+		if err != nil {
+			return err
+		}
+		tcfg.PrivateKey = key
+		pub, err := publicKey(key)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\npublic key: %s\n", pub)
+		fmt.Printf("add it on Aegis with allowed-ips %s/32 before this device will work\n\n", tcfg.ClientIP)
+	}
+
+	if err := plat.InstallTools(); err != nil {
+		return err
+	}
+
+	if !*noTunnel {
+		if err := plat.WriteTunnelConfig(tcfg); err != nil {
+			return err
+		}
+		if err := plat.StartTunnel(); err != nil {
+			return err
+		}
+		fmt.Println("wireguard tunnel is up")
+	}
+
+	if _, err := plat.InstallWstunnel(); err != nil {
+		if !*noFallback {
+			fmt.Fprintf(os.Stderr, "warning: wstunnel unavailable, the fallback will not work: %v\n", err)
+		}
+	}
+
+	exe, err := ensureInstalledBinary()
+	if err != nil {
+		return err
+	}
+	// The boot service and the scheduled task both reference this exact path,
+	// which is always the permanent install location regardless of where the
+	// user ran this command from.
+	fmt.Printf("installed to %s; the boot service will run it from there\n", exe)
+
+	serviceArgs := []string{"supervise"}
+	if *noTunnel {
+		serviceArgs = append(serviceArgs, "--no-tunnel")
+	}
+	if *noFallback {
+		serviceArgs = append(serviceArgs, "--no-fallback")
+	}
+	if *debug {
+		serviceArgs = append(serviceArgs, "--debug")
+	}
+
+	if err := plat.InstallService(exe, serviceArgs); err != nil {
+		return err
+	}
+	if err := plat.StartService(); err != nil {
+		return err
+	}
+
+	if err := waitForPort(dohListenAddr, 25*time.Second); err != nil {
+		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), fmt.Errorf("%w (run `egress diagnose`)", err))
+		return fmt.Errorf("%w (run `egress diagnose`)", err)
+	}
+	if err := plat.ApplyDNS(iface, gateway); err != nil {
+		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	fmt.Println()
+	if err := verifyAll(plat, tcfg); err != nil {
+		// The machine goes back to its pre-install networking first, so a
+		// failed install never leaves the user offline. The report carries
+		// what went wrong.
+		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+		fmt.Fprintln(os.Stderr, "the setup is running but verification failed; run `egress diagnose`")
+		fmt.Fprintln(os.Stderr, "networking was rolled back; the failure was reported home")
+		return err
+	}
+
+	results := runChecks(plat, tcfg)
+	if data, err := buildReport(tcfg, results, nil); err == nil {
+		if err := sendReport(data); err != nil {
+			debugf("install report unsent, spooled: %v", err)
+			spoolReport(data)
+		}
+	}
+	fmt.Println("\nall checks passed")
+	return nil
+}
+
+// rollbackInstall restores pre-install networking, then reports the failure
+// home. Reporting is best effort and never masks the original error.
+func rollbackInstall(plat platform, tcfg tunnelConfig, results checkResults, cause error) {
+	if err := plat.Disable(); err != nil {
+		fmt.Fprintf(os.Stderr, "rollback: %v\n", err)
+	} else {
+		fmt.Fprintln(os.Stderr, "rolled back to pre-install networking")
+	}
+	data, err := buildReport(tcfg, results, cause)
+	if err != nil {
+		return
+	}
+	if err := sendReport(data); err != nil {
+		debugf("failure report unsent, spooled: %v", err)
+		spoolReport(data)
+	}
+}
+
+func cmdSupervise(args []string) error {
+	fs := newFlagSet("supervise")
+	noTunnel := fs.Bool("no-tunnel", false, "do not manage the tunnel")
+	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
+	debug := fs.Bool("debug", false, "trace commands and log to a file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	plat := newPlatform()
+	if err := plat.RequirePrivilege(); err != nil {
+		return err
+	}
+
+	iface, gateway, err := plat.DefaultRoute()
+	if err != nil {
+		appLogger().Printf("no default route yet (%v); will keep trying", err)
+	}
+
+	resolver := newDoHResolver(gateway, appLogger())
+
+	wstPath := ""
+	if !*noTunnel && !*noFallback {
+		if path, err := plat.WstunnelPath(); err == nil {
+			wstPath = path
+		} else {
+			appLogger().Printf("wstunnel not found, the fallback is unavailable: %v", err)
+		}
+	}
+	wst := newWstunnelProc(wstPath, appLogger())
+
+	sup := newSupervisor(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
+	sup.iface, sup.gateway = iface, gateway
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return sup.Run(ctx)
+}
+
+func cmdVerify(args []string) error {
+	fs := newFlagSet("verify")
+	debug := fs.Bool("debug", false, "trace checks")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	plat := newPlatform()
+	tcfg := tunnelConfig{ClientIP: defaultClientIP}
+	if plat.TunnelConfigured() {
+		tcfg.PrivateKey = "configured"
+	}
+	return verifyAll(plat, tcfg)
+}
+
+func cmdDiagnose(args []string) error {
+	fs := newFlagSet("diagnose")
+	debug := fs.Bool("debug", false, "also enable tracing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+	return diagnose()
+}
+
+func cmdPubkey(args []string) error {
+	fs := newFlagSet("pubkey")
+	key := fs.String("key", "", "private key")
+	keyFile := fs.String("key-file", "", "file containing the private key")
+	debug := fs.Bool("debug", false, "trace commands")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	private, err := resolveKey(*key, *keyFile)
+	if err != nil {
+		return err
+	}
+	pub, err := publicKey(private)
+	if err != nil {
+		return err
+	}
+	fmt.Println(pub)
+	return nil
+}
+
+func cmdDisable(args []string) error {
+	fs := newFlagSet("disable")
+	debug := fs.Bool("debug", false, "trace commands")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	plat := newPlatform()
+	if err := plat.RequirePrivilege(); err != nil {
+		return err
+	}
+	if err := plat.Disable(); err != nil {
+		return err
+	}
+	fmt.Println("egress disabled; DNS and routing are back to the system defaults")
+	return nil
+}
+
+func cmdEnable(args []string) error {
+	fs := newFlagSet("enable")
+	debug := fs.Bool("debug", false, "trace commands")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	plat := newPlatform()
+	if err := plat.RequirePrivilege(); err != nil {
+		return err
+	}
+	if err := plat.Enable(); err != nil {
+		return err
+	}
+	fmt.Println("egress enabled")
+	return nil
+}
+
+func cmdRemove(args []string) error {
+	fs := newFlagSet("remove")
+	debug := fs.Bool("debug", false, "trace commands")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(*debug)
+
+	plat := newPlatform()
+	if err := plat.RequirePrivilege(); err != nil {
+		return err
+	}
+	if err := plat.Remove(); err != nil {
+		return err
+	}
+	fmt.Println("egress removed")
+	return nil
+}
+
+// installedBinaryPath is the canonical name under installDir. install copies
+// the running binary there, and the boot service and Remove use it.
+func installedBinaryPath() string {
+	name := "egress"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(installDir(), name)
+}
+
+// ensureInstalledBinary copies the running executable to the canonical install
+// path when it was started from anywhere else (Downloads, USB stick, /tmp),
+// and returns the canonical path. The boot service and the scheduled task
+// always reference the canonical path, so installs from a temporary location
+// survive reboots. Reinstalls overwrite the previous copy; the old supervisor
+// is already stopped by the time install calls this.
+func ensureInstalledBinary() (string, error) {
+	dest := installedBinaryPath()
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+		self = resolved
+	}
+	if filepath.Clean(self) == filepath.Clean(dest) {
+		return dest, nil
+	}
+	if a, errA := os.Stat(self); errA == nil {
+		if b, errB := os.Stat(dest); errB == nil && os.SameFile(a, b) {
+			return dest, nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
+		return "", err
+	}
+	src, err := os.Open(self)
+	if err != nil {
+		return "", fmt.Errorf("read the running binary: %w", err)
+	}
+	defer src.Close()
+	tmp := dest + ".new"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+	if err != nil {
+		return "", err
+	}
+	_, copyErr := io.Copy(out, src)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("copy to %s: %w", dest, copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return "", closeErr
+	}
+	// Windows refuses to replace an image that is still mapped; the old
+	// supervisor was stopped earlier, but its process may need a moment.
+	var renameErr error
+	for attempt := 0; attempt < 20; attempt++ {
+		if renameErr = os.Rename(tmp, dest); renameErr == nil {
+			debugf("installed binary to %s", dest)
+			return dest, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = os.Remove(tmp)
+	return "", fmt.Errorf("replace %s: %w", dest, renameErr)
+}
+
+// removeInstalledBinary deletes the canonical install path unless that is the
+// executable currently running, which cannot be unlinked on Windows and should
+// not vanish underneath the user on Linux.
+func removeInstalledBinary() {
+	dest := installedBinaryPath()
+	self, err := os.Executable()
+	if err == nil {
+		if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+			self = resolved
+		}
+		if filepath.Clean(self) == filepath.Clean(dest) {
+			fmt.Printf("the running binary is %s; delete it after this command exits\n", dest)
+			return
+		}
+		if a, errA := os.Stat(self); errA == nil {
+			if b, errB := os.Stat(dest); errB == nil && os.SameFile(a, b) {
+				fmt.Printf("the running binary is %s; delete it after this command exits\n", dest)
+				return
+			}
+		}
+	}
+	if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("could not delete %s: %v\n", dest, err)
+	}
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	return fs
+}

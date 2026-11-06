@@ -1,0 +1,48 @@
+# Domains answered with the relay address (10.88.0.254) by dnscloak.
+# Aegis DNATs that address to Hestia:7106 for the whole tunnel subnet, and
+# Hestia connects to the real host using the TLS SNI. One suffix per line;
+# a leading "*." is accepted and ignored.
+
+microsoft.com
+microsoftonline.com
+microsoftonline-p.com
+microsoft365.com
+microsoftstore.com
+microsoftcloud.com
+office.com
+office.net
+office365.com
+live.com
+live.net
+outlook.com
+hotmail.com
+passport.net
+passport.com
+sharepoint.com
+onedrive.com
+skype.com
+skype.net
+windows.com
+windowsupdate.com
+windows.net
+msftconnecttest.com
+msftncsi.com
+msedge.net
+msecnd.net
+azureedge.net
+cloud.microsoft
+msn.com
+bing.com
+xbox.com
+xboxlive.com
+msauth.net
+msftauth.net
+msftidentity.com
+msidentity.com
+svc.ms
+azure.com
+dynamics.com
+powerbi.com
+powerapps.com
+powerautomate.com
+visualstudio.com

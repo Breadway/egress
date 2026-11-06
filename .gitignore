@@ -1,0 +1,9 @@
+egress
+egress.exe
+dist/
+*.log
+# Pinned vendor binaries embedded into delivery builds. Fetch locally;
+# build.sh / build.ps1 verify SHA-256 and fail with the expected source.
+assets/wstunnel-*
+assets/*.msi
+__pycache__/
