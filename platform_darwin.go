@@ -19,6 +19,7 @@ const (
 	darwinPlistPath = "/Library/LaunchDaemons/egress.plist"
 	darwinWGDir     = "/etc/wireguard"
 	darwinWGPath    = "/etc/wireguard/" + wgInterface + ".conf"
+	darwinWGBak     = "/etc/wireguard/" + wgInterface + ".conf.egress.bak"
 	darwinLogPath   = "/var/log/egress.log"
 )
 
@@ -132,6 +133,9 @@ func (darwinPlatform) InstallTools() error {
 
 func (darwinPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 	if err := os.MkdirAll(darwinWGDir, 0700); err != nil {
+		return false, err
+	}
+	if err := backupForeignConfig(darwinWGPath, darwinWGBak); err != nil {
 		return false, err
 	}
 	// No Table/PostUp extras: wg-quick on Darwin adds the endpoint host route
@@ -316,13 +320,21 @@ func (p darwinPlatform) Disable() error {
 func (p darwinPlatform) Remove() error {
 	_ = p.Disable()
 	_ = os.Remove(darwinPlistPath)
-	_ = os.Remove(darwinWGPath)
+	if restored, _ := restoreBackedConfig(darwinWGPath, darwinWGBak); restored {
+		debugf("restored the pre-existing %s", darwinWGPath)
+	} else {
+		_ = os.Remove(darwinWGPath)
+	}
 
 	closeLog()
 	_ = os.Remove(darwinLogPath)
 	_ = os.Remove(darwinLogPath + ".old")
 
-	_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
+	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA256) {
+		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
+	} else {
+		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
+	}
 	removeInstalledBinary()
 	return nil
 }

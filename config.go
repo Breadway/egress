@@ -91,6 +91,7 @@ func validIPv4(s string) bool {
 
 func renderWGConfig(c tunnelConfig) string {
 	var b strings.Builder
+	b.WriteString(egressConfigMarker + "\n")
 	b.WriteString("[Interface]\n")
 	fmt.Fprintf(&b, "Address = %s/32\n", c.ClientIP)
 	fmt.Fprintf(&b, "PrivateKey = %s\n", c.PrivateKey)
