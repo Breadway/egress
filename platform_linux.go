@@ -409,6 +409,12 @@ func (linuxPlatform) StopService() error {
 	return nil
 }
 
+// ServiceActive is a quiet check: verification calls it on every run and a
+// failing service must not spam the log.
+func (linuxPlatform) ServiceActive() bool {
+	return exec.Command("systemctl", "is-active", "--quiet", "egress.service").Run() == nil
+}
+
 func (linuxPlatform) Enable() error {
 	if _, err := os.Stat(linuxUnitPath); err != nil {
 		return errors.New("egress is not installed; run install first")

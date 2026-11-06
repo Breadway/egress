@@ -337,6 +337,22 @@ func (windowsPlatform) StopService() error {
 	return nil
 }
 
+// ServiceActive reports whether the scheduled task is currently running. A
+// quiet check: verification calls it on every run.
+func (windowsPlatform) ServiceActive() bool {
+	out, err := exec.Command("schtasks", "/query", "/tn", winTaskName, "/fo", "list").Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if name, value, ok := strings.Cut(line, ":"); ok &&
+			strings.TrimSpace(name) == "Status" {
+			return strings.TrimSpace(value) == "Running"
+		}
+	}
+	return false
+}
+
 func (windowsPlatform) Enable() error {
 	if _, err := execLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
 		return errors.New("egress is not installed; run install first")

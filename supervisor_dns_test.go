@@ -41,6 +41,7 @@ func (f *dnsWatchdogFake) SecureInstallDir() error               { return nil }
 func (f *dnsWatchdogFake) InstallService(string, []string) error { return nil }
 func (f *dnsWatchdogFake) StartService() error                   { return nil }
 func (f *dnsWatchdogFake) StopService() error                    { return nil }
+func (f *dnsWatchdogFake) ServiceActive() bool                   { return true }
 func (f *dnsWatchdogFake) Enable() error                         { return nil }
 func (f *dnsWatchdogFake) Disable() error                        { return nil }
 func (f *dnsWatchdogFake) Remove() error                         { return nil }

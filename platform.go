@@ -73,6 +73,10 @@ type platform interface {
 	InstallService(exePath string, args []string) error
 	StartService() error
 	StopService() error
+	// ServiceActive reports whether the boot service or task is running.
+	// Install and verify use it with the readiness marker to prove the
+	// process on the DNS port is our supervisor, not a foreign resolver.
+	ServiceActive() bool
 	// Enable allows the boot service or task to start again.
 	Enable() error
 
