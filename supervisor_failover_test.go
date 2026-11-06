@@ -32,8 +32,12 @@ func (f *rotateFake) RepinEndpoint(gw, iface string) error {
 	f.repins = append(f.repins, [2]string{gw, iface})
 	return nil
 }
-func (f *rotateFake) ApplyDNS(string, string) error         { return nil }
-func (f *rotateFake) EnsureDNS(string, string) error        { return nil }
+func (f *rotateFake) ApplyDNS(string, string) error  { return nil }
+func (f *rotateFake) EnsureDNS(string, string) error { return nil }
+
+// SecureInstallDir is a no-op here to satisfy the platform interface; route
+// rotation never touches the install directory.
+func (f *rotateFake) SecureInstallDir() error               { return nil }
 func (f *rotateFake) InstallService(string, []string) error { return nil }
 func (f *rotateFake) StartService() error                   { return nil }
 func (f *rotateFake) StopService() error                    { return nil }
