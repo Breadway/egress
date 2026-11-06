@@ -34,7 +34,15 @@ const (
 
 	probeInterval = 15 * time.Second
 	trialInterval = 10 * time.Minute
-	dnsCheckEvery = 60 * time.Second
+
+	// relayProbeWindow bounds one health probe on the relay path, and
+	// relayFailThreshold counts consecutive failures before the relay
+	// child is restarted and a UDP trial is brought forward. A listening
+	// relay port alone is not a health signal: the WebSocket underneath
+	// can be blackholed while the port stays open.
+	relayProbeWindow   = 5 * time.Second
+	relayFailThreshold = 2
+	dnsCheckEvery      = 60 * time.Second
 )
 
 // tunnelConfig is everything needed to write a WireGuard configuration.
