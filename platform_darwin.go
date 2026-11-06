@@ -242,16 +242,28 @@ func (darwinPlatform) EnsureDNS(iface, gateway string) error {
 	return runLogged("networksetup", "-setdnsservers", service, "127.0.0.1")
 }
 
-func (darwinPlatform) restoreDNS() {
+func (darwinPlatform) restoreDNS() error {
 	iface, _, err := (darwinPlatform{}).DefaultRoute()
 	if err != nil {
-		return
+		return fmt.Errorf("find the default route: %w", err)
 	}
 	service, err := serviceForDevice(iface)
 	if err != nil {
-		return
+		return err
 	}
-	_ = runLogged("networksetup", "-setdnsservers", service, "Empty")
+	if err := runLogged("networksetup", "-setdnsservers", service, "Empty"); err != nil {
+		return fmt.Errorf("reset DNS on %s: %w", service, err)
+	}
+	// Read back: the adapter must not still point at our listener, or
+	// disable would claim success with dead DNS.
+	out, err := exec.Command("networksetup", "-getdnsservers", service).Output()
+	if err != nil {
+		return fmt.Errorf("read back DNS on %s: %w", service, err)
+	}
+	if dnsServersPointAtListener(string(out)) {
+		return fmt.Errorf("%s still points at the egress listener", service)
+	}
+	return nil
 }
 
 func (darwinPlatform) InstallService(exePath string, args []string) error {
@@ -316,8 +328,7 @@ func (p darwinPlatform) Disable() error {
 	_ = p.StopService()
 	_ = runLogged("launchctl", "disable", "system/"+darwinLabel)
 	_ = p.StopTunnel()
-	p.restoreDNS()
-	return nil
+	return p.restoreDNS()
 }
 
 // Remove is Disable plus the file system.

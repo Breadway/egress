@@ -92,6 +92,18 @@ type platform interface {
 	InstallWstunnel() (string, error)
 }
 
+// dnsServersPointAtListener reports whether a DNS server listing (one
+// address per line, as printed by networksetup or Get-DnsClientServerAddress)
+// still contains our local listener.
+func dnsServersPointAtListener(output string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "127.0.0.1" {
+			return true
+		}
+	}
+	return false
+}
+
 // egressConfigMarker heads every tunnel config this tool writes, so install
 // can tell its own files from a foreign wg0.conf it must not destroy.
 const egressConfigMarker = "# managed by egress"
