@@ -62,6 +62,7 @@ func (f *installFake) StopService() error {
 	return nil
 }
 func (f *installFake) LivePublicKey() (string, error)   { return "", nil }
+func (f *installFake) ServiceActive() bool              { return true }
 func (f *installFake) Enable() error                    { return nil }
 func (f *installFake) Disable() error                   { return nil }
 func (f *installFake) Remove() error                    { return nil }

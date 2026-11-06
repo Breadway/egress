@@ -23,6 +23,23 @@ const (
 	darwinLogPath   = "/var/log/egress.log"
 )
 
+// SHA-256 of the pinned wstunnel 11.1.0 darwin binaries, per arch. Kept
+// here (not in the delivery-tagged asset files) so dev builds that extract
+// nothing still verify downloads against the same pins.
+const (
+	wstunnelDarwinAmd64SHA256 = "72349e8eda9b80762e809b51dbe3c81aea8094b57da6ab6bb97274f048be4adb"
+	wstunnelDarwinArm64SHA256 = "3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb"
+)
+
+// wstunnelDarwinSHA selects the pin matching this build's arch, so
+// InstallWstunnel and Remove agree on what counts as ours.
+func wstunnelDarwinSHA() string {
+	if runtime.GOARCH == "amd64" {
+		return wstunnelDarwinAmd64SHA256
+	}
+	return wstunnelDarwinArm64SHA256
+}
+
 type darwinPlatform struct{}
 
 func newPlatform() platform { return darwinPlatform{} }
@@ -254,16 +271,28 @@ func (darwinPlatform) EnsureDNS(iface, gateway string) error {
 	return runLogged("networksetup", "-setdnsservers", service, "127.0.0.1")
 }
 
-func (darwinPlatform) restoreDNS() {
+func (darwinPlatform) restoreDNS() error {
 	iface, _, err := (darwinPlatform{}).DefaultRoute()
 	if err != nil {
-		return
+		return fmt.Errorf("find the default route: %w", err)
 	}
 	service, err := serviceForDevice(iface)
 	if err != nil {
-		return
+		return err
 	}
-	_ = runLogged("networksetup", "-setdnsservers", service, "Empty")
+	if err := runLogged("networksetup", "-setdnsservers", service, "Empty"); err != nil {
+		return fmt.Errorf("reset DNS on %s: %w", service, err)
+	}
+	// Read back: the adapter must not still point at our listener, or
+	// disable would claim success with dead DNS.
+	out, err := exec.Command("networksetup", "-getdnsservers", service).Output()
+	if err != nil {
+		return fmt.Errorf("read back DNS on %s: %w", service, err)
+	}
+	if dnsServersPointAtListener(string(out)) {
+		return fmt.Errorf("%s still points at the egress listener", service)
+	}
+	return nil
 }
 
 func (darwinPlatform) InstallService(exePath string, args []string) error {
@@ -311,6 +340,16 @@ func (darwinPlatform) StopService() error {
 	return nil
 }
 
+// ServiceActive is a quiet check: verification calls it on every run and a
+// failing service must not spam the log.
+func (darwinPlatform) ServiceActive() bool {
+	out, err := exec.Command("launchctl", "print", "system/"+darwinLabel).Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "state = running")
+}
+
 func (darwinPlatform) Enable() error {
 	if _, err := os.Stat(darwinPlistPath); err != nil {
 		return errors.New("egress is not installed; run install first")
@@ -328,8 +367,7 @@ func (p darwinPlatform) Disable() error {
 	_ = p.StopService()
 	_ = runLogged("launchctl", "disable", "system/"+darwinLabel)
 	_ = p.StopTunnel()
-	p.restoreDNS()
-	return nil
+	return p.restoreDNS()
 }
 
 // Remove is Disable plus the file system.
@@ -346,7 +384,7 @@ func (p darwinPlatform) Remove() error {
 	_ = os.Remove(darwinLogPath)
 	_ = os.Remove(darwinLogPath + ".old")
 
-	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA256) {
+	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA()) {
 		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
 	} else {
 		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
@@ -366,7 +404,7 @@ func (darwinPlatform) WstunnelPath() (string, error) { return findWstunnel() }
 func (darwinPlatform) InstallWstunnel() (string, error) {
 	if len(embeddedWstunnel) > 0 {
 		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelDarwinSHA256); err != nil {
+		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelDarwinSHA()); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {
@@ -380,9 +418,9 @@ func (darwinPlatform) InstallWstunnel() (string, error) {
 func writeDiagnosePlatform(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	if _, err := exec.LookPath("wg"); err == nil {
-		fmt.Printf("  wireguard-tools: present\n")
+		fmt.Fprintf(w, "  wireguard-tools: present\n")
 	} else {
-		fmt.Printf("  wireguard-tools: not found (brew install wireguard-tools)\n")
+		fmt.Fprintf(w, "  wireguard-tools: not found (brew install wireguard-tools)\n")
 	}
 
 	section(w, "default route")
@@ -393,7 +431,7 @@ func writeDiagnosePlatform(w io.Writer) error {
 		if service, err := serviceForDevice(iface); err == nil {
 			show(w, "networksetup", "-getdnsservers", service)
 		} else {
-			fmt.Printf("  %v\n", err)
+			fmt.Fprintf(w, "  %v\n", err)
 		}
 	}
 

@@ -81,6 +81,10 @@ type platform interface {
 	InstallService(exePath string, args []string) error
 	StartService() error
 	StopService() error
+	// ServiceActive reports whether the boot service or task is running.
+	// Install and verify use it with the readiness marker to prove the
+	// process on the DNS port is our supervisor, not a foreign resolver.
+	ServiceActive() bool
 	// Enable allows the boot service or task to start again.
 	Enable() error
 
@@ -98,6 +102,18 @@ type platform interface {
 
 	WstunnelPath() (string, error)
 	InstallWstunnel() (string, error)
+}
+
+// dnsServersPointAtListener reports whether a DNS server listing (one
+// address per line, as printed by networksetup or Get-DnsClientServerAddress)
+// still contains our local listener.
+func dnsServersPointAtListener(output string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "127.0.0.1" {
+			return true
+		}
+	}
+	return false
 }
 
 // egressConfigMarker heads every tunnel config this tool writes, so install

@@ -276,14 +276,78 @@ func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
 	return nil
 }
 
+// resolvSymlinkPrefix marks a resolv.conf backup that records a symlink
+// target instead of file contents. The backup is a single line, so a
+// foreign file can only collide by containing exactly that line.
+const resolvSymlinkPrefix = "egress-symlink "
+
+// backupResolvConf saves confPath for later restore when this tool did not
+// write it: a symlink is recorded as its target (writing through it would
+// scribble on systemd-resolved or NetworkManager state), other contents are
+// copied unless they already point at our listener. An existing backup wins.
+func backupResolvConf(confPath, bakPath string) error {
+	fi, err := os.Lstat(confPath)
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(bakPath); err == nil {
+		return nil
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(confPath)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(bakPath, []byte(resolvSymlinkPrefix+target+"\n"), 0644)
+	}
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(string(data), "127.0.0.1") {
+		return nil
+	}
+	return os.WriteFile(bakPath, data, 0644)
+}
+
+// restoreResolvConf undoes backupResolvConf: a recorded symlink is
+// re-created, saved contents are moved back. Anything else is left alone.
+func restoreResolvConf(confPath, bakPath string) error {
+	data, err := os.ReadFile(bakPath)
+	if err != nil {
+		return nil
+	}
+	if target, ok := strings.CutPrefix(string(data), resolvSymlinkPrefix); ok {
+		target = strings.TrimSpace(target)
+		_ = os.Remove(confPath)
+		if err := os.Symlink(target, confPath); err != nil {
+			return err
+		}
+		_ = os.Remove(bakPath)
+		return nil
+	}
+	if err := os.Rename(bakPath, confPath); err != nil {
+		return err
+	}
+	return nil
+}
+
 func writeResolvConf() error {
-	data, err := os.ReadFile(linuxResolvConf)
-	if err == nil && !strings.Contains(string(data), "127.0.0.1") {
-		if _, statErr := os.Stat(linuxResolvBak); statErr != nil {
-			_ = os.WriteFile(linuxResolvBak, data, 0644)
+	return writeResolvConfAt(linuxResolvConf, linuxResolvBak)
+}
+
+// writeResolvConfAt points the resolver at the local listener, preserving a
+// pre-existing symlink instead of writing through it or paving over it.
+func writeResolvConfAt(confPath, bakPath string) error {
+	if err := backupResolvConf(confPath, bakPath); err != nil {
+		return err
+	}
+	if fi, err := os.Lstat(confPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(confPath); err != nil {
+			return err
 		}
 	}
-	return os.WriteFile(linuxResolvConf, []byte("nameserver 127.0.0.1\noptions edns0 trust-ad\n"), 0644)
+	return os.WriteFile(confPath, []byte("nameserver 127.0.0.1\noptions edns0 trust-ad\n"), 0644)
 }
 
 // resolvedActive reports whether systemd-resolved is running. Plain exec, no
@@ -360,6 +424,12 @@ func (linuxPlatform) StopService() error {
 	return nil
 }
 
+// ServiceActive is a quiet check: verification calls it on every run and a
+// failing service must not spam the log.
+func (linuxPlatform) ServiceActive() bool {
+	return exec.Command("systemctl", "is-active", "--quiet", "egress.service").Run() == nil
+}
+
 func (linuxPlatform) Enable() error {
 	if _, err := os.Stat(linuxUnitPath); err != nil {
 		return errors.New("egress is not installed; run install first")
@@ -419,16 +489,48 @@ func (p linuxPlatform) Remove() error {
 // restoreDNS removes the local resolver drop-in and restores /etc/resolv.conf
 // if this tool had rewritten it.
 func (linuxPlatform) restoreDNS() error {
-	_ = os.Remove(linuxResolved)
+	if err := os.Remove(linuxResolved); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", linuxResolved, err)
+	}
+	hadBackup := false
 	if _, err := os.Stat(linuxResolvBak); err == nil {
-		_ = os.Rename(linuxResolvBak, linuxResolvConf)
+		hadBackup = true
+		if err := restoreResolvConf(linuxResolvConf, linuxResolvBak); err != nil {
+			return fmt.Errorf("restore %s: %w", linuxResolvConf, err)
+		}
 	}
-	if runLogged("systemctl", "restart", "systemd-resolved") != nil {
-		// No systemd-resolved: resolv.conf is the only resolver state.
-		return nil
+	if err := runLogged("systemctl", "restart", "systemd-resolved"); err != nil {
+		// No systemd-resolved is the common case there: resolv.conf is
+		// the only resolver state, verified below. A present-but-broken
+		// unit is a real failure, not an absence.
+		if resolvedUnitPresent() {
+			return fmt.Errorf("restart systemd-resolved: %w", err)
+		}
+	} else {
+		_ = runLogged("resolvectl", "flush-caches")
 	}
-	_ = runLogged("resolvectl", "flush-caches")
+	if hadBackup {
+		// Read back: the restored file must not point at our listener, or
+		// disable would claim success with dead DNS.
+		data, err := os.ReadFile(linuxResolvConf)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", linuxResolvConf, err)
+		}
+		if resolvConfPointsAtListener(data) {
+			return fmt.Errorf("%s still points at the egress listener", linuxResolvConf)
+		}
+	}
 	return nil
+}
+
+// resolvedUnitPresent reports whether systemd-resolved is installed at all,
+// separating a missing resolver (benign) from a broken one (fatal).
+func resolvedUnitPresent() bool {
+	out, err := exec.Command("systemctl", "show", "-p", "LoadState", "--value", "systemd-resolved").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "loaded"
 }
 
 func (linuxPlatform) Ping(host string) bool {

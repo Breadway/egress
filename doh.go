@@ -144,7 +144,12 @@ func (r *dohResolver) refresh(ctx context.Context) error {
 			},
 		}
 	} else {
-		resolver = net.DefaultResolver
+		// No gateway (boot before the default route exists, or supervise
+		// started early): the system resolver may be this process's own
+		// listener, which would deadlock the bootstrap against itself.
+		// Keep the seeded Aegis address instead.
+		debugf("no gateway for bootstrap; keeping the seeded address")
+		return nil
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -226,7 +231,107 @@ func (r *dohResolver) exchange(ctx context.Context, query []byte) ([]byte, error
 	return body, nil
 }
 
-// dohStages records how far one lookup got, for failure diagnosis.
+// ednsUDPSize returns the buffer size the client advertised via EDNS, or
+// 512 when the query carries none. Malformed queries get the default: the
+// answer still goes out, just conservatively sized.
+func ednsUDPSize(query []byte) int {
+	const defaultSize = 512
+	if len(query) < 12 {
+		return defaultSize
+	}
+	qd := int(binary.BigEndian.Uint16(query[4:6]))
+	an := int(binary.BigEndian.Uint16(query[6:8]))
+	ns := int(binary.BigEndian.Uint16(query[8:10]))
+	ar := int(binary.BigEndian.Uint16(query[10:12]))
+
+	pos := 12
+	for i := 0; i < qd; i++ {
+		end, ok := skipDNSName(query, pos)
+		if !ok || end+4 > len(query) {
+			return defaultSize
+		}
+		pos = end + 4 // type + class
+	}
+	for i := 0; i < an+ns; i++ {
+		end, ok := skipDNSName(query, pos)
+		if !ok || end+10 > len(query) {
+			return defaultSize
+		}
+		rdlen := int(binary.BigEndian.Uint16(query[end+8 : end+10]))
+		pos = end + 10 + rdlen
+		if pos > len(query) {
+			return defaultSize
+		}
+	}
+	for i := 0; i < ar; i++ {
+		if pos >= len(query) {
+			return defaultSize
+		}
+		if query[pos] == 0 {
+			pos++ // OPT uses the root name
+		} else {
+			end, ok := skipDNSName(query, pos)
+			if !ok {
+				return defaultSize
+			}
+			pos = end
+		}
+		if pos+10 > len(query) {
+			return defaultSize
+		}
+		rrtype := binary.BigEndian.Uint16(query[pos : pos+2])
+		size := int(binary.BigEndian.Uint16(query[pos+2 : pos+4]))
+		rdlen := int(binary.BigEndian.Uint16(query[pos+8 : pos+10]))
+		if rrtype == 41 { // OPT
+			if size < 512 {
+				return defaultSize
+			}
+			return size
+		}
+		pos += 10 + rdlen
+		if pos > len(query) {
+			return defaultSize
+		}
+	}
+	return defaultSize
+}
+
+// skipDNSName advances past a possibly-compressed domain name, reporting
+// where it ends. A compression pointer terminates the name.
+func skipDNSName(msg []byte, pos int) (int, bool) {
+	for {
+		if pos >= len(msg) {
+			return 0, false
+		}
+		l := int(msg[pos])
+		if l == 0 {
+			return pos + 1, true
+		}
+		if l&0xC0 == 0xC0 {
+			if pos+1 >= len(msg) {
+				return 0, false
+			}
+			return pos + 2, true
+		}
+		if l&0xC0 != 0 || pos+1+l > len(msg) {
+			return 0, false
+		}
+		pos += 1 + l
+	}
+}
+
+// truncateUDP cuts resp to size with the TC bit set when it had to cut, so
+// the client retries over TCP instead of receiving a silently truncated
+// datagram. Short responses pass through untouched.
+func truncateUDP(resp []byte, size int) []byte {
+	if len(resp) <= size || len(resp) < 12 {
+		return resp
+	}
+	out := append([]byte(nil), resp[:size]...)
+	out[2] |= 0x02 // TC
+	return out
+}
+
 type dohStages struct {
 	reused bool
 	tcp    bool
@@ -269,7 +374,11 @@ func (r *dohResolver) serve(ctx context.Context) error {
 
 	go r.serveTCP(tcp)
 	r.log.Printf("DoH resolver listening on %s", r.listenAddr)
+	if err := writeReadyMarker(); err != nil {
+		r.log.Printf("could not write the readiness marker: %v", err)
+	}
 	r.serveUDP(udp)
+	removeReadyMarker()
 	return nil
 }
 
@@ -290,6 +399,11 @@ func (r *dohResolver) serveUDP(conn net.PacketConn) {
 				r.log.Printf("DoH lookup failed: %v", err)
 				return
 			}
+			// A non-EDNS client with a 512-byte buffer cannot use an
+			// oversized datagram: recvfrom truncates it and the client
+			// retries instead of falling back to TCP. Cut to the
+			// advertised size with TC set so the retry goes over TCP.
+			resp = truncateUDP(resp, ednsUDPSize(query))
 			if _, err := conn.WriteTo(resp, addr); err != nil {
 				r.log.Printf("udp write: %v", err)
 			}

@@ -100,12 +100,18 @@ type checkResults struct {
 	Tunnel string `json:"tunnel,omitempty"` // "up", "down", or "skipped"
 	Probe  string `json:"probe,omitempty"`  // "ok", "failed", or "skipped"
 	Exit   string `json:"exit,omitempty"`   // exit IP, error text, or skipped ("")
+	// Supervisor holds the error when the boot service is not our live
+	// supervisor, even if something else answers on the DNS port.
+	Supervisor string `json:"supervisor,omitempty"`
 }
 
 func runChecks(p platform, tcfg tunnelConfig) checkResults {
 	var r checkResults
 	if err := checkLocalDNS(); err != nil {
 		r.DNS = err.Error()
+	}
+	if err := checkSupervisorLive(p, 0); err != nil {
+		r.Supervisor = err.Error()
 	}
 	if tcfg.PrivateKey == "" {
 		r.Tunnel = "skipped"
@@ -139,7 +145,9 @@ func runChecks(p platform, tcfg tunnelConfig) checkResults {
 
 // grade maps check results to the status the admin UI shows.
 func (r checkResults) grade() string {
-	if r.DNS != "" {
+	// DNS answering while our supervisor is down means a foreign process
+	// holds the port: never report that as healthy.
+	if r.DNS != "" || r.Supervisor != "" {
 		return "failed"
 	}
 	if (r.Tunnel == "up" || r.Tunnel == "skipped") &&
@@ -166,6 +174,13 @@ func verifyAll(p platform, tcfg tunnelConfig) error {
 		failed = true
 	} else {
 		fmt.Printf("[ok]   dns through %s\n", dohListenAddr)
+	}
+
+	if r.Supervisor != "" {
+		fmt.Printf("[FAIL] supervisor: %v\n", r.Supervisor)
+		failed = true
+	} else {
+		fmt.Println("[ok]   supervisor is ours and running")
 	}
 
 	if tcfg.PrivateKey != "" {

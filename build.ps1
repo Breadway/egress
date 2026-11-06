@@ -105,7 +105,7 @@ Write-Host ""
 $debugLdflag = ""
 if ($DebugBuild) { $debugLdflag = " -X main.defaultDebug=true" }
 
-& go build -trimpath -buildvcs=false `
+& go build -tags delivery -trimpath -buildvcs=false `
     -ldflags "-s -w -X main.embeddedKey=$Key -X main.embeddedClientIP=$IP -X main.buildVersion=$(Get-Date -Format 'yyyyMMdd')$debugLdflag" `
     -o $Out .
 if ($LASTEXITCODE -ne 0) { Fail "go build failed" }
