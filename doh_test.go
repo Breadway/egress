@@ -57,6 +57,7 @@ func TestGrade(t *testing.T) {
 		{"tunnel down", checkResults{Tunnel: "down", Probe: "failed", Exit: "no result"}, "partial"},
 		{"wrong exit", checkResults{Tunnel: "up", Probe: "ok", Exit: "got 1.2.3.4, expected " + aegisIPv4}, "partial"},
 		{"dns down", checkResults{DNS: "i/o timeout", Tunnel: "down", Probe: "failed", Exit: "no result"}, "failed"},
+		{"checker unreachable", checkResults{Tunnel: "up", Probe: "ok", Exit: exitUnverifiedPrefix + "timeout"}, "partial"},
 	}
 	for _, c := range cases {
 		if got := c.r.grade(); got != c.want {
