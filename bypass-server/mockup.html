@@ -25,7 +25,6 @@
   --accent-soft:rgba(143,182,255,.12);
   --btn-a:#6e96ff;
   --btn-b:#3d64e0;
-  --grad-1:#8fb6ff;--grad-2:#c3d4ff;--grad-3:#5ee0b0;
   --ok:#5ee0b0;
   --warn:#ffc46b;
   --bad:#ff8f8f;
@@ -55,7 +54,6 @@
     --accent-soft:rgba(37,87,199,.09);
     --btn-a:#3a6ce0;
     --btn-b:#2149ad;
-    --grad-1:#1e4fd0;--grad-2:#2557c7;--grad-3:#0b7a55;
     --ok:#0f7c55;
     --warn:#8a5a00;
     --bad:#b42323;
@@ -81,7 +79,6 @@
   --accent-soft:rgba(37,87,199,.09);
   --btn-a:#3a6ce0;
   --btn-b:#2149ad;
-  --grad-1:#1e4fd0;--grad-2:#2557c7;--grad-3:#0b7a55;
   --ok:#0f7c55;
   --warn:#8a5a00;
   --bad:#b42323;
@@ -166,8 +163,8 @@ h1,h2,h3,p{margin:0}
 /* ------------------------------------------------------------------ hero */
 .view{padding:3.5rem 0 3rem}
 .view[hidden]{display:none!important}
-.hero{padding:4.2rem 0 3.4rem}
-.hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:3.4rem;align-items:center}
+.hero{padding:5.5rem 0 3.5rem}
+.hero-simple{max-width:46rem}
 .eyebrow{
   display:inline-flex;align-items:center;gap:.55rem;
   font:600 .68rem var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--ink-dim);
@@ -175,72 +172,13 @@ h1,h2,h3,p{margin:0}
 }
 .eyebrow .pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);animation:breathe 3.2s ease-in-out infinite}
 .hero h1{
-  margin:1.4rem 0 0;font-size:clamp(2.5rem,5.4vw,4.05rem);line-height:1.02;
-  letter-spacing:-.045em;font-weight:750;max-width:19ch;text-wrap:balance;
+  margin:1.5rem 0 0;font-size:clamp(2.6rem,6vw,4.6rem);line-height:1.02;
+  letter-spacing:-.05em;font-weight:750;max-width:18ch;text-wrap:balance;
 }
-.grad{
-  font-style:normal;
-  background:linear-gradient(100deg,var(--grad-1) 8%,var(--grad-2) 55%,var(--grad-3) 118%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-}
-.lede{font-size:1.14rem;line-height:1.6;color:var(--ink-dim);max-width:48ch;margin:1.4rem 0 0}
+.hero h1 .accent{color:var(--accent)}
+.lede{font-size:1.12rem;line-height:1.6;color:var(--ink-dim);max-width:42ch;margin:1.4rem 0 0}
 .hero-actions{display:flex;gap:.7rem;flex-wrap:wrap;margin:2rem 0 0}
 .fineprint{display:flex;align-items:center;gap:.45rem;margin:1rem 0 0;font-size:.82rem;color:var(--ink-faint)}
-
-/* ---------------------------------------------------------------- console */
-.console{
-  border:1px solid var(--line-2);border-radius:22px;overflow:hidden;
-  background:linear-gradient(180deg,var(--surface-2),var(--surface));
-  box-shadow:var(--shadow);
-}
-.console-head{
-  display:flex;align-items:center;gap:.7rem;padding:.72rem .95rem;
-  border-bottom:1px solid var(--line);background:var(--surface-2);
-}
-.console-head .lights{display:flex;gap:.32rem}
-.console-head .lights i{width:8px;height:8px;border-radius:50%;background:var(--line-2)}
-.console-head .lights i:first-child{background:rgba(255,143,143,.6)}
-.console-head .lights i:nth-child(2){background:rgba(255,196,107,.6)}
-.console-head .lights i:nth-child(3){background:rgba(94,224,176,.6)}
-.console-head .path{font:600 .72rem var(--mono);color:var(--ink-faint);letter-spacing:.04em}
-.console-head .pill{margin-left:auto}
-.signal{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:.9rem;padding:1.5rem 1.35rem 1.1rem}
-.node{
-  width:54px;height:54px;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.2rem;
-  border:1px solid var(--line-2);background:var(--panel);
-  color:var(--accent);flex:none;
-}
-.node span{font:600 .5rem var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)}
-.track{position:relative;height:2px;background:var(--line-2);border-radius:2px;overflow:visible}
-.track::before{
-  content:"";position:absolute;inset:0;
-  background:linear-gradient(90deg,var(--accent),var(--ok));
-  opacity:.55;border-radius:2px;
-}
-.track .spark{
-  position:absolute;top:50%;left:0;width:9px;height:9px;margin-top:-4.5px;border-radius:50%;
-  background:var(--ok);box-shadow:0 0 14px 3px rgba(94,224,176,.6);
-  animation:travel 3.4s cubic-bezier(.45,0,.55,1) infinite;
-}
-@keyframes travel{0%{left:0;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:100%;opacity:0}}
-.track .lbl{position:absolute;top:1rem;font:600 .58rem var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);white-space:nowrap}
-.track .lbl.a{left:0}
-.track .lbl.b{right:0}
-.kv{list-style:none;margin:0;padding:.2rem 1.35rem 1.2rem}
-.kv li{display:grid;grid-template-columns:6.4rem 1fr auto;gap:.7rem;align-items:center;padding:.62rem 0;border-top:1px solid var(--line)}
-.kv .k{font:600 .62rem var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
-.kv .v{font:500 .78rem var(--mono);color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kv .tag{
-  font:700 .56rem var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  color:var(--ok);background:rgba(94,224,176,.1);border:1px solid rgba(94,224,176,.3);
-  padding:.2rem .42rem;border-radius:5px;
-}
-.kv .tag.blue{color:var(--accent);background:var(--accent-soft);border-color:rgba(143,182,255,.3)}
-.console-note{
-  padding:.8rem 1.35rem;border-top:1px solid var(--line);background:var(--surface-2);
-  font-size:.8rem;color:var(--ink-faint);display:flex;gap:.5rem;align-items:flex-start;
-}
-.console-note svg{flex:none;margin-top:.15rem}
 
 /* ------------------------------------------------------------------ pieces */
 .kicker{font:600 .66rem var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint)}
@@ -374,12 +312,12 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);
 .backlink:hover{color:var(--ink)}
 
 /* ------------------------------------------------------------------ home */
-.specs{
-  display:grid;grid-template-columns:repeat(4,1fr);gap:1.4rem;
-  margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--line);
+.home-meta{
+  display:flex;align-items:baseline;gap:2.4rem;flex-wrap:wrap;
+  margin-top:5rem;padding-top:1.4rem;border-top:1px solid var(--line);
+  font:500 .74rem var(--mono);color:var(--ink-dim);
 }
-.spec .k{display:block;font:600 .62rem var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem}
-.spec .v{font-size:.92rem;color:var(--ink-dim);letter-spacing:-.01em}
+.home-meta b{color:var(--ink-faint);font-weight:600;text-transform:uppercase;letter-spacing:.12em;margin-right:.55rem}
 
 /* ------------------------------------------------------------------ apply */
 .split{display:grid;grid-template-columns:1.35fr .85fr;gap:1.3rem;align-items:start}
@@ -569,15 +507,14 @@ tbody tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
 
 /* ------------------------------------------------------------------- small */
 @media (max-width:1000px){
-  .hero-grid{grid-template-columns:1fr;gap:2.2rem}
   .hero h1{max-width:24ch}
   .stats{grid-template-columns:1fr 1fr}
   .split,.status-grid,.report-grid,.panel-grid{grid-template-columns:1fr}
 }
 @media (max-width:760px){
-  .specs{grid-template-columns:1fr 1fr;gap:1.1rem;margin-top:2.4rem}
+  .home-meta{gap:1rem 1.8rem;margin-top:3rem}
   .wrap,.bar{padding-left:1.15rem;padding-right:1.15rem}
-  .hero{padding-top:2.8rem}
+  .hero{padding:4rem 0 2.5rem}
   .net{display:none}
   .main-nav{gap:.1rem}
   .main-nav a{padding:.45rem .6rem;font-size:.85rem}
@@ -650,57 +587,22 @@ tbody tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
 <!-- ================================================================= HOME -->
 <section class="view hero" data-view="home">
   <div class="wrap">
-    <div class="hero-grid">
-      <div>
-        <span class="eyebrow"><span class="pulse"></span>Private egress network</span>
-        <h1>A clean exit from <em class="grad">hostile networks.</em></h1>
-        <p class="lede">Encrypted DNS, a full-tunnel exit, and an automatic fallback when UDP is blocked.</p>
-        <div class="hero-actions">
-          <a class="btn primary" href="#" data-goto="apply">Apply for access <svg width="16" height="16"><use href="#i-arrow"/></svg></a>
-          <a class="btn ghost" href="#" data-goto="download"><svg width="16" height="16"><use href="#i-download"/></svg>Download installer</a>
-        </div>
-        <p class="fineprint">Approved devices only.</p>
+    <div class="hero-simple">
+      <span class="kicker">Private egress network</span>
+      <h1>A clean exit from<br><span class="accent">hostile networks.</span></h1>
+      <p class="lede">Encrypted DNS, a full-tunnel exit, and an automatic fallback when UDP is blocked.</p>
+      <div class="hero-actions">
+        <a class="btn primary" href="#" data-goto="apply">Apply for access <svg width="16" height="16"><use href="#i-arrow"/></svg></a>
+        <a class="btn ghost" href="#" data-goto="download"><svg width="16" height="16"><use href="#i-download"/></svg>Download installer</a>
       </div>
-
-      <div class="console" aria-label="Example tunnel status">
-        <div class="console-head">
-          <span class="lights"><i></i><i></i><i></i></span>
-          <span class="path">egress status</span>
-          <span class="pill ok">tunnel up</span>
-        </div>
-        <div class="signal">
-          <div class="node">
-            <svg width="20" height="20"><use href="#i-box"/></svg>
-            <span>you</span>
-          </div>
-          <div class="track">
-            <span class="spark"></span>
-            <span class="lbl a">encrypted</span>
-            <span class="lbl b">aegis</span>
-          </div>
-          <div class="node">
-            <svg width="20" height="20"><use href="#i-shield"/></svg>
-            <span>exit</span>
-          </div>
-        </div>
-        <ul class="kv">
-          <li><span class="k">DNS</span><span class="v">127.0.0.1:7103</span><span class="tag blue">DoH</span></li>
-          <li><span class="k">Exit</span><span class="v">152.69.174.7</span><span class="tag">WG</span></li>
-          <li><span class="k">Fallback</span><span class="v">wss://dns.breadway.dev/wg-tunnel</span><span class="tag blue">auto</span></li>
-          <li><span class="k">Route</span><span class="v">0.0.0.0/0</span><span class="tag">pinned</span></li>
-        </ul>
-        <div class="console-note">
-          <svg width="14" height="14" style="color:var(--accent)"><use href="#i-info"/></svg>
-          <span>UDP blocked? Transport switches automatically.</span>
-        </div>
-      </div>
+      <p class="fineprint">Approved devices only.</p>
     </div>
 
-    <div class="specs">
-      <div class="spec"><span class="k">DNS</span><span class="v">DoH on 127.0.0.1:7103</span></div>
-      <div class="spec"><span class="k">Exit</span><span class="v">WireGuard via Aegis</span></div>
-      <div class="spec"><span class="k">Fallback</span><span class="v">WSS when UDP is blocked</span></div>
-      <div class="spec"><span class="k">Build</span><span class="v">Windows and Linux</span></div>
+    <div class="home-meta">
+      <span><b>DNS</b>127.0.0.1:7103</span>
+      <span><b>Exit</b>Aegis</span>
+      <span><b>Fallback</b>WebSocket</span>
+      <span><b>Build</b>Windows and Linux</span>
     </div>
   </div>
 </section>
