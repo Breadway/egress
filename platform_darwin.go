@@ -130,13 +130,13 @@ func (darwinPlatform) InstallTools() error {
 	return errors.New("wireguard-tools is required and Homebrew will not run as root; run as your normal user: brew install wireguard-tools")
 }
 
-func (darwinPlatform) WriteTunnelConfig(c tunnelConfig) error {
+func (darwinPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 	if err := os.MkdirAll(darwinWGDir, 0700); err != nil {
-		return err
+		return false, err
 	}
 	// No Table/PostUp extras: wg-quick on Darwin adds the endpoint host route
 	// itself before installing the AllowedIPs routes.
-	return os.WriteFile(darwinWGPath, []byte(renderWGConfig(c)), 0600)
+	return writeFileChanged(darwinWGPath, []byte(renderWGConfig(c)))
 }
 
 func (p darwinPlatform) StartTunnel() error {

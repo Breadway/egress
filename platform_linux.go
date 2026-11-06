@@ -135,11 +135,11 @@ func installPackage(name string) error {
 	return fmt.Errorf("cannot install %s: no supported package manager found", name)
 }
 
-func (linuxPlatform) WriteTunnelConfig(c tunnelConfig) error {
+func (linuxPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
-		return err
+		return false, err
 	}
-	return os.WriteFile(linuxWGPath, []byte(renderWGConfig(c)), 0600)
+	return writeFileChanged(linuxWGPath, []byte(renderWGConfig(c)))
 }
 
 func (p linuxPlatform) StartTunnel() error {

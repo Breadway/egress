@@ -181,8 +181,21 @@ func cmdInstall(args []string) error {
 	}
 
 	if !*noTunnel {
-		if err := plat.WriteTunnelConfig(tcfg); err != nil {
+		changed, err := plat.WriteTunnelConfig(tcfg)
+		if err != nil {
 			return err
+		}
+		if changed {
+			// New or different identity: bounce a live tunnel so it runs
+			// the just-written config. StartTunnel alone is a no-op when
+			// a tunnel is already up, which would leave the old key live
+			// while verification reports the new one.
+			debugf("tunnel config changed; restarting the tunnel")
+			if err := plat.StopTunnel(); err != nil {
+				return err
+			}
+		} else {
+			debugf("tunnel config unchanged; keeping the live tunnel")
 		}
 		if err := plat.StartTunnel(); err != nil {
 			return err

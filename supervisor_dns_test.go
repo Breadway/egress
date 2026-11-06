@@ -15,17 +15,17 @@ type dnsWatchdogFake struct {
 	routes      []Route
 }
 
-func (f *dnsWatchdogFake) RequirePrivilege() error               { return nil }
-func (f *dnsWatchdogFake) DefaultRoute() (string, string, error) { return "eth0", "192.168.1.1", nil }
-func (f *dnsWatchdogFake) DefaultRoutes() ([]Route, error)       { return f.routes, nil }
-func (f *dnsWatchdogFake) InstallTools() error                   { return nil }
-func (f *dnsWatchdogFake) WriteTunnelConfig(tunnelConfig) error  { return nil }
-func (f *dnsWatchdogFake) StartTunnel() error                    { return nil }
-func (f *dnsWatchdogFake) StopTunnel() error                     { return nil }
-func (f *dnsWatchdogFake) TunnelUp() bool                        { return false }
-func (f *dnsWatchdogFake) TunnelConfigured() bool                { return false }
-func (f *dnsWatchdogFake) EnsureEndpoint(string) error           { return nil }
-func (f *dnsWatchdogFake) RepinEndpoint(string, string) error    { return nil }
+func (f *dnsWatchdogFake) RequirePrivilege() error                      { return nil }
+func (f *dnsWatchdogFake) DefaultRoute() (string, string, error)        { return "eth0", "192.168.1.1", nil }
+func (f *dnsWatchdogFake) DefaultRoutes() ([]Route, error)              { return f.routes, nil }
+func (f *dnsWatchdogFake) InstallTools() error                          { return nil }
+func (f *dnsWatchdogFake) WriteTunnelConfig(tunnelConfig) (bool, error) { return false, nil }
+func (f *dnsWatchdogFake) StartTunnel() error                           { return nil }
+func (f *dnsWatchdogFake) StopTunnel() error                            { return nil }
+func (f *dnsWatchdogFake) TunnelUp() bool                               { return false }
+func (f *dnsWatchdogFake) TunnelConfigured() bool                       { return false }
+func (f *dnsWatchdogFake) EnsureEndpoint(string) error                  { return nil }
+func (f *dnsWatchdogFake) RepinEndpoint(string, string) error           { return nil }
 func (f *dnsWatchdogFake) ApplyDNS(string, string) error {
 	atomic.AddInt32(&f.applyCalls, 1)
 	return nil

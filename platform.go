@@ -1,5 +1,10 @@
 package main
 
+import (
+	"bytes"
+	"os"
+)
+
 // Route is one default route: the interface identifier plus its gateway.
 // The identifier convention matches DefaultRoute (device name on Linux and
 // Darwin, interface index on Windows).
@@ -28,8 +33,11 @@ type platform interface {
 	InstallTools() error
 
 	// WriteTunnelConfig writes the tunnel configuration. On Windows it writes
-	// both the direct and relay variants.
-	WriteTunnelConfig(tunnelConfig) error
+	// both the direct and relay variants. It reports whether the on-disk
+	// config differs from what was there before, so install can bounce a
+	// live tunnel running a stale identity instead of leaving it in place
+	// while verification reports the new one.
+	WriteTunnelConfig(tunnelConfig) (changed bool, err error)
 
 	// SecureInstallDir restricts the install directory to administrators.
 	// It must hold in every install mode, including --no-tunnel, because the
@@ -81,4 +89,18 @@ type platform interface {
 
 	WstunnelPath() (string, error)
 	InstallWstunnel() (string, error)
+}
+
+// writeFileChanged writes data to path with mode 0600 and reports whether
+// the previous contents differed. A missing file counts as changed, so first
+// installs always bounce. Pure apart from the file itself, and unit-tested.
+func writeFileChanged(path string, data []byte) (bool, error) {
+	previous, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return false, err
+	}
+	return os.IsNotExist(err) || !bytes.Equal(previous, data), nil
 }

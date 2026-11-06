@@ -21,13 +21,13 @@ func (f *rotateFake) DefaultRoutes() ([]Route, error) {
 	}
 	return f.routes, nil
 }
-func (f *rotateFake) InstallTools() error                  { return nil }
-func (f *rotateFake) WriteTunnelConfig(tunnelConfig) error { return nil }
-func (f *rotateFake) StartTunnel() error                   { return nil }
-func (f *rotateFake) StopTunnel() error                    { return nil }
-func (f *rotateFake) TunnelUp() bool                       { return false }
-func (f *rotateFake) TunnelConfigured() bool               { return false }
-func (f *rotateFake) EnsureEndpoint(string) error          { return nil }
+func (f *rotateFake) InstallTools() error                          { return nil }
+func (f *rotateFake) WriteTunnelConfig(tunnelConfig) (bool, error) { return false, nil }
+func (f *rotateFake) StartTunnel() error                           { return nil }
+func (f *rotateFake) StopTunnel() error                            { return nil }
+func (f *rotateFake) TunnelUp() bool                               { return false }
+func (f *rotateFake) TunnelConfigured() bool                       { return false }
+func (f *rotateFake) EnsureEndpoint(string) error                  { return nil }
 func (f *rotateFake) RepinEndpoint(gw, iface string) error {
 	f.repins = append(f.repins, [2]string{gw, iface})
 	return nil
