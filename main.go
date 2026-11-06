@@ -176,7 +176,9 @@ func cmdInstall(args []string) error {
 		fmt.Printf("add it on Aegis with allowed-ips %s/32 before this device will work\n\n", tcfg.ClientIP)
 	}
 
-	if err := plat.InstallTools(); err != nil {
+	if *noTunnel {
+		debugf("dns-only install: skipping wireguard-tools")
+	} else if err := plat.InstallTools(); err != nil {
 		return err
 	}
 

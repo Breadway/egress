@@ -165,6 +165,15 @@ if [ "$dry_run" -eq 1 ]; then
     exit 0
 fi
 
+# Serialize allocation against concurrent runs: the used-address scan above
+# and the peer append below must be atomic, or two runs can enroll the same
+# /32 for different keys. mkdir is atomic; the trap releases on any exit.
+lockdir="${registry}.lock"
+if ! mkdir "$lockdir" 2>/dev/null; then
+    die "another provisioning run is in progress ($lockdir exists)"
+fi
+trap 'rmdir "$lockdir" 2>/dev/null' EXIT
+
 key=$(wg genkey)
 pub=$(printf '%s' "$key" | wg pubkey)
 [ "${#key}" -eq 44 ] || die "wg genkey produced an unexpected key"
