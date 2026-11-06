@@ -40,8 +40,9 @@ func (f *rotateFake) EnsureDNS(string, string) error { return nil }
 func (f *rotateFake) SecureInstallDir() error               { return nil }
 func (f *rotateFake) InstallService(string, []string) error { return nil }
 func (f *rotateFake) StartService() error                   { return nil }
-func (f *rotateFake) ServiceActive() bool                   { return true }
 func (f *rotateFake) StopService() error                    { return nil }
+func (f *rotateFake) ServiceActive() bool                   { return true }
+func (f *rotateFake) LivePublicKey() (string, error)        { return "", nil }
 func (f *rotateFake) Enable() error                         { return nil }
 func (f *rotateFake) Disable() error                        { return nil }
 func (f *rotateFake) Remove() error                         { return nil }

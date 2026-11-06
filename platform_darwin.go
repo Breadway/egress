@@ -175,6 +175,15 @@ func (p darwinPlatform) StartTunnel() error {
 	return runLogged("wg-quick", "up", wgInterface)
 }
 
+// LivePublicKey returns the public key of the running tunnel interface.
+func (darwinPlatform) LivePublicKey() (string, error) {
+	out, err := exec.Command("wg", "show", wgInterface, "public-key").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // hasOurPeer reports whether the live interface carries our Aegis peer.
 func (darwinPlatform) hasOurPeer() bool {
 	out, err := exec.Command("wg", "show", wgInterface, "peers").Output()
@@ -189,8 +198,11 @@ func (darwinPlatform) hasOurPeer() bool {
 	return false
 }
 
-func (darwinPlatform) StopTunnel() error {
+func (p darwinPlatform) StopTunnel() error {
 	_ = runLogged("wg-quick", "down", wgInterface)
+	if p.TunnelUp() {
+		return fmt.Errorf("wg0 is still up after stopping the tunnel")
+	}
 	return nil
 }
 

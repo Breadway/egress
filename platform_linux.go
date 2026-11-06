@@ -169,6 +169,15 @@ func (p linuxPlatform) StartTunnel() error {
 	return runLogged("wg-quick", "up", wgInterface)
 }
 
+// LivePublicKey returns the public key of the running tunnel interface.
+func (linuxPlatform) LivePublicKey() (string, error) {
+	out, err := exec.Command("wg", "show", wgInterface, "public-key").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // hasOurPeer reports whether the live interface carries our Aegis peer.
 func (linuxPlatform) hasOurPeer() bool {
 	out, err := exec.Command("wg", "show", wgInterface, "peers").Output()
@@ -183,9 +192,15 @@ func (linuxPlatform) hasOurPeer() bool {
 	return false
 }
 
-func (linuxPlatform) StopTunnel() error {
+func (p linuxPlatform) StopTunnel() error {
 	if err := runLogged("systemctl", "stop", "wg-quick@"+wgInterface); err != nil {
 		_ = runLogged("wg-quick", "down", wgInterface)
+	}
+	// Never report success with the interface still up: StartTunnel treats
+	// an up interface as done, which would leave a stale identity live
+	// while install claims the new one.
+	if p.TunnelUp() {
+		return fmt.Errorf("wg0 is still up after stopping the tunnel")
 	}
 	return nil
 }

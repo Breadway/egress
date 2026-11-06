@@ -84,6 +84,7 @@ func (f readyFake) InstallService(string, []string) error { return nil }
 func (f readyFake) StartService() error                   { return nil }
 func (f readyFake) StopService() error                    { return nil }
 func (f readyFake) ServiceActive() bool                   { return f.active }
+func (f readyFake) LivePublicKey() (string, error)        { return "", nil }
 func (f readyFake) Enable() error                         { return nil }
 func (f readyFake) Disable() error                        { return nil }
 func (f readyFake) Remove() error                         { return nil }

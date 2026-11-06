@@ -203,9 +203,12 @@ func (p windowsPlatform) StartTunnel() error {
 	return p.swapTo("wg0")
 }
 
-func (windowsPlatform) StopTunnel() error {
+func (p windowsPlatform) StopTunnel() error {
 	for _, name := range []string{"wg0", "wg0ws"} {
 		uninstallTunnel(name)
+	}
+	if p.TunnelUp() {
+		return fmt.Errorf("a tunnel service is still running after stopping the tunnel")
 	}
 	return nil
 }
@@ -218,6 +221,12 @@ func (windowsPlatform) TunnelConfigured() bool {
 	_, err := os.Stat(filepath.Join(winProgramData, "wg0.conf"))
 	return err == nil
 }
+
+// LivePublicKey is unimplemented on Windows: the tunnel runs inside the
+// WireGuard service, not wireguard-tools, so there is nothing to ask. The
+// interface-address check in checkTunnelIdentity still applies, and the
+// bounce reinstalls the service from the new config files.
+func (windowsPlatform) LivePublicKey() (string, error) { return "", nil }
 
 func (p windowsPlatform) swapTo(name string) error {
 	exe := wireguardExe()
