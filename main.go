@@ -200,6 +200,13 @@ func cmdInstall(args []string) error {
 		if err := plat.StartTunnel(); err != nil {
 			return err
 		}
+		// Prove the running tunnel is the configured one. A failed stop
+		// underneath a passing start leaves the old identity live, and the
+		// Aegis peer alone cannot tell the two apart.
+		if err := checkTunnelIdentity(plat, tcfg); err != nil {
+			rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+			return err
+		}
 		fmt.Println("wireguard tunnel is up")
 	}
 

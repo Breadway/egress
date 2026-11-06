@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net"
 	"os"
 )
 
@@ -49,6 +51,12 @@ type platform interface {
 	StartTunnel() error
 	StopTunnel() error
 	TunnelUp() bool
+
+	// LivePublicKey returns the public key of the running tunnel interface,
+	// so install can prove the live identity matches the just-written
+	// config. Empty (with nil error) where the platform has no way to ask;
+	// the interface-address check still applies there.
+	LivePublicKey() (string, error)
 
 	// TunnelConfigured reports whether a tunnel config exists on this machine.
 	TunnelConfigured() bool
@@ -103,4 +111,64 @@ func writeFileChanged(path string, data []byte) (bool, error) {
 		return false, err
 	}
 	return os.IsNotExist(err) || !bytes.Equal(previous, data), nil
+}
+
+// interfaceHasIP reports whether the named interface currently carries ip.
+// Stdlib only, so it works identically on all three platforms.
+func interfaceHasIP(ifaceName, ip string) bool {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return false
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	want := net.ParseIP(ip)
+	if want == nil {
+		return false
+	}
+	for _, a := range addrs {
+		var addrIP net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			addrIP = v.IP
+		case *net.IPAddr:
+			addrIP = v.IP
+		}
+		if addrIP != nil && addrIP.Equal(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTunnelIdentity proves the running tunnel is the configured one: the
+// interface must carry the configured address, and where the platform can
+// report it, the live public key must match the configured private key. A
+// failed StopTunnel underneath a passing StartTunnel is exactly how a stale
+// identity survives a reinstall, so this fails closed.
+func checkTunnelIdentity(p platform, tcfg tunnelConfig) error {
+	return checkTunnelIdentityIface(p, wgInterface, tcfg)
+}
+
+func checkTunnelIdentityIface(p platform, ifaceName string, tcfg tunnelConfig) error {
+	if !interfaceHasIP(ifaceName, tcfg.ClientIP) {
+		return fmt.Errorf("live tunnel does not carry %s; the old identity may still be up", tcfg.ClientIP)
+	}
+	live, err := p.LivePublicKey()
+	if err != nil {
+		return fmt.Errorf("read the live tunnel identity: %w", err)
+	}
+	if live == "" {
+		return nil
+	}
+	want, err := publicKey(tcfg.PrivateKey)
+	if err != nil {
+		return err
+	}
+	if live != want {
+		return fmt.Errorf("live tunnel key %s does not match the configured identity", live)
+	}
+	return nil
 }
