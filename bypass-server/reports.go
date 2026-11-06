@@ -40,6 +40,9 @@ const (
 	reportBodyMax    = 128 << 10
 	reportRateMax    = 20
 	reportRateWindow = time.Hour
+	// maxStoredReports caps the reports directory; pruneReports deletes the
+	// oldest first. Enrolled devices number in the tens.
+	maxStoredReports = 512
 )
 
 // reportSlug maps a public key to a filename without touching the disk with
@@ -94,6 +97,14 @@ func (s *server) apiReport(w http.ResponseWriter, r *http.Request) {
 	}
 	rep.Checks = clean
 
+	// Reports are accepted only for enrolled peers: anyone can mint a
+	// well-shaped key, and without this gate an anonymous client can
+	// overwrite any device's health or fill the disk with fresh keys.
+	if !s.peerEnrolled(rep.Pubkey) {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+
 	dir := filepath.Join(s.state, "reports")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		http.Error(w, "could not save", http.StatusInternalServerError)
@@ -118,8 +129,54 @@ func (s *server) apiReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not save", http.StatusInternalServerError)
 		return
 	}
+	pruneReports(dir, maxStoredReports)
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprintln(w, "recorded")
+}
+
+// peerEnrolled reports whether pubkey belongs to a download login, i.e. a
+// device this server actually enrolled.
+func (s *server) peerEnrolled(pubkey string) bool {
+	if pubkey == "" {
+		return false
+	}
+	for _, u := range s.loadUsers() {
+		if u.Peer == pubkey {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneReports caps the stored reports at keep files, deleting the oldest
+// first, so the directory cannot grow without bound.
+func pruneReports(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) <= keep {
+		return
+	}
+	type aged struct {
+		name string
+		mod  time.Time
+	}
+	var files []aged
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, aged{e.Name(), info.ModTime()})
+	}
+	if len(files) <= keep {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+	for _, f := range files[:len(files)-keep] {
+		_ = os.Remove(filepath.Join(dir, f.name))
+	}
 }
 
 func (s *server) loadReport(pubkey string) (*storedReport, bool) {

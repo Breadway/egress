@@ -143,7 +143,6 @@ if [ "$dry_run" -eq 1 ]; then
 fi
 
 command -v ssh >/dev/null 2>&1 || die "ssh is not on PATH"
-command -v scp >/dev/null 2>&1 || die "scp is not on PATH"
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
 
 ssh "${ssh_opts[@]}" "$aegis_host" true >/dev/null 2>&1 \
@@ -154,23 +153,59 @@ ssh "${ssh_opts[@]}" "$aegis_host" "sudo -n true" >/dev/null 2>&1 \
 token=$(ssh "${ssh_opts[@]}" "$aegis_host" "sudo -n cat /etc/bypass/admin-token") \
     || die "could not read the bypass admin token on $aegis_host"
 [ -n "$token" ] || die "bypass-server is not set up on $aegis_host (no admin token)"
+# The token ends up inside a curl --config stream, where quotes and
+# backslashes would need escaping. Admin tokens are hex; refuse anything
+# else rather than guessing at escaping.
+[[ "$token" =~ ^[A-Za-z0-9_./-]+$ ]] \
+    || die "admin token has unexpected characters; refusing to send it"
+# A newline would break the heredoc transport below. Passwords do not need
+# newlines; refuse rather than corrupting the request.
+case "$password" in
+    *$'\n'*|*BYPASS_PW_EOF*) die "password contains a newline or the reserved delimiter; pick another" ;;
+esac
 
-tmp_remote="/tmp/bypass-upload-$remote_file"
-scp "${ssh_opts[@]}" "$binary" "$aegis_host:$tmp_remote" >/dev/null \
-    || die "upload failed"
+# Upload the installer with no staging file: scp to a predictable /tmp name
+# would leave a credential-bearing binary world-readable, and pre-creatable
+# as a symlink. Piping straight into install sets owner and mode at once.
 ssh "${ssh_opts[@]}" "$aegis_host" \
-    "sudo -n install -o bypass -g bypass -m 0600 $tmp_remote /var/lib/bypass/binaries/$remote_file && rm -f $tmp_remote" \
-    || die "could not place the binary on $aegis_host"
+    "sudo -n install -o bypass -g bypass -m 0600 /dev/stdin /var/lib/bypass/binaries/$remote_file" \
+    < "$binary" >/dev/null \
+    || die "upload failed"
 
-reply=$(ssh "${ssh_opts[@]}" "$aegis_host" \
-    "curl -s -w '\n%{http_code}' -X POST -H 'Authorization: Bearer $token' --data-urlencode 'username=$user' --data-urlencode 'password=$password' --data-urlencode 'label=$label' --data-urlencode 'binary=$remote_file' --data-urlencode 'os=$os_target' --data-urlencode 'arch=$arch_target' --data-urlencode 'peer=$pub' http://127.0.0.1:7220/admin/api/users") \
+# api_post runs a curl against the local bypass-server without ever putting
+# the bearer token or the password in any process argv (local ssh, remote
+# bash, or remote curl): both travel in the script body on ssh stdin, and
+# curl reads them from a --config stream and a protected file. Extra curl
+# arguments must be public fields only (username, label, binary, peer...).
+api_post() {
+    local endpoint=$1; shift
+    ssh "${ssh_opts[@]}" "$aegis_host" "sudo -n bash -s" <<EOF
+pwfile=\$(mktemp /tmp/bypass-pw-XXXXXX)
+chmod 600 "\$pwfile"
+trap 'rm -f "\$pwfile"' EXIT
+cat > "\$pwfile" <<'BYPASS_PW_EOF'
+$password
+BYPASS_PW_EOF
+{
+printf '%s\n' "header = \\"Authorization: Bearer $token\\""
+} | curl -s -w '\n%{http_code}' --config - -X POST "$@" --data-urlencode "password@\$pwfile" http://127.0.0.1:7220/admin/api/$endpoint
+EOF
+}
+
+reply=$(api_post users \
+    --data-urlencode "username=$user" \
+    --data-urlencode "label=$label" \
+    --data-urlencode "binary=$remote_file" \
+    --data-urlencode "os=$os_target" \
+    --data-urlencode "arch=$arch_target" \
+    --data-urlencode "peer=$pub") \
     || die "could not reach bypass-server on $aegis_host"
 code=$(printf '%s' "$reply" | tail -n1)
 [ "$code" = "201" ] || die "registration failed (HTTP $code): $(printf '%s' "$reply" | head -n1)"
 
 if [ -n "$appid" ]; then
-    link_reply=$(ssh "${ssh_opts[@]}" "$aegis_host" \
-        "curl -s -w '\n%{http_code}' -X POST -H 'Authorization: Bearer $token' --data-urlencode 'id=$appid' --data-urlencode 'username=$user' http://127.0.0.1:7220/admin/api/link") \
+    link_reply=$(api_post link \
+        --data-urlencode "id=$appid") \
         || die "registered, but could not reach bypass-server to link the application"
     link_code=$(printf '%s' "$link_reply" | tail -n1)
     [ "$link_code" = "200" ] || die "registered, but linking the application failed (HTTP $link_code): $(printf '%s' "$link_reply" | head -n1)"

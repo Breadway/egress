@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -43,4 +44,22 @@ func extractEmbedded(dest string, data []byte, want string) error {
 func digestMatches(data []byte, want string) bool {
 	got := sha256.Sum256(data)
 	return strings.EqualFold(hex.EncodeToString(got[:]), want)
+}
+
+// wstunnelIsOurs reports whether path holds a copy this tool could have
+// installed: the embedded digest for this build, or the pinned download
+// digest for this platform. Anything else is the user's own copy that
+// findWstunnel reused, and remove must leave it alone.
+func wstunnelIsOurs(path, embeddedSHA string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	if embeddedSHA != "" && digestMatches(data, embeddedSHA) {
+		return true
+	}
+	if sum, ok := wstunnelSums[runtime.GOOS+"/"+runtime.GOARCH]; ok && digestMatches(data, sum) {
+		return true
+	}
+	return false
 }
