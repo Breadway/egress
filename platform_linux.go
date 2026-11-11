@@ -273,7 +273,12 @@ func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
 		return writeResolvConf()
 	}
 	_ = runLogged("resolvectl", "flush-caches")
-	return nil
+	// The drop-in only fills the global scope. A link that received a
+	// resolver over DHCP keeps its own copy in the link scope, and
+	// systemd-resolved prefers that scope for names with no routing
+	// domain, so the listener is never consulted for most queries. Claim
+	// the default-route links explicitly.
+	return claimDefaultRouteDNS()
 }
 
 // resolvSymlinkPrefix marks a resolv.conf backup that records a symlink
@@ -383,10 +388,117 @@ func (p linuxPlatform) EnsureDNS(iface, gateway string) error {
 		return p.ApplyDNS(iface, gateway)
 	}
 	data, err := os.ReadFile(linuxResolved)
-	if err == nil && strings.Contains(string(data), dohListenAddr) {
+	if err != nil || !strings.Contains(string(data), dohListenAddr) {
+		return p.ApplyDNS(iface, gateway)
+	}
+	// The drop-in is present, but a reconnect or a DHCP renew can hand a
+	// link its own resolver again. Re-claim only the links that lost it,
+	// so this stays quiet on the minute-by-minute path.
+	return claimDefaultRouteDNS()
+}
+
+// dnsRouteDomain is the systemd-resolved routing domain that makes a link the
+// catch-all scope for every name, so all of its queries go to its own server.
+const dnsRouteDomain = "~."
+
+// parseDefaultRouteLinks returns the distinct interfaces that carry a default
+// route, skipping skip. Pure and unit-tested.
+func parseDefaultRouteLinks(output, skip string) []string {
+	var links []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] != "dev" {
+				continue
+			}
+			dev := fields[i+1]
+			if dev != skip && !seen[dev] {
+				seen[dev] = true
+				links = append(links, dev)
+			}
+			break
+		}
+	}
+	return links
+}
+
+// linkUsesListener reports whether the resolvectl dns/domain output for one
+// link already points at the listener and carries the catch-all routing
+// domain. Pure and unit-tested.
+func linkUsesListener(dnsOut, domainOut string) bool {
+	hasAddr := false
+	for _, field := range strings.Fields(dnsOut) {
+		if field == dohListenAddr {
+			hasAddr = true
+			break
+		}
+	}
+	if !hasAddr {
+		return false
+	}
+	for _, field := range strings.Fields(domainOut) {
+		if field == dnsRouteDomain {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultRouteLinks reports the interfaces with a default route. The tunnel
+// itself is excluded: it must never supply the resolver that brings it up.
+func defaultRouteLinks() []string {
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
 		return nil
 	}
-	return p.ApplyDNS(iface, gateway)
+	return parseDefaultRouteLinks(string(out), wgInterface)
+}
+
+func linkClaimed(dev string) bool {
+	dnsOut, err := exec.Command("resolvectl", "dns", dev).Output()
+	if err != nil {
+		return false
+	}
+	domainOut, err := exec.Command("resolvectl", "domain", dev).Output()
+	if err != nil {
+		return false
+	}
+	return linkUsesListener(string(dnsOut), string(domainOut))
+}
+
+func claimLinkDNS(dev string) error {
+	if err := runLogged("resolvectl", "dns", dev, dohListenAddr); err != nil {
+		return fmt.Errorf("resolvectl dns %s: %w", dev, err)
+	}
+	if err := runLogged("resolvectl", "domain", dev, dnsRouteDomain); err != nil {
+		return fmt.Errorf("resolvectl domain %s: %w", dev, err)
+	}
+	return nil
+}
+
+// claimDefaultRouteDNS points every default-route link at the local listener
+// with a catch-all routing domain. Without this the DHCP resolver wins the
+// link scope and dnscloak plus DoH are bypassed for most names.
+func claimDefaultRouteDNS() error {
+	for _, dev := range defaultRouteLinks() {
+		if linkClaimed(dev) {
+			continue
+		}
+		if err := claimLinkDNS(dev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// releaseDefaultRouteDNS hands each default-route link back to its
+// DHCP-provided resolver. Best effort: Disable and Remove must not fail just
+// because a link vanished underneath them.
+func releaseDefaultRouteDNS() {
+	for _, dev := range defaultRouteLinks() {
+		_ = runLogged("resolvectl", "revert", dev)
+	}
 }
 
 func (linuxPlatform) InstallService(exePath string, args []string) error {
@@ -489,6 +601,10 @@ func (p linuxPlatform) Remove() error {
 // restoreDNS removes the local resolver drop-in and restores /etc/resolv.conf
 // if this tool had rewritten it.
 func (linuxPlatform) restoreDNS() error {
+	// Hand the links back to DHCP first, while their current claim still
+	// makes sense to revert; otherwise the listener that is about to stop
+	// stays the resolver for every name.
+	releaseDefaultRouteDNS()
 	if err := os.Remove(linuxResolved); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", linuxResolved, err)
 	}
