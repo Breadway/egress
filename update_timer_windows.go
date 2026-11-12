@@ -2,25 +2,18 @@
 
 package main
 
-import (
-	"fmt"
-	"os/exec"
-	"strings"
-)
-
 // installUpdateTimer creates a daily SYSTEM task that checks for and applies a
-// signed release.
+// signed release. The task is registered through windowsTaskScript so it still
+// runs on battery, and does not inherit the schtasks power defaults.
 func installUpdateTimer() error {
 	exe, err := installedExePath()
 	if err != nil {
 		return err
 	}
-	tr := fmt.Sprintf(`"%s" update --apply`, exe)
-	out, err := exec.Command("schtasks", "/create", "/tn", "egress-update-check",
-		"/tr", tr, "/sc", "daily", "/st", "03:00",
-		"/ru", "SYSTEM", "/rl", "HIGHEST", "/f").CombinedOutput()
+	script, err := windowsTaskScript("egress-update-check", exe, "update --apply", winTriggerDaily)
 	if err != nil {
-		return fmt.Errorf("create update task: %v: %s", err, strings.TrimSpace(string(out)))
+		return err
 	}
-	return nil
+	_, err = powershell(script)
+	return err
 }
