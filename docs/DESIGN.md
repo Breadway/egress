@@ -150,12 +150,12 @@ There is no opt-out flag: rebuild without it for a quiet binary.
 Build tags: the vendor binaries embed only under `-tags delivery`, which
 `build.sh` and `build.ps1` always pass. A plain `go build` embeds nothing,
 so a clean checkout compiles, vets and tests without the gitignored
-`assets/` files; dev builds download the pinned archives instead.
+`internal/egress/assets/` files; dev builds download the pinned archives instead.
 
-For `--os windows`, the build also requires `assets/wstunnel-windows-amd64.exe`
-and `assets/wireguard-amd64-1.1.1.msi` and refuses to build if either is missing
+For `--os windows`, the build also requires `internal/egress/assets/wstunnel-windows-amd64.exe`
+and `internal/egress/assets/wireguard-amd64-1.1.1.msi` and refuses to build if either is missing
 or has the wrong SHA-256. For `--os linux` it requires
-`assets/wstunnel-linux-amd64` the same way. `//go:embed` pulls the assets into
+`internal/egress/assets/wstunnel-linux-amd64` the same way. `//go:embed` pulls the assets into
 the output; a delivery binary is about 20 MB on either platform.
 
 **The binary is a credential.** The key is a plain string in `.rodata` and can

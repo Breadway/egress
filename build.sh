@@ -111,31 +111,31 @@ esac
 # Delivery builds embed the fallback client (and the WireGuard installer on
 # Windows) so the target never needs GitHub or winget.
 if [ "$goos" = "windows" ]; then
-    [ -f assets/wstunnel-windows-amd64.exe ] \
-        || die "missing assets/wstunnel-windows-amd64.exe; Windows builds embed it"
-    [ -f assets/wireguard-amd64-1.1.1.msi ] \
-        || die "missing assets/wireguard-amd64-1.1.1.msi; Windows builds embed it"
-    check_sha assets/wstunnel-windows-amd64.exe \
+    [ -f internal/egress/assets/wstunnel-windows-amd64.exe ] \
+        || die "missing internal/egress/assets/wstunnel-windows-amd64.exe; Windows builds embed it"
+    [ -f internal/egress/assets/wireguard-amd64-1.1.1.msi ] \
+        || die "missing internal/egress/assets/wireguard-amd64-1.1.1.msi; Windows builds embed it"
+    check_sha internal/egress/assets/wstunnel-windows-amd64.exe \
         c7b5b53c1476995310fe10b2f3f6d19006e5a5948984d8d25682b47e8ecb8f73
-    check_sha assets/wireguard-amd64-1.1.1.msi \
+    check_sha internal/egress/assets/wireguard-amd64-1.1.1.msi \
         7bfed60ad61b785c914b38b61555a975488e1d3ec472dbfb2fcdf498fca75242
 fi
 if [ "$goos" = "linux" ]; then
-    [ -f assets/wstunnel-linux-amd64 ] \
-        || die "missing assets/wstunnel-linux-amd64; Linux delivery builds embed it (copy from /usr/local/bin/wstunnel)"
-    check_sha assets/wstunnel-linux-amd64 \
+    [ -f internal/egress/assets/wstunnel-linux-amd64 ] \
+        || die "missing internal/egress/assets/wstunnel-linux-amd64; Linux delivery builds embed it (copy from /usr/local/bin/wstunnel)"
+    check_sha internal/egress/assets/wstunnel-linux-amd64 \
         62b26d0ee0f2211cef15fa1b85173fe687bc6698121842bf324359b412afc151
 fi
 if [ "$goos" = "darwin" ]; then
-    [ -f "assets/wstunnel-darwin-$goarch" ] \
-        || die "missing assets/wstunnel-darwin-$goarch; Darwin delivery builds embed it"
+    [ -f "internal/egress/assets/wstunnel-darwin-$goarch" ] \
+        || die "missing internal/egress/assets/wstunnel-darwin-$goarch; Darwin delivery builds embed it"
     case "$goarch" in
         amd64)
-            check_sha assets/wstunnel-darwin-amd64 \
+            check_sha internal/egress/assets/wstunnel-darwin-amd64 \
                 72349e8eda9b80762e809b51dbe3c81aea8094b57da6ab6bb97274f048be4adb
             ;;
         arm64)
-            check_sha assets/wstunnel-darwin-arm64 \
+            check_sha internal/egress/assets/wstunnel-darwin-arm64 \
                 3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb
             ;;
         *) die "unsupported arch for darwin: $goarch" ;;
@@ -212,24 +212,24 @@ printf 'building:    %s/%s -> %s\n\n' "$goos" "$goarch" "$out"
 
 debug_ldflag=""
 if [ "$debug_build" -eq 1 ]; then
-    debug_ldflag=" -X main.defaultDebug=true"
+    debug_ldflag=" -X egress/internal/egress.defaultDebug=true"
 fi
 update_ldflag=""
 if [ -n "$update_key" ]; then
-    update_ldflag=" -X main.updatePublicKey=$update_key"
+    update_ldflag=" -X egress/internal/egress.updatePublicKey=$update_key"
 fi
 socks_ldflag=""
 if [ -n "$socks_user" ] && [ -n "$socks_pass" ]; then
-    socks_ldflag=" -X main.embeddedSocksUser=$socks_user -X main.embeddedSocksPass=$socks_pass"
+    socks_ldflag=" -X egress/internal/egress.embeddedSocksUser=$socks_user -X egress/internal/egress.embeddedSocksPass=$socks_pass"
 fi
 split_ldflag=""
 if [ "$default_split" -eq 1 ]; then
-    split_ldflag=" -X main.embeddedDefaultSplit=true"
+    split_ldflag=" -X egress/internal/egress.embeddedDefaultSplit=true"
 fi
 
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
     go build -tags delivery -trimpath -buildvcs=false \
-    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$version${debug_ldflag}${update_ldflag}${socks_ldflag}${split_ldflag}" \
+    -ldflags "-s -w -X egress/internal/egress.embeddedKey=$key -X egress/internal/egress.embeddedClientIP=$ip -X egress/internal/egress.buildVersion=$version${debug_ldflag}${update_ldflag}${socks_ldflag}${split_ldflag}" \
     -o "$out" .
 
 case "$goos" in
