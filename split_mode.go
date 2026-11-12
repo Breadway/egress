@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 // splitMarkerPath marks a Linux machine as running split mode. The supervisor
@@ -12,12 +11,10 @@ func splitMarkerPath() string {
 	return filepath.Join(ProfileDir(), "split-mode")
 }
 
-// splitEnabled reports whether split mode is configured. Windows split uses
-// the proxy path and does not use this marker yet.
+// splitEnabled reports whether split mode is configured. On Linux the marker
+// drives the route supervisor; on Windows it marks the proxy/PAC install so
+// updates keep that mode.
 func splitEnabled() bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
 	_, err := os.Stat(splitMarkerPath())
 	return err == nil
 }

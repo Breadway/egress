@@ -19,9 +19,10 @@ import (
 //
 //	go build -ldflags "-X main.embeddedKey=... -X main.embeddedClientIP=... -X main.buildVersion=..."
 var (
-	embeddedKey      string
-	embeddedClientIP string
-	buildVersion     string
+	embeddedKey          string
+	embeddedClientIP     string
+	embeddedDefaultSplit bool
+	buildVersion         string
 )
 
 // defaultDebug is set to "true" at build time for delivery builds where the
@@ -149,7 +150,8 @@ func runInstall(plat platform, args []string) (err error) {
 	ipFlag := fs.String("ip", "", "tunnel address for this device")
 	noTunnel := fs.Bool("no-tunnel", false, "configure DNS only")
 	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
-	split := fs.Bool("split", false, "Linux: route only learned-blocked destinations through the tunnel")
+	split := fs.Bool("split", false, "route only learned-blocked destinations through the tunnel")
+	noSplit := fs.Bool("no-split", false, "override a build that defaults to split mode")
 	keepConfig := fs.Bool("keep-config", false, "reuse the existing tunnel key and address (upgrade)")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
@@ -158,11 +160,16 @@ func runInstall(plat platform, args []string) (err error) {
 	if *split && *noTunnel {
 		return errors.New("--split needs the tunnel; it cannot be combined with --no-tunnel")
 	}
-	if *keepConfig && *noTunnel {
+	if *keepConfig && *noTunnel && runtime.GOOS != "windows" {
 		return errors.New("--keep-config needs the tunnel config; it cannot be combined with --no-tunnel")
 	}
-	if *split && runtime.GOOS != "linux" {
-		return errors.New("--split is Linux only for now; the Windows proxy path is not built yet")
+	if embeddedDefaultSplit && !*noSplit {
+		*split = true
+	}
+	if *split && runtime.GOOS == "windows" {
+		// Windows split is the proxy/PAC path: the supervisor only serves DNS
+		// and no WireGuard interface is installed.
+		*noTunnel = true
 	}
 	setupLogging(resolveDebug(*debug))
 
@@ -375,6 +382,19 @@ func runInstall(plat platform, args []string) (err error) {
 		fmt.Fprintln(os.Stderr, "the setup is running but verification failed; run `egress diagnose`")
 		fmt.Fprintln(os.Stderr, "networking was rolled back; the failure was reported home")
 		return err
+	}
+
+	if *split && runtime.GOOS == "windows" {
+		if err := configureWindowsSplit(); err != nil {
+			fmt.Fprintf(os.Stderr, "split client setup failed: %v\n", err)
+			return err
+		}
+		if err := setSplitEnabled(true); err != nil {
+			return err
+		}
+	}
+	if err := installUpdateTimer(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
 	}
 
 	results := runChecks(plat, tcfg)

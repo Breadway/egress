@@ -17,6 +17,11 @@ param(
     [ValidateSet("amd64", "arm64")][string]$Arch = "amd64",
     [string]$Out,
     [string]$SaveKey,
+    [string]$Version = "0.3.2",
+    [string]$UpdateKey,
+    [string]$SocksUser,
+    [string]$SocksPass,
+    [switch]$DefaultSplit,
     [switch]$DebugBuild
 )
 
@@ -103,10 +108,13 @@ Write-Host "building:    $OS/$Arch -> $Out"
 Write-Host ""
 
 $debugLdflag = ""
+if ($UpdateKey) { $updateLdflag = " -X main.updatePublicKey=$UpdateKey" } else { $updateLdflag = "" }
+if ($SocksUser -and $SocksPass) { $socksLdflag = " -X main.embeddedSocksUser=$SocksUser -X main.embeddedSocksPass=$SocksPass" } else { $socksLdflag = "" }
+if ($DefaultSplit) { $splitLdflag = " -X main.embeddedDefaultSplit=true" } else { $splitLdflag = "" }
 if ($DebugBuild) { $debugLdflag = " -X main.defaultDebug=true" }
 
 & go build -tags delivery -trimpath -buildvcs=false `
-    -ldflags "-s -w -X main.embeddedKey=$Key -X main.embeddedClientIP=$IP -X main.buildVersion=$(Get-Date -Format 'yyyyMMdd')$debugLdflag" `
+    -ldflags "-s -w -X main.embeddedKey=$Key -X main.embeddedClientIP=$IP -X main.buildVersion=$Version$debugLdflag$updateLdflag$socksLdflag$splitLdflag" `
     -o $Out .
 if ($LASTEXITCODE -ne 0) { Fail "go build failed" }
 

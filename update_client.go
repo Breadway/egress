@@ -16,9 +16,10 @@ import (
 	"time"
 )
 
-// defaultUpdateBase is reachable only through the tunnel. Aegis binds the
-// update service to 10.88.0.1, so the public internet never sees it.
-const defaultUpdateBase = "http://10.88.0.1:7107"
+// defaultUpdateBase goes through Caddy on the same hostname the network
+// already allows. Split Windows clients have no WireGuard interface, so the
+// old tunnel-only 10.88.0.1:7107 address would be unreachable for them.
+const defaultUpdateBase = "https://dns.breadway.dev/updates"
 
 // cmdUpdate checks for or applies a signed release. Applying runs the staged
 // binary with install --keep-config, which preserves the existing tunnel key,

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const windowsUpdateTask = "egress-update"
+const windowsUpdateTask = "egress-update-apply"
 
 // installedExePath is the permanent location the scheduled task runs.
 func installedExePath() (string, error) {
@@ -116,7 +116,9 @@ func cmdUpdateApply(args []string) error {
 
 	installArgs := []string{"install", "--keep-config"}
 	if *split {
-		installArgs = append(installArgs, "--split")
+		// Split mode on Windows is the proxy/PAC path and has no wg0.conf to
+		// reuse.
+		installArgs = []string{"install", "--split"}
 	}
 	cmd := exec.Command(*staged, installArgs...)
 	cmd.Stdout = os.Stdout
