@@ -1,6 +1,6 @@
 //go:build linux
 
-package egress
+package platform
 
 import (
 	"os"

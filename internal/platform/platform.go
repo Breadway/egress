@@ -1,7 +1,8 @@
-package egress
+package platform
 
 import (
 	"bytes"
+	"egress/internal/core"
 	"fmt"
 	"net"
 	"os"
@@ -18,7 +19,7 @@ type Route struct {
 
 // platform is the per-OS surface. Everything that differs between Linux and
 // Windows lives behind it so the supervisor and installer stay shared.
-type platform interface {
+type Interface interface {
 	// RequirePrivilege fails unless the process can change network state.
 	RequirePrivilege() error
 
@@ -40,7 +41,7 @@ type platform interface {
 	// config differs from what was there before, so install can bounce a
 	// live tunnel running a stale identity instead of leaving it in place
 	// while verification reports the new one.
-	WriteTunnelConfig(tunnelConfig) (changed bool, err error)
+	WriteTunnelConfig(core.TunnelConfig) (changed bool, err error)
 
 	// SecureInstallDir restricts the install directory to administrators.
 	// It must hold in every install mode, including --no-tunnel, because the
@@ -107,7 +108,7 @@ type platform interface {
 // dnsServersPointAtListener reports whether a DNS server listing (one
 // address per line, as printed by networksetup or Get-DnsClientServerAddress)
 // still contains our local listener.
-func dnsServersPointAtListener(output string) bool {
+func DNSServersPointAtListener(output string) bool {
 	for _, line := range strings.Split(output, "\n") {
 		if strings.TrimSpace(line) == "127.0.0.1" {
 			return true
@@ -132,7 +133,7 @@ func carriesEgressMarker(data []byte) bool {
 
 // backupForeignConfig copies path to backupPath when path exists and is not
 // ours. The first backup wins: it is the user's original, never our output.
-func backupForeignConfig(path, backupPath string) error {
+func BackupForeignConfig(path, backupPath string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -149,7 +150,7 @@ func backupForeignConfig(path, backupPath string) error {
 // restoreBackedConfig puts the backup back when the live file is ours and a
 // backup exists. A foreign live file is left alone: overwriting it with a
 // stale backup would destroy the user's newer setup.
-func restoreBackedConfig(path, backupPath string) (bool, error) {
+func RestoreBackedConfig(path, backupPath string) (bool, error) {
 	bak, err := os.ReadFile(backupPath)
 	if err != nil {
 		return false, nil
@@ -168,7 +169,7 @@ func restoreBackedConfig(path, backupPath string) (bool, error) {
 // writeFileChanged writes data to path with mode 0600 and reports whether
 // the previous contents differed. A missing file counts as changed, so first
 // installs always bounce. Pure apart from the file itself, and unit-tested.
-func writeFileChanged(path string, data []byte) (bool, error) {
+func WriteFileChanged(path string, data []byte) (bool, error) {
 	previous, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
@@ -181,7 +182,7 @@ func writeFileChanged(path string, data []byte) (bool, error) {
 
 // interfaceHasIP reports whether the named interface currently carries ip.
 // Stdlib only, so it works identically on all three platforms.
-func interfaceHasIP(ifaceName, ip string) bool {
+func InterfaceHasIP(ifaceName, ip string) bool {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
 		return false
@@ -214,12 +215,12 @@ func interfaceHasIP(ifaceName, ip string) bool {
 // report it, the live public key must match the configured private key. A
 // failed StopTunnel underneath a passing StartTunnel is exactly how a stale
 // identity survives a reinstall, so this fails closed.
-func checkTunnelIdentity(p platform, tcfg tunnelConfig) error {
-	return checkTunnelIdentityIface(p, wgInterface, tcfg)
+func CheckTunnelIdentity(p Interface, tcfg core.TunnelConfig) error {
+	return CheckTunnelIdentityIface(p, core.WGInterface, tcfg)
 }
 
-func checkTunnelIdentityIface(p platform, ifaceName string, tcfg tunnelConfig) error {
-	if !interfaceHasIP(ifaceName, tcfg.ClientIP) {
+func CheckTunnelIdentityIface(p Interface, ifaceName string, tcfg core.TunnelConfig) error {
+	if !InterfaceHasIP(ifaceName, tcfg.ClientIP) {
 		return fmt.Errorf("live tunnel does not carry %s; the old identity may still be up", tcfg.ClientIP)
 	}
 	live, err := p.LivePublicKey()
@@ -229,7 +230,7 @@ func checkTunnelIdentityIface(p platform, ifaceName string, tcfg tunnelConfig) e
 	if live == "" {
 		return nil
 	}
-	want, err := publicKey(tcfg.PrivateKey)
+	want, err := core.PublicKey(tcfg.PrivateKey)
 	if err != nil {
 		return err
 	}

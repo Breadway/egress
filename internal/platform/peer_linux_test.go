@@ -1,8 +1,9 @@
 //go:build linux
 
-package egress
+package platform
 
 import (
+	"egress/internal/core"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,8 +18,8 @@ func TestHasOurPeer(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root")
 	}
-	if _, err := os.Stat("/sys/class/net/" + wgInterface); err == nil {
-		t.Skipf("%s exists; refusing to disturb a live tunnel", wgInterface)
+	if _, err := os.Stat("/sys/class/net/" + core.WGInterface); err == nil {
+		t.Skipf("%s exists; refusing to disturb a live tunnel", core.WGInterface)
 	}
 	run := func(name string, args ...string) {
 		t.Helper()
@@ -26,18 +27,18 @@ func TestHasOurPeer(t *testing.T) {
 			t.Fatalf("%s %s: %v (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
-	run("ip", "link", "add", "dev", wgInterface, "type", "wireguard")
-	defer exec.Command("ip", "link", "del", "dev", wgInterface).Run()
+	run("ip", "link", "add", "dev", core.WGInterface, "type", "wireguard")
+	defer exec.Command("ip", "link", "del", "dev", core.WGInterface).Run()
 
 	p := linuxPlatform{}
 	if p.hasOurPeer() {
 		t.Error("bare husk interface reports our peer")
 	}
-	run("wg", "set", wgInterface, "peer", aegisPublicKey, "endpoint", "127.0.0.1:9", "allowed-ips", "10.88.0.9/32")
+	run("wg", "set", core.WGInterface, "peer", core.AegisPublicKey, "endpoint", "127.0.0.1:9", "allowed-ips", "10.88.0.9/32")
 	if !p.hasOurPeer() {
 		t.Error("configured interface does not report our peer")
 	}
-	run("wg", "set", wgInterface, "peer", aegisPublicKey, "remove")
+	run("wg", "set", core.WGInterface, "peer", core.AegisPublicKey, "remove")
 	if p.hasOurPeer() {
 		t.Error("interface reports our peer after removal")
 	}
@@ -97,17 +98,17 @@ func TestRepinEndpoint(t *testing.T) {
 		t.Skip("no usable default route")
 	}
 
-	exec.Command("ip", "route", "del", aegisIPv4).Run()
+	exec.Command("ip", "route", "del", core.AegisIPv4).Run()
 	p := linuxPlatform{}
 	if err := p.RepinEndpoint(gateway, iface); err != nil {
 		t.Fatalf("RepinEndpoint: %v", err)
 	}
-	got, err := exec.Command("ip", "route", "get", aegisIPv4).CombinedOutput()
+	got, err := exec.Command("ip", "route", "get", core.AegisIPv4).CombinedOutput()
 	if err != nil {
 		t.Fatalf("ip route get: %v", err)
 	}
 	if !strings.Contains(string(got), "via "+gateway) || !strings.Contains(string(got), "dev "+iface) {
 		t.Errorf("pin not restored via %s dev %s: %s", gateway, iface, strings.TrimSpace(string(got)))
 	}
-	exec.Command("ip", "route", "del", aegisIPv4).Run()
+	exec.Command("ip", "route", "del", core.AegisIPv4).Run()
 }

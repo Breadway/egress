@@ -1,4 +1,4 @@
-package egress
+package platform
 
 import (
 	"os"
@@ -11,17 +11,17 @@ import (
 func TestWriteFileChanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wg0.conf")
 
-	changed, err := writeFileChanged(path, []byte("a"))
+	changed, err := WriteFileChanged(path, []byte("a"))
 	if err != nil || !changed {
 		t.Fatalf("missing file: changed=%v err=%v, want true/nil", changed, err)
 	}
 
-	changed, err = writeFileChanged(path, []byte("a"))
+	changed, err = WriteFileChanged(path, []byte("a"))
 	if err != nil || changed {
 		t.Fatalf("identical file: changed=%v err=%v, want false/nil", changed, err)
 	}
 
-	changed, err = writeFileChanged(path, []byte("b"))
+	changed, err = WriteFileChanged(path, []byte("b"))
 	if err != nil || !changed {
 		t.Fatalf("differing file: changed=%v err=%v, want true/nil", changed, err)
 	}

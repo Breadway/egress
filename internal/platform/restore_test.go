@@ -1,4 +1,4 @@
-package egress
+package platform
 
 import "testing"
 
@@ -18,7 +18,7 @@ func TestDNSServersPointAtListener(t *testing.T) {
 		{"prefix trap", "127.0.0.10\n", false},
 	}
 	for _, tc := range cases {
-		if got := dnsServersPointAtListener(tc.output); got != tc.want {
+		if got := DNSServersPointAtListener(tc.output); got != tc.want {
 			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
 		}
 	}

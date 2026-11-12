@@ -1,9 +1,12 @@
 //go:build linux
 
-package egress
+package platform
 
 import (
 	"egress/internal/assets"
+	"egress/internal/core"
+	"egress/internal/logx"
+	"egress/internal/wstunnel"
 	"errors"
 	"fmt"
 	"io"
@@ -17,8 +20,8 @@ import (
 
 const (
 	linuxUnitPath    = "/etc/systemd/system/egress.service"
-	linuxWGPath      = "/etc/wireguard/" + wgInterface + ".conf"
-	linuxWGBak       = "/etc/wireguard/" + wgInterface + ".conf.egress.bak"
+	linuxWGPath      = "/etc/wireguard/" + core.WGInterface + ".conf"
+	linuxWGBak       = "/etc/wireguard/" + core.WGInterface + ".conf.egress.bak"
 	linuxResolvedDir = "/etc/systemd/resolved.conf.d"
 	linuxResolved    = linuxResolvedDir + "/egress.conf"
 	linuxResolvConf  = "/etc/resolv.conf"
@@ -32,9 +35,7 @@ const (
 
 type linuxPlatform struct{}
 
-func newPlatform() platform { return linuxPlatform{} }
-
-func installDir() string { return "/usr/local/bin" }
+func New() Interface { return linuxPlatform{} }
 
 // spoolDir holds the pending install report. Both install and the boot
 // service run as root on Linux, so the shared temp directory works.
@@ -96,7 +97,7 @@ func parseDefaultRoutesLinux(out []byte) ([]Route, error) {
 }
 
 func (linuxPlatform) DefaultRoutes() ([]Route, error) {
-	out, err := execLogged("ip", "route", "show", "default")
+	out, err := logx.ExecLogged("ip", "route", "show", "default")
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +134,7 @@ func installPackage(name string) error {
 		if _, err := os.Stat(m.path); err != nil {
 			continue
 		}
-		if err := runLogged(m.path, m.args...); err != nil {
+		if err := logx.RunLogged(m.path, m.args...); err != nil {
 			return err
 		}
 		return nil
@@ -141,16 +142,16 @@ func installPackage(name string) error {
 	return fmt.Errorf("cannot install %s: no supported package manager found", name)
 }
 
-func (linuxPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
+func (linuxPlatform) WriteTunnelConfig(c core.TunnelConfig) (bool, error) {
 	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
 		return false, err
 	}
 	// A foreign wg0.conf (corporate VPN, another tool) is backed up before
 	// it is replaced, so installing here cannot silently destroy it.
-	if err := backupForeignConfig(linuxWGPath, linuxWGBak); err != nil {
+	if err := BackupForeignConfig(linuxWGPath, linuxWGBak); err != nil {
 		return false, err
 	}
-	return writeFileChanged(linuxWGPath, []byte(renderWGConfig(c)))
+	return WriteFileChanged(linuxWGPath, []byte(core.RenderWGConfig(c)))
 }
 
 func (p linuxPlatform) StartTunnel() error {
@@ -160,19 +161,19 @@ func (p linuxPlatform) StartTunnel() error {
 		}
 		// A foreign wg0 (NetworkManager autoconnect is a real example) would
 		// make every later step operate on the wrong interface. Replace it.
-		debugf("wg0 exists without our peer; replacing it")
-		_ = runLogged("systemctl", "stop", "wg-quick@"+wgInterface)
-		_ = runLogged("wg-quick", "down", wgInterface)
+		logx.Debugf("wg0 exists without our peer; replacing it")
+		_ = logx.RunLogged("systemctl", "stop", "wg-quick@"+core.WGInterface)
+		_ = logx.RunLogged("wg-quick", "down", core.WGInterface)
 	}
-	if err := runLogged("systemctl", "start", "wg-quick@"+wgInterface); err == nil {
+	if err := logx.RunLogged("systemctl", "start", "wg-quick@"+core.WGInterface); err == nil {
 		return nil
 	}
-	return runLogged("wg-quick", "up", wgInterface)
+	return logx.RunLogged("wg-quick", "up", core.WGInterface)
 }
 
 // LivePublicKey returns the public key of the running tunnel interface.
 func (linuxPlatform) LivePublicKey() (string, error) {
-	out, err := exec.Command("wg", "show", wgInterface, "public-key").Output()
+	out, err := exec.Command("wg", "show", core.WGInterface, "public-key").Output()
 	if err != nil {
 		return "", err
 	}
@@ -181,12 +182,12 @@ func (linuxPlatform) LivePublicKey() (string, error) {
 
 // hasOurPeer reports whether the live interface carries our Aegis peer.
 func (linuxPlatform) hasOurPeer() bool {
-	out, err := exec.Command("wg", "show", wgInterface, "peers").Output()
+	out, err := exec.Command("wg", "show", core.WGInterface, "peers").Output()
 	if err != nil {
 		return false
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == aegisPublicKey {
+		if strings.TrimSpace(line) == core.AegisPublicKey {
 			return true
 		}
 	}
@@ -194,8 +195,8 @@ func (linuxPlatform) hasOurPeer() bool {
 }
 
 func (p linuxPlatform) StopTunnel() error {
-	if err := runLogged("systemctl", "stop", "wg-quick@"+wgInterface); err != nil {
-		_ = runLogged("wg-quick", "down", wgInterface)
+	if err := logx.RunLogged("systemctl", "stop", "wg-quick@"+core.WGInterface); err != nil {
+		_ = logx.RunLogged("wg-quick", "down", core.WGInterface)
 	}
 	// Never report success with the interface still up: StartTunnel treats
 	// an up interface as done, which would leave a stale identity live
@@ -207,7 +208,7 @@ func (p linuxPlatform) StopTunnel() error {
 }
 
 func (linuxPlatform) TunnelUp() bool {
-	_, err := os.Stat("/sys/class/net/" + wgInterface)
+	_, err := os.Stat("/sys/class/net/" + core.WGInterface)
 	return err == nil
 }
 
@@ -221,24 +222,24 @@ func (linuxPlatform) TunnelConfigured() bool {
 func (linuxPlatform) SecureInstallDir() error { return nil }
 
 func (linuxPlatform) EnsureEndpoint(endpoint string) error {
-	out, err := execLogged("wg", "show", wgInterface, "endpoints")
+	out, err := logx.ExecLogged("wg", "show", core.WGInterface, "endpoints")
 	if err != nil {
 		return fmt.Errorf("read wireguard endpoints: %w", err)
 	}
 	current := ""
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == aegisPublicKey {
+		if len(fields) == 2 && fields[0] == core.AegisPublicKey {
 			current = fields[1]
 			break
 		}
 	}
 	if current == endpoint {
-		debugf("endpoint already %s", endpoint)
+		logx.Debugf("endpoint already %s", endpoint)
 		return nil
 	}
-	debugf("endpoint %s -> %s", current, endpoint)
-	return runLogged("wg", "set", wgInterface, "peer", aegisPublicKey, "endpoint", endpoint)
+	logx.Debugf("endpoint %s -> %s", current, endpoint)
+	return logx.RunLogged("wg", "set", core.WGInterface, "peer", core.AegisPublicKey, "endpoint", endpoint)
 }
 
 // pinEndpoint routes the Aegis address via the given gateway so handshakes,
@@ -246,9 +247,9 @@ func (linuxPlatform) EnsureEndpoint(endpoint string) error {
 // at bring-up; RepinEndpoint re-runs it after a roam.
 func pinEndpoint(gateway, iface string) error {
 	if gateway == "" || iface == "" {
-		return fmt.Errorf("no default route to pin %s to", aegisIPv4)
+		return fmt.Errorf("no default route to pin %s to", core.AegisIPv4)
 	}
-	return runLogged("ip", "route", "replace", aegisIPv4, "via", gateway, "dev", iface)
+	return logx.RunLogged("ip", "route", "replace", core.AegisIPv4, "via", gateway, "dev", iface)
 }
 
 func (linuxPlatform) RepinEndpoint(gateway, iface string) error {
@@ -265,15 +266,15 @@ func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
 	if err := os.MkdirAll(linuxResolvedDir, 0755); err != nil {
 		return err
 	}
-	dropIn := "[Resolve]\nDNS=" + dohListenAddr + "\nFallbackDNS=\n"
+	dropIn := "[Resolve]\nDNS=" + core.DoHListenAddr + "\nFallbackDNS=\n"
 	if err := os.WriteFile(linuxResolved, []byte(dropIn), 0644); err != nil {
 		return err
 	}
-	if err := runLogged("systemctl", "restart", "systemd-resolved"); err != nil {
+	if err := logx.RunLogged("systemctl", "restart", "systemd-resolved"); err != nil {
 		// No systemd-resolved: point resolv.conf at the listener instead.
 		return writeResolvConf()
 	}
-	_ = runLogged("resolvectl", "flush-caches")
+	_ = logx.RunLogged("resolvectl", "flush-caches")
 	// The drop-in only fills the global scope. A link that received a
 	// resolver over DHCP keeps its own copy in the link scope, and
 	// systemd-resolved prefers that scope for names with no routing
@@ -389,7 +390,7 @@ func (p linuxPlatform) EnsureDNS(iface, gateway string) error {
 		return p.ApplyDNS(iface, gateway)
 	}
 	data, err := os.ReadFile(linuxResolved)
-	if err != nil || !strings.Contains(string(data), dohListenAddr) {
+	if err != nil || !strings.Contains(string(data), core.DoHListenAddr) {
 		return p.ApplyDNS(iface, gateway)
 	}
 	// The drop-in is present, but a reconnect or a DHCP renew can hand a
@@ -430,7 +431,7 @@ func parseDefaultRouteLinks(output, skip string) []string {
 func linkUsesListener(dnsOut, domainOut string) bool {
 	hasAddr := false
 	for _, field := range strings.Fields(dnsOut) {
-		if field == dohListenAddr {
+		if field == core.DoHListenAddr {
 			hasAddr = true
 			break
 		}
@@ -453,7 +454,7 @@ func defaultRouteLinks() []string {
 	if err != nil {
 		return nil
 	}
-	return parseDefaultRouteLinks(string(out), wgInterface)
+	return parseDefaultRouteLinks(string(out), core.WGInterface)
 }
 
 func linkClaimed(dev string) bool {
@@ -469,10 +470,10 @@ func linkClaimed(dev string) bool {
 }
 
 func claimLinkDNS(dev string) error {
-	if err := runLogged("resolvectl", "dns", dev, dohListenAddr); err != nil {
+	if err := logx.RunLogged("resolvectl", "dns", dev, core.DoHListenAddr); err != nil {
 		return fmt.Errorf("resolvectl dns %s: %w", dev, err)
 	}
-	if err := runLogged("resolvectl", "domain", dev, dnsRouteDomain); err != nil {
+	if err := logx.RunLogged("resolvectl", "domain", dev, dnsRouteDomain); err != nil {
 		return fmt.Errorf("resolvectl domain %s: %w", dev, err)
 	}
 	return nil
@@ -498,7 +499,7 @@ func claimDefaultRouteDNS() error {
 // because a link vanished underneath them.
 func releaseDefaultRouteDNS() {
 	for _, dev := range defaultRouteLinks() {
-		_ = runLogged("resolvectl", "revert", dev)
+		_ = logx.RunLogged("resolvectl", "revert", dev)
 	}
 }
 
@@ -522,18 +523,18 @@ WantedBy=multi-user.target
 	if err := os.WriteFile(linuxUnitPath, []byte(unit), 0644); err != nil {
 		return err
 	}
-	if err := runLogged("systemctl", "daemon-reload"); err != nil {
+	if err := logx.RunLogged("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	return runLogged("systemctl", "enable", "egress.service")
+	return logx.RunLogged("systemctl", "enable", "egress.service")
 }
 
 func (linuxPlatform) StartService() error {
-	return runLogged("systemctl", "restart", "egress.service")
+	return logx.RunLogged("systemctl", "restart", "egress.service")
 }
 
 func (linuxPlatform) StopService() error {
-	_ = runLogged("systemctl", "stop", "egress.service")
+	_ = logx.RunLogged("systemctl", "stop", "egress.service")
 	return nil
 }
 
@@ -547,24 +548,24 @@ func (linuxPlatform) Enable() error {
 	if _, err := os.Stat(linuxUnitPath); err != nil {
 		return errors.New("egress is not installed; run install first")
 	}
-	if err := runLogged("systemctl", "enable", "egress.service"); err != nil {
+	if err := logx.RunLogged("systemctl", "enable", "egress.service"); err != nil {
 		return err
 	}
-	return runLogged("systemctl", "restart", "egress.service")
+	return logx.RunLogged("systemctl", "restart", "egress.service")
 }
 
 // Disable stops the resolver and the tunnel now, prevents both from starting
 // at boot, and puts the system resolver back the way it was. Configs and logs
 // stay so Enable is cheap.
 func (p linuxPlatform) Disable() error {
-	_ = runLogged("systemctl", "disable", "--now", "egress-update.timer")
+	_ = logx.RunLogged("systemctl", "disable", "--now", "egress-update.timer")
 	_ = p.StopService()
-	_ = runLogged("systemctl", "disable", "egress.service")
+	_ = logx.RunLogged("systemctl", "disable", "egress.service")
 
 	// The unit is only enabled by Enable or by an older setup, but disabling
 	// it here guarantees the tunnel cannot come up on its own after this.
 	_ = p.StopTunnel()
-	_ = runLogged("systemctl", "disable", "wg-quick@"+wgInterface)
+	_ = logx.RunLogged("systemctl", "disable", "wg-quick@"+core.WGInterface)
 
 	return p.restoreDNS()
 }
@@ -575,12 +576,12 @@ func (p linuxPlatform) Remove() error {
 	_ = p.Disable()
 	_ = os.Remove("/etc/systemd/system/egress-update.service")
 	_ = os.Remove("/etc/systemd/system/egress-update.timer")
-	_ = runLogged("systemctl", "daemon-reload")
+	_ = logx.RunLogged("systemctl", "daemon-reload")
 
 	_ = os.Remove(linuxUnitPath)
-	_ = runLogged("systemctl", "daemon-reload")
-	if restored, _ := restoreBackedConfig(linuxWGPath, linuxWGBak); restored {
-		debugf("restored the pre-existing %s", linuxWGPath)
+	_ = logx.RunLogged("systemctl", "daemon-reload")
+	if restored, _ := RestoreBackedConfig(linuxWGPath, linuxWGBak); restored {
+		logx.Debugf("restored the pre-existing %s", linuxWGPath)
 	} else {
 		_ = os.Remove(linuxWGPath)
 	}
@@ -588,18 +589,18 @@ func (p linuxPlatform) Remove() error {
 
 	// Close the debug log before deleting it, or the inode would stay alive
 	// until this process exits.
-	closeLog()
+	logx.Close()
 	_ = os.Remove(linuxLogPath)
 	_ = os.Remove(linuxLogPath + ".old")
 
 	// Only remove the fallback client when this tool put it there: a
 	// pre-existing wstunnel that findWstunnel reused is not ours to delete.
-	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelLinuxSHA256) {
-		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
+	if wstunnel.WstunnelIsOurs(filepath.Join(core.InstallDir(), "wstunnel"), wstunnelLinuxSHA256) {
+		_ = os.Remove(filepath.Join(core.InstallDir(), "wstunnel"))
 	} else {
-		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
+		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(core.InstallDir(), "wstunnel"))
 	}
-	removeInstalledBinary()
+	RemoveInstalledBinary()
 	return nil
 }
 
@@ -620,7 +621,7 @@ func (linuxPlatform) restoreDNS() error {
 			return fmt.Errorf("restore %s: %w", linuxResolvConf, err)
 		}
 	}
-	if err := runLogged("systemctl", "restart", "systemd-resolved"); err != nil {
+	if err := logx.RunLogged("systemctl", "restart", "systemd-resolved"); err != nil {
 		// No systemd-resolved is the common case there: resolv.conf is
 		// the only resolver state, verified below. A present-but-broken
 		// unit is a real failure, not an absence.
@@ -628,7 +629,7 @@ func (linuxPlatform) restoreDNS() error {
 			return fmt.Errorf("restart systemd-resolved: %w", err)
 		}
 	} else {
-		_ = runLogged("resolvectl", "flush-caches")
+		_ = logx.RunLogged("resolvectl", "flush-caches")
 	}
 	if hadBackup {
 		// Read back: the restored file must not point at our listener, or
@@ -655,18 +656,18 @@ func resolvedUnitPresent() bool {
 }
 
 func (linuxPlatform) Ping(host string) bool {
-	return runLogged("ping", "-c", "2", "-W", "2", "-i", "0.5", "-n", "-q", host) == nil
+	return logx.RunLogged("ping", "-c", "2", "-W", "2", "-i", "0.5", "-n", "-q", host) == nil
 }
 
-func (linuxPlatform) WstunnelPath() (string, error) { return findWstunnel() }
+func (linuxPlatform) WstunnelPath() (string, error) { return wstunnel.Find() }
 
 // InstallWstunnel extracts the embedded fallback client. No target-side
 // download is attempted when the delivery build carries the binary; a dev
 // build without embedded assets still falls back to the pinned download.
 func (linuxPlatform) InstallWstunnel() (string, error) {
 	if len(assets.Wstunnel) > 0 {
-		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, assets.Wstunnel, wstunnelLinuxSHA256); err != nil {
+		dest := filepath.Join(core.InstallDir(), wstunnel.ExeName())
+		if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelLinuxSHA256); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {
@@ -674,10 +675,10 @@ func (linuxPlatform) InstallWstunnel() (string, error) {
 		}
 		return dest, nil
 	}
-	return ensureWstunnel()
+	return wstunnel.Ensure()
 }
 
-func writeDiagnosePlatform(w io.Writer) error {
+func Diagnose(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
 	section(w, "default route")
@@ -687,18 +688,18 @@ func writeDiagnosePlatform(w io.Writer) error {
 	show(w, "resolvectl", "status")
 
 	section(w, "wireguard")
-	show(w, "wg", "show", wgInterface)
+	show(w, "wg", "show", core.WGInterface)
 
 	section(w, "listeners")
 	show(w, "sh", "-c", "ss -lunp 2>/dev/null | grep -E ':(7103|7108)' || echo none")
 
 	section(w, "tunnel probe")
-	show(w, "ping", "-c", "2", "-W", "2", "-n", aegisTunnelIP)
+	show(w, "ping", "-c", "2", "-W", "2", "-n", core.AegisTunnelIP)
 
 	section(w, "wstunnel")
 	show(w, "sh", "-c", "command -v wstunnel || ls -l /usr/local/bin/wstunnel 2>/dev/null || echo not found")
 
 	section(w, "log tail")
-	tailLog(w, 40)
+	logx.Tail(w, logPath(), 40)
 	return nil
 }

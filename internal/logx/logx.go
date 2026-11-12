@@ -111,3 +111,18 @@ func dir(path string) string {
 	}
 	return "."
 }
+
+// Tail writes the last n lines of the log file, for diagnose and reports.
+func Tail(w io.Writer, path string, lines int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	parts := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(parts) > lines {
+		parts = parts[len(parts)-lines:]
+	}
+	for _, line := range parts {
+		_, _ = io.WriteString(w, line+"\n")
+	}
+}
