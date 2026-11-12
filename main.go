@@ -72,6 +72,8 @@ func realMain() error {
 		return cmdSupervise(args)
 	case "verify":
 		return cmdVerify(args)
+	case "probe":
+		return cmdProbe(args)
 	case "diagnose":
 		return cmdDiagnose(args)
 	case "pubkey", "key":
@@ -99,6 +101,7 @@ Commands:
   supervise    run the resolver and the fallback supervisor; used by the boot service
   verify       check the installed setup
   diagnose     print routing, DNS, tunnel and log state
+  probe        classify domains over the direct path (split-mode foundation)
   disable      stop now, restore DNS, and do not start at boot; keep the config
   enable       let it start at boot again and start it now
   remove       remove every installed part, including configs, logs and wstunnel
