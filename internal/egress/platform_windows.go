@@ -186,6 +186,13 @@ func installDirACLArgs(dir string) []string {
 	return []string{
 		dir,
 		"/inheritance:r",
+		// /inheritance:r drops inherited ACEs but keeps explicit ones. A
+		// directory created by the installing user can carry a full-control
+		// ACE for that user, and the boot task runs the binary as SYSTEM, so
+		// an explicit non-admin grant here is local privilege escalation.
+		"/remove:g", "*S-1-1-0", // Everyone
+		"/remove:g", "*S-1-5-11", // Authenticated Users
+		"/remove:g", "*S-1-5-32-545", // Users
 		"/grant:r", "*S-1-5-18:(OI)(CI)F",
 		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
 	}
@@ -194,7 +201,28 @@ func installDirACLArgs(dir string) []string {
 // SecureInstallDir applies installDirACLArgs. Unlike most install steps this
 // one fails closed: a permissive directory must never pass silently.
 func (windowsPlatform) SecureInstallDir() error {
-	return runLogged("icacls", installDirACLArgs(winProgramData)...)
+	if err := runLogged("icacls", installDirACLArgs(winProgramData)...); err != nil {
+		return err
+	}
+	// The installing user can carry an explicit full-control ACE from
+	// creating the directory, which /inheritance:r does not touch. Remove that
+	// identity by SID; the Administrators group still covers an elevated admin.
+	if sid := currentUserSID(); sid != "" {
+		_ = runLogged("icacls", winProgramData, "/remove:g", "*"+sid)
+	}
+	// Verify rather than assume: if any principal outside SYSTEM and
+	// Administrators can still write, the install directory is a privilege
+	// escalation into the boot task and must fail closed.
+	out, err := powershell(`$bad = Get-Acl '` + winProgramData + `' | ForEach-Object { $_.Access } | Where-Object {
+  $_.AccessControlType -eq 'Allow' -and
+  ($_.FileSystemRights.ToString() -match 'FullControl|Modify|Write|TakeOwnership|ChangePermissions') -and
+  ($_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544'))
+}
+if ($bad) { $bad | ForEach-Object { $_.IdentityReference.Value + ':' + $_.FileSystemRights }; exit 2 } else { 'ok' }`)
+	if err != nil {
+		return fmt.Errorf("install directory is writable by a non-administrator: %v (%s)", err, truncate(out, 300))
+	}
+	return nil
 }
 
 func (p windowsPlatform) StartTunnel() error {
@@ -616,4 +644,20 @@ func writeDiagnosePlatform(w io.Writer) error {
 	section(w, "log tail")
 	tailLog(w, 60)
 	return nil
+}
+
+// currentUserSID returns the installing account's SID. whoami prints one CSV
+// row: "DOMAIN\user","S-1-5-21-...".
+func currentUserSID() string {
+	out, err := exec.Command("whoami", "/user", "/fo", "csv", "/nh").Output()
+	if err != nil {
+		return ""
+	}
+	for _, field := range strings.Split(string(out), ",") {
+		field = strings.Trim(strings.TrimSpace(field), `"`)
+		if strings.HasPrefix(field, "S-1-5-21-") || strings.HasPrefix(field, "S-1-12-") {
+			return field
+		}
+	}
+	return ""
 }

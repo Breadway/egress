@@ -14,6 +14,9 @@ func TestInstallDirACLArgs(t *testing.T) {
 	want := []string{
 		`C:\ProgramData\egress`,
 		"/inheritance:r",
+		"/remove:g", "*S-1-1-0",
+		"/remove:g", "*S-1-5-11",
+		"/remove:g", "*S-1-5-32-545",
 		"/grant:r", "*S-1-5-18:(OI)(CI)F",
 		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
 	}

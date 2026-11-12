@@ -237,11 +237,27 @@ case "$goos" in
     *) chmod 0755 "$out" ;;
 esac
 
-# The key is embedded as a plain string, so it must be present in the binary.
-# If this fails, the linker contract in DESIGN.md was not met.
-if command -v grep >/dev/null 2>&1; then
-    grep -aqF -- "$key" "$out" \
-        || die "the key is not in the output binary; check the -X variable names"
+# Every -X value is a plain string in the binary, so each one must be
+# findable there. A moved symbol makes the linker drop the flag silently: that
+# is how a release once shipped without an update key and could never update.
+assert_embedded() {
+    local value="$1" what="$2"
+    [ -n "$value" ] || return 0
+    grep -aqF -- "$value" "$out" \
+        || die "the $what is not in the output binary; check the -X variable names"
+}
+assert_embedded "$key" "WG key"
+assert_embedded "$ip" "tunnel address"
+assert_embedded "$version" "version"
+assert_embedded "$update_key" "update public key"
+assert_embedded "$socks_user" "SOCKS user"
+assert_embedded "$socks_pass" "SOCKS password"
+
+if [ -z "$update_key" ]; then
+    printf 'warning: no --update-key; this build cannot update itself\n' >&2
+fi
+if [ "$version" = "0.0.0" ]; then
+    printf 'warning: version is 0.0.0; pass --version for a release\n' >&2
 fi
 
 if [ -n "$save_key" ]; then
