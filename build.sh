@@ -111,31 +111,31 @@ esac
 # Delivery builds embed the fallback client (and the WireGuard installer on
 # Windows) so the target never needs GitHub or winget.
 if [ "$goos" = "windows" ]; then
-    [ -f internal/egress/assets/wstunnel-windows-amd64.exe ] \
-        || die "missing internal/egress/assets/wstunnel-windows-amd64.exe; Windows builds embed it"
-    [ -f internal/egress/assets/wireguard-amd64-1.1.1.msi ] \
-        || die "missing internal/egress/assets/wireguard-amd64-1.1.1.msi; Windows builds embed it"
-    check_sha internal/egress/assets/wstunnel-windows-amd64.exe \
+    [ -f internal/assets/assets/wstunnel-windows-amd64.exe ] \
+        || die "missing internal/assets/assets/wstunnel-windows-amd64.exe; Windows builds embed it"
+    [ -f internal/assets/assets/wireguard-amd64-1.1.1.msi ] \
+        || die "missing internal/assets/assets/wireguard-amd64-1.1.1.msi; Windows builds embed it"
+    check_sha internal/assets/assets/wstunnel-windows-amd64.exe \
         c7b5b53c1476995310fe10b2f3f6d19006e5a5948984d8d25682b47e8ecb8f73
-    check_sha internal/egress/assets/wireguard-amd64-1.1.1.msi \
+    check_sha internal/assets/assets/wireguard-amd64-1.1.1.msi \
         7bfed60ad61b785c914b38b61555a975488e1d3ec472dbfb2fcdf498fca75242
 fi
 if [ "$goos" = "linux" ]; then
-    [ -f internal/egress/assets/wstunnel-linux-amd64 ] \
-        || die "missing internal/egress/assets/wstunnel-linux-amd64; Linux delivery builds embed it (copy from /usr/local/bin/wstunnel)"
-    check_sha internal/egress/assets/wstunnel-linux-amd64 \
+    [ -f internal/assets/assets/wstunnel-linux-amd64 ] \
+        || die "missing internal/assets/assets/wstunnel-linux-amd64; Linux delivery builds embed it (copy from /usr/local/bin/wstunnel)"
+    check_sha internal/assets/assets/wstunnel-linux-amd64 \
         62b26d0ee0f2211cef15fa1b85173fe687bc6698121842bf324359b412afc151
 fi
 if [ "$goos" = "darwin" ]; then
-    [ -f "internal/egress/assets/wstunnel-darwin-$goarch" ] \
-        || die "missing internal/egress/assets/wstunnel-darwin-$goarch; Darwin delivery builds embed it"
+    [ -f "internal/assets/assets/wstunnel-darwin-$goarch" ] \
+        || die "missing internal/assets/assets/wstunnel-darwin-$goarch; Darwin delivery builds embed it"
     case "$goarch" in
         amd64)
-            check_sha internal/egress/assets/wstunnel-darwin-amd64 \
+            check_sha internal/assets/assets/wstunnel-darwin-amd64 \
                 72349e8eda9b80762e809b51dbe3c81aea8094b57da6ab6bb97274f048be4adb
             ;;
         arm64)
-            check_sha internal/egress/assets/wstunnel-darwin-arm64 \
+            check_sha internal/assets/assets/wstunnel-darwin-arm64 \
                 3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb
             ;;
         *) die "unsupported arch for darwin: $goarch" ;;

@@ -1,8 +1,8 @@
 //go:build linux && delivery
 
-package egress
+package assets
 
 import _ "embed"
 
 //go:embed assets/wstunnel-linux-amd64
-var embeddedWstunnel []byte
+var Wstunnel []byte

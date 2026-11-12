@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/assets"
 	"errors"
 	"fmt"
 	"io"
@@ -663,9 +664,9 @@ func (linuxPlatform) WstunnelPath() (string, error) { return findWstunnel() }
 // download is attempted when the delivery build carries the binary; a dev
 // build without embedded assets still falls back to the pinned download.
 func (linuxPlatform) InstallWstunnel() (string, error) {
-	if len(embeddedWstunnel) > 0 {
+	if len(assets.Wstunnel) > 0 {
 		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelLinuxSHA256); err != nil {
+		if err := extractEmbedded(dest, assets.Wstunnel, wstunnelLinuxSHA256); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {

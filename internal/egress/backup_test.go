@@ -2,6 +2,7 @@ package egress
 
 import (
 	"crypto/sha256"
+	"egress/internal/assets"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -131,11 +132,11 @@ func TestWstunnelIsOurs(t *testing.T) {
 	if wstunnelIsOurs(foreign, "00") {
 		t.Error("foreign binary must not count as ours")
 	}
-	if len(embeddedWstunnel) == 0 {
+	if len(assets.Wstunnel) == 0 {
 		t.Skip("no embedded asset in this build; true path covered by extractEmbedded")
 	}
-	sum := sha256.Sum256(embeddedWstunnel)
-	ours := writeTemp(t, "ours", string(embeddedWstunnel))
+	sum := sha256.Sum256(assets.Wstunnel)
+	ours := writeTemp(t, "ours", string(assets.Wstunnel))
 	if !wstunnelIsOurs(ours, hex.EncodeToString(sum[:])) {
 		t.Error("embedded bytes must count as ours")
 	}
