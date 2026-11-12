@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -55,19 +54,6 @@ func readReadyMarker() (pid int, age time.Duration, err error) {
 	return pid, time.Since(info.ModTime()), nil
 }
 
-// pidAlive reports whether pid exists. On Windows existence is all that is
-// cheaply checkable; ServiceActive covers liveness there.
-func pidAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
 // checkSupervisorLive verifies the service is active and the readiness
 // marker points at a running process. maxAge <= 0 skips the freshness check
 // (verify, which may run long after boot); install passes readyMarkerMaxAge
@@ -84,7 +70,16 @@ func checkSupervisorLive(p platform, maxAge time.Duration) error {
 		return fmt.Errorf("readiness marker is %s old; the supervisor may be stale", age.Round(time.Second))
 	}
 	if !pidAlive(pid) {
-		return fmt.Errorf("supervisor pid %d is not running", pid)
+		// Opening another session's SYSTEM process is an access-checked
+		// operation on Windows and is denied even while the process runs,
+		// which failed every Windows install (EGRESS-93). The marker is
+		// written by this start (install removes any older one), the task is
+		// active, and the DNS probe that follows proves the process serves,
+		// so treat an unopenable handle as inconclusive rather than fatal.
+		if runtime.GOOS != "windows" {
+			return fmt.Errorf("supervisor pid %d is not running", pid)
+		}
+		debugf("ready marker pid %d could not be opened; relying on the task state and the DNS probe", pid)
 	}
 	return nil
 }

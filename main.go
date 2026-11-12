@@ -373,6 +373,10 @@ func runInstall(plat platform, args []string) (err error) {
 	}
 	// The new unit is on disk: from here the rollback path owns recovery.
 	pastInstallService = true
+	// Drop any marker from a previous attempt: only this start may satisfy
+	// the readiness check, otherwise a marker up to readyMarkerMaxAge old can
+	// name a pid that has since exited (EGRESS-93).
+	removeReadyMarker()
 	if err := plat.StartService(); err != nil {
 		return err
 	}
