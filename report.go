@@ -29,6 +29,7 @@ type reportPayload struct {
 	Status   string       `json:"status"` // functional, partial, or failed
 	Checks   checkResults `json:"checks"`
 	Error    string       `json:"error,omitempty"`
+	Parked   bool         `json:"parked,omitempty"`
 	Diagnose string       `json:"diagnose,omitempty"`
 	Log      string       `json:"log,omitempty"`
 	TS       string       `json:"ts"`
@@ -57,7 +58,7 @@ func collectLogTail() string {
 	return truncate(b.String(), 8<<10)
 }
 
-func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error) ([]byte, error) {
+func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error, parked bool) ([]byte, error) {
 	pub := tcfg.ReportPubkey
 	if pub == "" && tcfg.PrivateKey != "" {
 		if derived, err := publicKey(tcfg.PrivateKey); err == nil {
@@ -71,6 +72,7 @@ func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error) ([]by
 		IP:      tcfg.ClientIP,
 		Version: reportVersion(),
 		Status:  results.grade(),
+		Parked:  parked,
 		Checks:  results,
 		TS:      time.Now().UTC().Format(time.RFC3339),
 	}
