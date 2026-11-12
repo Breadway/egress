@@ -1,9 +1,10 @@
 # egress design
 
 A single binary that reproduces the hermes bypass on any Linux or Windows
-machine that holds an enrolled WireGuard key: DoH on `127.0.0.1:7103`, a
-full-tunnel exit through Aegis, and an automatic WebSocket fallback when UDP is
-blocked.
+machine that holds an enrolled WireGuard key: DoH on `127.0.0.1:7103`, split
+routing through Aegis for destinations proven blocked, and an automatic
+WebSocket fallback when UDP is blocked. Routing everything through the tunnel
+was removed: it turns a friend's browsing into the relay's bandwidth bill.
 
 No external downloads at install time. The DoH client, the local DNS server, the
 fallback supervisor and the key handling are all in the binary. Delivery builds

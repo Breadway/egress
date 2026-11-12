@@ -14,6 +14,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:7109", "loopback address to listen on")
 	authFile := flag.String("auth-file", "/etc/egress-socks/auth", "file of user:password lines")
 	idle := flag.Duration("idle", 5*time.Minute, "handshake deadline")
+	limitMbps := flag.Float64("limit-mbps", 0, "aggregate relay throughput cap in Mbit/s (0 = unlimited)")
 	flag.Parse()
 
 	users, err := loadAuth(*authFile)
@@ -31,6 +32,10 @@ func main() {
 	log.Printf("socksrelay: listening on %s with %d user(s)", *listen, len(users))
 
 	r := newRelay(users, *idle)
+	r.limit = newLimiter(*limitMbps * 1e6 / 8)
+	if r.limit != nil {
+		log.Printf("socksrelay: aggregate cap %.1f Mbit/s", *limitMbps)
+	}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

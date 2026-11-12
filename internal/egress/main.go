@@ -152,23 +152,18 @@ func runInstall(plat platform, args []string) (err error) {
 	ipFlag := fs.String("ip", "", "tunnel address for this device")
 	noTunnel := fs.Bool("no-tunnel", false, "configure DNS only")
 	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
-	split := fs.Bool("split", false, "route only learned-blocked destinations through the tunnel")
-	noSplit := fs.Bool("no-split", false, "override a build that defaults to split mode")
+	// Split is the only mode. --split stays accepted so older scripts keep
+	// working; the flag itself no longer changes anything.
+	_ = fs.Bool("split", false, "deprecated: split mode is always on")
 	keepConfig := fs.Bool("keep-config", false, "reuse the existing tunnel key and address (upgrade)")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *split && *noTunnel {
-		return errors.New("--split needs the tunnel; it cannot be combined with --no-tunnel")
-	}
 	if *keepConfig && *noTunnel && runtime.GOOS != "windows" {
 		return errors.New("--keep-config needs the tunnel config; it cannot be combined with --no-tunnel")
 	}
-	if embeddedDefaultSplit == "true" && !*noSplit {
-		*split = true
-	}
-	if *split && runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" {
 		// Windows split is the proxy/PAC path: the supervisor only serves DNS
 		// and no WireGuard interface is installed.
 		*noTunnel = true
@@ -206,16 +201,12 @@ func runInstall(plat platform, args []string) (err error) {
 		if *ipFlag == "" {
 			tcfg.ClientIP = keepIP
 		}
-		// Preserve split mode across the upgrade.
-		if splitEnabled() {
-			*split = true
-		}
 	}
-	tcfg.Split = *split
+	tcfg.Split = true
 	// Split Windows installs and generic updates have no private key in this
 	// invocation. Recover the public half from the build or the identity file
 	// so install reports still identify the device.
-	if *split && tcfg.PrivateKey == "" {
+	if tcfg.PrivateKey == "" {
 		if embeddedKey != "" {
 			if pub, err := publicKey(embeddedKey); err == nil {
 				tcfg.ReportPubkey = pub
@@ -254,17 +245,6 @@ func runInstall(plat platform, args []string) (err error) {
 		tcfg.ReportPubkey = pub
 		_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: tcfg.ClientIP})
 	}
-
-	// The marker must match the tunnel config. Track whether the config has
-	// been written: a failure before that point restores the previous mode,
-	// a failure after it leaves the marker matching the file on disk.
-	prevSplit := splitEnabled()
-	wroteConfig := false
-	defer func() {
-		if err != nil && !wroteConfig {
-			_ = setSplitEnabled(prevSplit)
-		}
-	}()
 
 	if *noTunnel {
 		debugf("dns-only install: skipping wireguard-tools")
@@ -305,13 +285,6 @@ func runInstall(plat platform, args []string) (err error) {
 		if err != nil {
 			return err
 		}
-		// The config and the mode marker must agree. Write the marker only
-		// once the config is on disk; from here on a failure leaves both in
-		// the requested mode instead of splitting them.
-		if err := setSplitEnabled(*split); err != nil {
-			return err
-		}
-		wroteConfig = true
 		if changed {
 			// New or different identity: bounce a live tunnel so it runs
 			// the just-written config. StartTunnel alone is a no-op when
@@ -336,9 +309,7 @@ func runInstall(plat platform, args []string) (err error) {
 			return err
 		}
 		fmt.Println("wireguard tunnel is up")
-		if *split {
-			fmt.Println("split mode: only learned-blocked destinations will use the tunnel")
-		}
+		fmt.Println("split mode: only learned-blocked destinations use the tunnel")
 	}
 
 	if _, err := plat.InstallWstunnel(); err != nil {
@@ -421,13 +392,10 @@ func runInstall(plat platform, args []string) (err error) {
 		return err
 	}
 
-	if *split && runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" {
 		if err := configureWindowsSplit(); err != nil {
 			fmt.Fprintf(os.Stderr, "split client setup failed: %v\n", err)
 			parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
-			return err
-		}
-		if err := setSplitEnabled(true); err != nil {
 			return err
 		}
 	}
@@ -510,7 +478,7 @@ func cmdSupervise(args []string) error {
 	wst := newWstunnelProc(wstPath, appLogger())
 
 	var split *splitController
-	if splitEnabled() && !*noTunnel {
+	if !*noTunnel {
 		split = newSplitController(NetworkKey("", gateway), iface,
 			newRouteManager(wgInterface, appLogger()), appLogger())
 	}
@@ -532,7 +500,7 @@ func cmdVerify(args []string) error {
 	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
-	tcfg := tunnelConfig{ClientIP: defaultClientIP, Split: splitEnabled()}
+	tcfg := tunnelConfig{ClientIP: defaultClientIP, Split: true}
 	if plat.TunnelConfigured() {
 		tcfg.PrivateKey = "configured"
 	}
@@ -608,7 +576,7 @@ func cmdEnable(args []string) error {
 	// Enable only restarts the service. Split mode also needs its per-user
 	// proxy and PAC back, which disable removed, and the update check, which
 	// disable deletes.
-	if runtime.GOOS == "windows" && splitEnabled() {
+	if runtime.GOOS == "windows" {
 		if err := configureWindowsSplit(); err != nil {
 			return fmt.Errorf("split client setup: %w", err)
 		}

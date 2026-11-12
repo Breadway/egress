@@ -141,24 +141,9 @@ func runChecks(p platform, tcfg tunnelConfig) checkResults {
 	} else {
 		r.Probe = "failed"
 	}
-	if tcfg.Split {
-		// Split mode deliberately leaves most traffic on the physical link,
-		// so the public exit address is not Aegis and is not checked.
-		r.Exit = "split"
-		return r
-	}
-	ip, err := checkExitIP()
-	switch {
-	case err != nil:
-		// The checker was unreachable, not wrong: the tunnel and probe
-		// checks already establish traffic enters the tunnel, so record
-		// uncertainty instead of destroying the install.
-		r.Exit = exitUnverifiedPrefix + err.Error()
-	case ip == aegisIPv4:
-		r.Exit = ip
-	default:
-		r.Exit = "got " + ip + ", expected " + aegisIPv4
-	}
+	// Split is the only mode: ordinary traffic stays on the physical link, so
+	// the public exit address is not Aegis and is not checked.
+	r.Exit = "split"
 	return r
 }
 
