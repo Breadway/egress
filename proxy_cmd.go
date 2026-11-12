@@ -21,7 +21,7 @@ var (
 )
 
 // cmdProxy runs the per-user split proxy and, on Windows, its tray.
-func cmdProxy(args []string) error {
+func cmdProxy(args []string) (err error) {
 	fs := newFlagSet("proxy")
 	listen := fs.String("listen", "127.0.0.1:1081", "local CONNECT proxy and PAC address")
 	relay := fs.String("relay", "127.0.0.1:1080", "local wstunnel forward to the Aegis SOCKS relay")
@@ -36,6 +36,13 @@ func cmdProxy(args []string) error {
 		return err
 	}
 	setupLogging(resolveDebug(*debug))
+	// A proxy started at login has no console, so a fatal error would
+	// otherwise vanish. Record it where the next report can see it.
+	defer func() {
+		if err != nil {
+			appLogger().Printf("proxy: %v", err)
+		}
+	}()
 
 	user, pass := resolveSocksAuth(*authPath, *userFlag, *passFlag)
 	if *install {
@@ -73,13 +80,17 @@ func cmdProxy(args []string) error {
 	}
 
 	if *tray {
+		// The tray is decoration. Serving must not depend on it: creating the
+		// icon can fail in an elevated or session-0 context, and when it took
+		// the process down with it the machine lost its proxy entirely
+		// (EGRESS-102).
 		go func() {
-			if err := p.Serve(ctx); err != nil && ctx.Err() == nil {
-				appLogger().Printf("proxy: %v", err)
+			if err := runTray(ctx, p); err != nil && ctx.Err() == nil {
+				appLogger().Printf("proxy: tray unavailable: %v", err)
 			}
 		}()
-		return runTray(ctx, p)
 	}
+	appLogger().Printf("proxy: serving PAC and CONNECT on %s", *listen)
 	return p.Serve(ctx)
 }
 
