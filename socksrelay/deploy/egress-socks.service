@@ -1,0 +1,26 @@
+[Unit]
+Description=socksrelay: authenticated SOCKS5 relay for egress split mode
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=egress-socks
+Group=egress-socks
+ExecStart=/usr/local/bin/socksrelay --listen=127.0.0.1:7109 --auth-file=/etc/egress-socks/auth
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
