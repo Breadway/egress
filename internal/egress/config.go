@@ -13,65 +13,6 @@ import (
 	"time"
 )
 
-const (
-	dohURL        = "https://dns.breadway.dev/dns-query"
-	dohHost       = "dns.breadway.dev"
-	dohListenAddr = "127.0.0.1:7103"
-
-	aegisIPv4      = "152.69.174.7"
-	aegisWGPort    = "7105"
-	aegisTunnelIP  = "10.88.0.1"
-	aegisPublicKey = "MsU+DNi9YLMpLfsHifP2+nMLAiblNs0uvPsQs/U2ZUA="
-	wgInterface    = "wg0"
-	tunnelSubnet   = "10.88.0.0/24"
-
-	wstunnelPrefix  = "wg-tunnel"
-	relayHost       = "127.0.0.1"
-	relayPort       = "7108"
-	defaultClientIP = "10.88.0.4"
-
-	reportURL  = "https://bypass.breadway.dev/api/report"
-	reportHost = "bypass.breadway.dev"
-
-	probeInterval = 15 * time.Second
-	trialInterval = 10 * time.Minute
-
-	// relayProbeWindow bounds one health probe on the relay path, and
-	// relayFailThreshold counts consecutive failures before the relay
-	// child is restarted and a UDP trial is brought forward. A listening
-	// relay port alone is not a health signal: the WebSocket underneath
-	// can be blackholed while the port stays open.
-	relayProbeWindow   = 5 * time.Second
-	relayFailThreshold = 2
-	dnsCheckEvery      = 60 * time.Second
-
-	// A wedged DoH client answers nothing while its listener stays open.
-	// dohResetAfterFailures is when the client rebuilds its transport,
-	// dohRecoverEvery bounds how often the supervisor tries that again,
-	// and dohWedgeRestartAfter is when it gives up and exits so systemd
-	// starts a clean process.
-	dohResetAfterFailures = 3
-	dohRecoverEvery       = 60 * time.Second
-	dohWedgeRestartAfter  = 5 * time.Minute
-)
-
-// tunnelConfig is everything needed to write a WireGuard configuration.
-type tunnelConfig struct {
-	PrivateKey string
-	ClientIP   string
-	Endpoint   string
-	// Split keeps the default route off the tunnel. Only host routes added by
-	// the split controller send destinations into wg0. Linux only.
-	Split bool
-	// ReportPubkey identifies the device in install reports when no private
-	// key is present in this invocation, such as a split Windows install or a
-	// generic update.
-	ReportPubkey string
-}
-
-func (c tunnelConfig) DirectEndpoint() string { return aegisIPv4 + ":" + aegisWGPort }
-func (c tunnelConfig) RelayEndpoint() string  { return relayHost + ":" + relayPort }
-
 // normalizeKey trims, validates and canonicalises a WireGuard private key.
 func normalizeKey(s string) (string, error) {
 	s = strings.Map(func(r rune) rune {
