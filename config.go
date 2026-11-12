@@ -63,6 +63,10 @@ type tunnelConfig struct {
 	// Split keeps the default route off the tunnel. Only host routes added by
 	// the split controller send destinations into wg0. Linux only.
 	Split bool
+	// ReportPubkey identifies the device in install reports when no private
+	// key is present in this invocation, such as a split Windows install or a
+	// generic update.
+	ReportPubkey string
 }
 
 func (c tunnelConfig) DirectEndpoint() string { return aegisIPv4 + ":" + aegisWGPort }

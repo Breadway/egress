@@ -210,6 +210,25 @@ func runInstall(plat platform, args []string) (err error) {
 		}
 	}
 	tcfg.Split = *split
+	// Split Windows installs and generic updates have no private key in this
+	// invocation. Recover the public half from the build or the identity file
+	// so install reports still identify the device.
+	if *split && tcfg.PrivateKey == "" {
+		if embeddedKey != "" {
+			if pub, err := publicKey(embeddedKey); err == nil {
+				tcfg.ReportPubkey = pub
+				_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: tcfg.ClientIP})
+			}
+		}
+		if tcfg.ReportPubkey == "" {
+			if id, err := loadDeviceIdentity(); err == nil {
+				tcfg.ReportPubkey = id.Pubkey
+				if *ipFlag == "" && id.IP != "" {
+					tcfg.ClientIP = id.IP
+				}
+			}
+		}
+	}
 	if !validIPv4(tcfg.ClientIP) {
 		return fmt.Errorf("invalid tunnel address %q", tcfg.ClientIP)
 	}
@@ -230,6 +249,8 @@ func runInstall(plat platform, args []string) (err error) {
 		if err != nil {
 			return err
 		}
+		tcfg.ReportPubkey = pub
+		_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: tcfg.ClientIP})
 	}
 
 	// The marker must match the tunnel config. Track whether the config has
@@ -387,6 +408,7 @@ func runInstall(plat platform, args []string) (err error) {
 	if *split && runtime.GOOS == "windows" {
 		if err := configureWindowsSplit(); err != nil {
 			fmt.Fprintf(os.Stderr, "split client setup failed: %v\n", err)
+			rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
 			return err
 		}
 		if err := setSplitEnabled(true); err != nil {
