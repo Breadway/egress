@@ -196,21 +196,40 @@ func (s *server) loadReport(pubkey string) (*storedReport, bool) {
 }
 
 // reportPill renders the device status for the logins table.
+// effectiveStatus folds the stored status, the error text and the parked flag
+// into the state a reader cares about. Older builds graded only their probes,
+// so a report can say functional while carrying a setup error.
+func effectiveStatus(rep deviceReport) (label, class string) {
+	switch {
+	case rep.Parked:
+		return "parked", "new"
+	case rep.Status == "failed" || rep.Error != "":
+		return "failed", "bad"
+	case rep.Status == "partial":
+		return "partial", "new"
+	case rep.Status == "":
+		return "unknown", ""
+	default:
+		return rep.Status, "ok"
+	}
+}
+
+// errorSummary returns the first line of an error, shortened for a table cell.
+func errorSummary(msg string, limit int) string {
+	line := strings.TrimSpace(strings.SplitN(msg, "\n", 2)[0])
+	if len(line) <= limit {
+		return line
+	}
+	return strings.TrimSpace(line[:limit]) + "..."
+}
+
 func reportPill(stored *storedReport) string {
 	if stored == nil {
-		return `<span class="pill">unknown</span>`
+		return `<span class="pill">no report</span>`
 	}
-	switch stored.Report.Status {
-	case "functional":
-		return fmt.Sprintf(`<span class="pill ok">functional</span><br><span class="muted">%s</span>`,
-			esc(timeAgo(stored.Received)))
-	case "partial":
-		return fmt.Sprintf(`<span class="pill new">partial</span><br><span class="muted">%s</span>`,
-			esc(timeAgo(stored.Received)))
-	default:
-		return fmt.Sprintf(`<span class="pill new">failed</span><br><span class="muted">%s</span>`,
-			esc(timeAgo(stored.Received)))
-	}
+	label, class := effectiveStatus(stored.Report)
+	return fmt.Sprintf(`<span class="pill %s">%s</span><span class="cell-sub">%s</span>`,
+		class, esc(label), esc(timeAgo(stored.Received)))
 }
 
 func timeAgo(ts string) string {
@@ -231,8 +250,9 @@ func timeAgo(ts string) string {
 	}
 }
 
-// adminReports shows one device's latest install report: checks, error,
-// diagnose output and log tail.
+// adminReports shows one device's latest install report. The reader wants the
+// verdict and the reason first, so the order is status, reason, checks, then
+// the long output folded away.
 func (s *server) adminReports(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
@@ -259,15 +279,36 @@ This device has not reported an install. Older binaries predate reporting.</div>
 		s.renderNav(w, true, "admin", "Device report", b.String())
 		return
 	}
+
 	rep := stored.Report
+	label, class := effectiveStatus(rep)
 	deviceTime := esc(displayTime(rep.TS))
 	if rep.TS == "" {
 		deviceTime = "unknown device time"
 	}
-	fmt.Fprintf(&b, `<div class="card tight"><p style="margin:0">Status: %s<br>
-<span class="muted">Reported %s &middot; device time %s &middot; %s/%s &middot; build %s &middot; tunnel %s</span></p></div>`,
-		reportPill(stored), esc(displayTime(stored.Received)), deviceTime,
-		esc(rep.OS), esc(rep.Arch), esc(rep.Version), esc(rep.IP))
+
+	b.WriteString(`<div class="card tight"><div class="report-head">`)
+	fmt.Fprintf(&b, `<span class="pill %s">%s</span>`, class, esc(label))
+	if rep.Version != "" {
+		fmt.Fprintf(&b, `<span class="report-meta">build <strong>%s</strong></span>`, esc(rep.Version))
+	}
+	fmt.Fprintf(&b, `<span class="report-meta">%s/%s</span>`, esc(rep.OS), esc(rep.Arch))
+	if rep.IP != "" {
+		fmt.Fprintf(&b, `<span class="report-meta">%s</span>`, esc(rep.IP))
+	}
+	fmt.Fprintf(&b, `<span class="report-meta">reported %s</span>`, esc(displayTime(stored.Received)))
+	b.WriteString(`</div>`)
+	fmt.Fprintf(&b, `<p class="muted" style="margin:.5rem 0 0">Device time %s</p></div>`, deviceTime)
+
+	switch {
+	case rep.Parked:
+		b.WriteString(`<div class="alert info"><strong>Parked, waiting for a fix.</strong>
+Networking was left working. The install stays on disk and checks for a new release every minute, so the next publish lands on its own.</div>`)
+	case rep.Error != "":
+		fmt.Fprintf(&b, `<div class="alert error"><strong>%s</strong></div>`, esc(errorSummary(rep.Error, 240)))
+	case label == "failed":
+		b.WriteString(`<div class="alert error"><strong>Install failed, with no error text reported.</strong></div>`)
+	}
 
 	var names []string
 	for k := range rep.Checks {
@@ -275,27 +316,107 @@ This device has not reported an install. Older binaries predate reporting.</div>
 	}
 	sort.Strings(names)
 	if len(names) > 0 {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap compact"><table><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>`)
 		for _, k := range names {
 			v := rep.Checks[k]
-			cell := `<span class="pill ok">ok</span>`
-			switch v {
-			case "", "up", "ok", "skipped":
+			var cell string
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "ok", "up":
+				cell = `<span class="pill ok">ok</span>`
+			case "skipped":
+				cell = `<span class="pill skip">skipped</span>`
+			case "":
+				cell = `<span class="muted">not reported</span>`
+			case "down", "failed":
+				cell = `<span class="pill bad">failed</span>`
 			default:
-				cell = fmt.Sprintf(`<code>%s</code>`, esc(v))
+				cell = `<span class="pill bad">failed</span><span class="cell-sub">` + esc(v) + `</span>`
 			}
 			fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td></tr>`, esc(k), cell)
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
+
 	if rep.Error != "" {
-		fmt.Fprintf(&b, `<div class="card"><h2>Error</h2><pre>%s</pre></div>`, esc(rep.Error))
+		fmt.Fprintf(&b, `<div class="card"><h2>Error</h2><pre class="err">%s</pre></div>`, esc(rep.Error))
 	}
 	if rep.Diagnose != "" {
-		fmt.Fprintf(&b, `<div class="card"><h2>Diagnose</h2><pre>%s</pre></div>`, esc(rep.Diagnose))
+		fmt.Fprintf(&b, `<details class="card"><summary>Diagnose output</summary><pre>%s</pre></details>`, esc(rep.Diagnose))
 	}
 	if rep.Log != "" {
-		fmt.Fprintf(&b, `<div class="card"><h2>Log tail</h2><pre>%s</pre></div>`, esc(rep.Log))
+		fmt.Fprintf(&b, `<details class="card"><summary>Log tail</summary><pre>%s</pre></details>`, esc(rep.Log))
 	}
 	s.renderNav(w, true, "admin", "Device report", b.String())
+}
+
+// deviceRow is one login joined with its latest report, ordered so the devices
+// that need attention come first.
+type deviceRow struct {
+	Name   string
+	User   user
+	Stored *storedReport
+	Label  string
+	Class  string
+}
+
+var deviceRank = map[string]int{
+	"failed": 0, "parked": 1, "partial": 2, "no report": 3, "unknown": 4, "functional": 5,
+}
+
+func (s *server) deviceRows() []deviceRow {
+	users := s.loadUsers()
+	rows := make([]deviceRow, 0, len(users))
+	for name, u := range users {
+		row := deviceRow{Name: name, User: u, Label: "no report"}
+		if stored, ok := s.loadReport(u.Peer); ok {
+			row.Stored = stored
+			row.Label, row.Class = effectiveStatus(stored.Report)
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		ri, rj := deviceRank[rows[i].Label], deviceRank[rows[j].Label]
+		if ri != rj {
+			return ri < rj
+		}
+		return rows[i].Name < rows[j].Name
+	})
+	return rows
+}
+
+// problemText is the one line a reader needs next to a device's status.
+func problemText(rep deviceReport) string {
+	switch {
+	case rep.Parked:
+		return "parked, waiting for the next release"
+	case rep.Error != "":
+		return errorSummary(rep.Error, 90)
+	case rep.Status == "failed":
+		return "install failed"
+	case rep.Status == "partial":
+		return "some checks failed"
+	}
+	return ""
+}
+
+// deviceTable is the compact device list shared by the dashboard and Logins.
+func deviceTable(rows []deviceRow) string {
+	var b strings.Builder
+	b.WriteString(`<div class="table-wrap compact"><table><thead><tr><th>Login</th><th>Status</th><th>Build</th><th>Last report</th><th>Problem</th></tr></thead><tbody>`)
+	for _, row := range rows {
+		build := `<span class="muted">-</span>`
+		when := `<span class="muted">never</span>`
+		problem := "no install report yet"
+		if row.Stored != nil {
+			if row.Stored.Report.Version != "" {
+				build = esc(row.Stored.Report.Version)
+			}
+			when = esc(timeAgo(row.Stored.Received))
+			problem = problemText(row.Stored.Report)
+		}
+		fmt.Fprintf(&b, `<tr><td><a href="/admin/reports?user=%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td class="muted">%s</td><td class="problem">%s</td></tr>`,
+			esc(row.Name), esc(row.Name), reportPill(row.Stored), build, when, esc(problem))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
 }
