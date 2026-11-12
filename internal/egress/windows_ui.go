@@ -122,6 +122,23 @@ func removeProxyAutostart() {
 	_ = os.Remove(filepath.Join(split.ProfileDir(), "launch-tray.vbs"))
 }
 
+// proxyNetworkAllowed applies the SSID allowlist to the per-user proxy. It
+// clears the PAC and returns false when this network is not one the owner
+// listed, so the machine browses direct instead of filtering.
+func proxyNetworkAllowed() bool {
+	dir := split.ProfileDir()
+	if len(split.LoadNetworks(dir)) == 0 {
+		return true
+	}
+	ssid, _ := currentSSID()
+	if split.NetworkAllowed(dir, ssid) {
+		return true
+	}
+	clearUserPAC()
+	appLogger().Printf("proxy: network %q is not in networks.txt; staying direct", ssid)
+	return false
+}
+
 // setUserPAC points WinINet at the local PAC file so browsers that follow the
 // system proxy use split mode.
 func setUserPAC(url string) error {
@@ -372,6 +389,10 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			}
 		case 6:
 			go runDiagnoseWindow()
+		case 7:
+			runElevated("boot on")
+		case 8:
+			runElevated("boot off")
 		}
 		return 0
 	}
@@ -414,6 +435,20 @@ func trayStatusLines(p *split.Proxy) []string {
 	lines := []string{
 		"Proxy: listening on " + p.ListenAddr(),
 		fmt.Sprintf("Blocked: %d (contested %d), allowed: %d", blocked, contested, allowed),
+	}
+	if len(split.LoadNetworks(split.ProfileDir())) > 0 {
+		ssid, _ := currentSSID()
+		state := "not listed"
+		if split.NetworkAllowed(split.ProfileDir(), ssid) {
+			state = "allowed"
+		}
+		if ssid == "" {
+			ssid = "unknown"
+		}
+		lines = append(lines, fmt.Sprintf("Network: %s (%s)", ssid, state))
+	}
+	if bootDisabled() {
+		lines = append(lines, "Boot start: off")
 	}
 	if protos := p.ProtocolStates(); len(protos) > 0 {
 		var parts []string
@@ -485,6 +520,9 @@ func showTrayMenu(hwnd uintptr) {
 	addItem(5, "Reload allow/block lists")
 	addItem(6, "Run diagnose")
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+	addItem(7, "Start at boot")
+	addItem(8, "Do not start at boot")
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	addItem(2, "Exit")
 
 	var pt winPoint
@@ -497,6 +535,21 @@ func openURL(url string) {
 	verb, _ := syscall.UTF16PtrFromString("open")
 	target, _ := syscall.UTF16PtrFromString(url)
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
+}
+
+// runElevated re-runs this binary with the given arguments through the UAC
+// prompt. Changing a SYSTEM scheduled task needs that elevation; the tray
+// itself runs as the user.
+func runElevated(params string) {
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	target, _ := syscall.UTF16PtrFromString(exe)
+	args, _ := syscall.UTF16PtrFromString(params)
+	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)),
+		uintptr(unsafe.Pointer(args)), 0, 1)
 }
 
 // runDiagnoseWindow runs `egress diagnose` and shows it in a message box. The

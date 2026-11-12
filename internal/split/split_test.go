@@ -745,3 +745,31 @@ func TestOverridesBeatProbingAndFeed(t *testing.T) {
 		t.Fatalf("summary: %v", got)
 	}
 }
+
+func TestNetworkAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	if !NetworkAllowed(dir, "anything") {
+		t.Fatal("missing allowlist should allow any network")
+	}
+	if err := SaveNetworks(dir, []string{"Home", "Office"}); err != nil {
+		t.Fatal(err)
+	}
+	if !NetworkAllowed(dir, "home") {
+		t.Error("listed ssid is case-insensitive")
+	}
+	if NetworkAllowed(dir, "Cafe") {
+		t.Error("unlisted ssid allowed")
+	}
+	if !NetworkAllowed(dir, "") {
+		t.Error("unreadable ssid should not block")
+	}
+	if got := LoadNetworks(dir); len(got) != 2 {
+		t.Fatalf("load: %v", got)
+	}
+	if err := SaveNetworks(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !NetworkAllowed(dir, "Cafe") {
+		t.Error("cleared allowlist still blocks")
+	}
+}
