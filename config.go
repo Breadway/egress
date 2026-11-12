@@ -43,6 +43,15 @@ const (
 	relayProbeWindow   = 5 * time.Second
 	relayFailThreshold = 2
 	dnsCheckEvery      = 60 * time.Second
+
+	// A wedged DoH client answers nothing while its listener stays open.
+	// dohResetAfterFailures is when the client rebuilds its transport,
+	// dohRecoverEvery bounds how often the supervisor tries that again,
+	// and dohWedgeRestartAfter is when it gives up and exits so systemd
+	// starts a clean process.
+	dohResetAfterFailures = 3
+	dohRecoverEvery       = 60 * time.Second
+	dohWedgeRestartAfter  = 5 * time.Minute
 )
 
 // tunnelConfig is everything needed to write a WireGuard configuration.

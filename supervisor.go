@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 )
@@ -44,6 +45,12 @@ type supervisor struct {
 	// gets its own short-window probes and a restart after sustained
 	// failure instead of silence until the next UDP trial.
 	relayFailures int
+
+	// DoH wedge tracking. The listener can stay open while every lookup
+	// fails, and the relay child resolves through that listener, so this
+	// is a whole-stack failure, not a DNS-only one.
+	dnsWedgeSince   time.Time
+	lastDNSRecovery time.Time
 }
 
 func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
@@ -58,14 +65,14 @@ func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logg
 }
 
 func (s *supervisor) Run(ctx context.Context) error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- s.resolver.serve(ctx) }()
 	if s.manageTunnel {
-		go s.loop(ctx)
+		go func() { errCh <- s.loop(ctx) }()
 	} else {
 		// DNS-only mode still owns the resolver: DHCP renews and roams
 		// reset the adapter resolver, and nothing else restores 127.0.0.1.
-		go s.dnsLoop(ctx)
+		go func() { errCh <- s.dnsLoop(ctx) }()
 	}
 
 	select {
@@ -78,7 +85,7 @@ func (s *supervisor) Run(ctx context.Context) error {
 	}
 }
 
-func (s *supervisor) loop(ctx context.Context) {
+func (s *supervisor) loop(ctx context.Context) error {
 	state := pathUDP
 	failures := 0
 	var lastTrial time.Time
@@ -105,7 +112,7 @@ func (s *supervisor) loop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 		}
 
@@ -149,6 +156,8 @@ func (s *supervisor) loop(ctx context.Context) {
 					s.log.Printf("network changed: interface %s, gateway %s", s.iface, s.gateway)
 					changed = true
 					failures = 0
+					s.dnsWedgeSince = time.Time{}
+					s.lastDNSRecovery = time.Time{}
 					if state == pathWebSocket {
 						lastTrial = time.Time{}
 					}
@@ -164,6 +173,10 @@ func (s *supervisor) loop(ctx context.Context) {
 			if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
 				s.log.Printf("dns check failed: %v", err)
 			}
+		}
+
+		if err := s.checkDoH(); err != nil {
+			return err
 		}
 
 		if !s.plat.TunnelUp() {
@@ -243,7 +256,7 @@ func (s *supervisor) loop(ctx context.Context) {
 // endpoint pin: without a tunnel there is nothing to move, but DHCP renews
 // still need ApplyDNS/EnsureDNS or the machine silently stops using the
 // listener.
-func (s *supervisor) dnsLoop(ctx context.Context) {
+func (s *supervisor) dnsLoop(ctx context.Context) error {
 	var lastDNSCheck time.Time
 
 	if s.iface != "" {
@@ -258,7 +271,7 @@ func (s *supervisor) dnsLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 		}
 
@@ -278,6 +291,8 @@ func (s *supervisor) dnsLoop(ctx context.Context) {
 					}
 					s.pinIdx = 0
 					s.log.Printf("network changed: interface %s, gateway %s", s.iface, s.gateway)
+					s.dnsWedgeSince = time.Time{}
+					s.lastDNSRecovery = time.Time{}
 				} else if len(routes) > 0 {
 					s.log.Printf("routes changed, best still %s via %s (%d candidates)",
 						routes[0].Iface, routes[0].Gateway, len(routes))
@@ -291,7 +306,63 @@ func (s *supervisor) dnsLoop(ctx context.Context) {
 				s.log.Printf("dns check failed: %v", err)
 			}
 		}
+
+		if err := s.checkDoH(); err != nil {
+			return err
+		}
 	}
+}
+
+// dohAction is what checkDoH should do after a streak of failed lookups.
+type dohAction int
+
+const (
+	dohWait dohAction = iota
+	dohReset
+	dohGiveUp
+)
+
+// dohRecoveryStep is the timing rule for a wedged resolver, kept pure so it
+// can be tested without one.
+func dohRecoveryStep(now, wedgeSince, lastRecovery time.Time) dohAction {
+	if now.Sub(wedgeSince) >= dohWedgeRestartAfter {
+		return dohGiveUp
+	}
+	if lastRecovery.IsZero() || now.Sub(lastRecovery) >= dohRecoverEvery {
+		return dohReset
+	}
+	return dohWait
+}
+
+// checkDoH watches the resolver's consecutive failure count. An open listener
+// that answers nothing is a whole-stack failure here, not a DNS-only one: the
+// relay child resolves through that listener, so a wedged DoH client also
+// strands the fallback. Rebuild the client and restart the child; if that does
+// not clear after dohWedgeRestartAfter, exit so systemd starts a clean process
+// instead of sitting wedged forever.
+func (s *supervisor) checkDoH() error {
+	if s.resolver.ConsecutiveFailures() < dohResetAfterFailures {
+		s.dnsWedgeSince = time.Time{}
+		s.lastDNSRecovery = time.Time{}
+		return nil
+	}
+	now := time.Now()
+	if s.dnsWedgeSince.IsZero() {
+		s.dnsWedgeSince = now
+	}
+	switch dohRecoveryStep(now, s.dnsWedgeSince, s.lastDNSRecovery) {
+	case dohReset:
+		s.log.Printf("doh: %d consecutive lookup failures; rebuilding the client and relay",
+			s.resolver.ConsecutiveFailures())
+		s.resolver.Reset()
+		s.wst.Stop()
+		s.relayFailures = 0
+		s.lastDNSRecovery = now
+	case dohGiveUp:
+		return fmt.Errorf("doh wedged for %s despite recovery attempts; exiting for a clean restart",
+			now.Sub(s.dnsWedgeSince).Round(time.Second))
+	}
+	return nil
 }
 
 // probeRelay runs one short health probe on the relay path and counts
