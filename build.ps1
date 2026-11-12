@@ -108,7 +108,7 @@ Write-Host "building:    $OS/$Arch -> $Out"
 Write-Host ""
 
 $debugLdflag = ""
-if ($UpdateKey) { $updateLdflag = " -X egress/internal/egress.updatePublicKey=$UpdateKey" } else { $updateLdflag = "" }
+if ($UpdateKey) { $updateLdflag = " -X egress/internal/update.PublicKey=$UpdateKey" } else { $updateLdflag = "" }
 if ($SocksUser -and $SocksPass) { $socksLdflag = " -X egress/internal/egress.embeddedSocksUser=$SocksUser -X egress/internal/egress.embeddedSocksPass=$SocksPass" } else { $socksLdflag = "" }
 if ($DefaultSplit) { $splitLdflag = " -X egress/internal/egress.embeddedDefaultSplit=true" } else { $splitLdflag = "" }
 if ($DebugBuild) { $debugLdflag = " -X egress/internal/egress.defaultDebug=true" }
