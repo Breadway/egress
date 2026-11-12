@@ -24,6 +24,7 @@ type deviceReport struct {
 	IP       string            `json:"ip"`
 	Version  string            `json:"version"`
 	Status   string            `json:"status"`
+	State    string            `json:"state,omitempty"`
 	Checks   map[string]string `json:"checks"`
 	Error    string            `json:"error"`
 	Parked   bool              `json:"parked,omitempty"`
@@ -33,6 +34,13 @@ type deviceReport struct {
 }
 
 type storedReport struct {
+	Received string         `json:"received"`
+	Report   deviceReport   `json:"report"`
+	History  []reportRecord `json:"history,omitempty"`
+}
+
+// reportRecord is one past report, newest first, capped when stored.
+type reportRecord struct {
 	Received string       `json:"received"`
 	Report   deviceReport `json:"report"`
 }
@@ -114,6 +122,15 @@ func (s *server) apiReport(w http.ResponseWriter, r *http.Request) {
 	stored := storedReport{
 		Received: time.Now().UTC().Format(time.RFC3339),
 		Report:   rep,
+	}
+	// Keep a short history so a recovered failure does not vanish from the
+	// device page the moment the next install succeeds.
+	if prev, ok := s.loadReport(rep.Pubkey); ok {
+		record := reportRecord{Received: prev.Received, Report: prev.Report}
+		stored.History = append([]reportRecord{record}, prev.History...)
+		if len(stored.History) > 10 {
+			stored.History = stored.History[:10]
+		}
 	}
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
@@ -201,6 +218,8 @@ func (s *server) loadReport(pubkey string) (*storedReport, bool) {
 // so a report can say functional while carrying a setup error.
 func effectiveStatus(rep deviceReport) (label, class string) {
 	switch {
+	case rep.State == "disabled":
+		return "disabled", ""
 	case rep.Parked:
 		return "parked", "new"
 	case rep.Status == "failed" || rep.Error != "":
@@ -337,6 +356,7 @@ Networking was left working. The install stays on disk and checks for a new rele
 		b.WriteString(`</tbody></table></div>`)
 	}
 
+	b.WriteString(reportHistory(stored.History))
 	if rep.Error != "" {
 		fmt.Fprintf(&b, `<div class="card"><h2>Error</h2><pre class="err">%s</pre></div>`, esc(rep.Error))
 	}
@@ -360,8 +380,13 @@ type deviceRow struct {
 }
 
 var deviceRank = map[string]int{
-	"failed": 0, "parked": 1, "partial": 2, "no report": 3, "unknown": 4, "functional": 5,
+	"failed": 0, "parked": 1, "partial": 2, "disabled": 3, "stale": 4,
+	"no report": 5, "unknown": 6, "functional": 7,
 }
+
+// staleAfter is how long a healthy device may go without reporting before the
+// dashboard treats it as a problem.
+const staleAfter = 72 * time.Hour
 
 func (s *server) deviceRows() []deviceRow {
 	users := s.loadUsers()
@@ -371,6 +396,13 @@ func (s *server) deviceRows() []deviceRow {
 		if stored, ok := s.loadReport(u.Peer); ok {
 			row.Stored = stored
 			row.Label, row.Class = effectiveStatus(stored.Report)
+			if row.Label == "functional" {
+				if t, err := time.Parse(time.RFC3339, stored.Received); err == nil &&
+					time.Since(t) > staleAfter {
+					row.Label = "stale"
+					row.Class = "new"
+				}
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -385,6 +417,13 @@ func (s *server) deviceRows() []deviceRow {
 }
 
 // problemText is the one line a reader needs next to a device's status.
+func (r deviceRow) problem() string {
+	if r.Label == "stale" && r.Stored != nil {
+		return "no report for " + timeAgo(r.Stored.Received)
+	}
+	return problemText(r.Stored.Report)
+}
+
 func problemText(rep deviceReport) string {
 	switch {
 	case rep.Parked:
@@ -395,6 +434,8 @@ func problemText(rep deviceReport) string {
 		return "install failed"
 	case rep.Status == "partial":
 		return "some checks failed"
+	case rep.State == "disabled":
+		return "disabled by the user"
 	}
 	return ""
 }
@@ -412,11 +453,31 @@ func deviceTable(rows []deviceRow) string {
 				build = esc(row.Stored.Report.Version)
 			}
 			when = esc(timeAgo(row.Stored.Received))
-			problem = problemText(row.Stored.Report)
+			problem = row.problem()
 		}
 		fmt.Fprintf(&b, `<tr><td><a href="/admin/reports?user=%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td class="muted">%s</td><td class="problem">%s</td></tr>`,
 			esc(row.Name), esc(row.Name), reportPill(row.Stored), build, when, esc(problem))
 	}
 	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
+// reportHistory renders the recent reports for the device page.
+func reportHistory(history []reportRecord) string {
+	if len(history) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<details class="card"><summary>Earlier reports</summary><div class="table-wrap compact"><table><thead><tr><th>When</th><th>Status</th><th>Build</th><th>Problem</th></tr></thead><tbody>`)
+	for i, rec := range history {
+		if i >= 10 {
+			break
+		}
+		label, class := effectiveStatus(rec.Report)
+		fmt.Fprintf(&b, `<tr><td class="muted">%s</td><td><span class="pill %s">%s</span></td><td>%s</td><td class="problem">%s</td></tr>`,
+			esc(timeAgo(rec.Received)), class, esc(label), esc(rec.Report.Version),
+			esc(problemText(rec.Report)))
+	}
+	b.WriteString(`</tbody></table></div></details>`)
 	return b.String()
 }

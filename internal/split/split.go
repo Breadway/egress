@@ -23,16 +23,17 @@ const (
 // only acts on names the resolver actually saw, so the profile stays small and
 // relevant to what this machine browses.
 type Controller struct {
-	mu       sync.Mutex
-	profile  *Profile
-	path     string
-	network  string
-	iface    string
-	log      *log.Logger
-	routes   *RouteManager
-	probing  map[string]bool
-	sem      chan struct{}
-	reporter *splitReporter
+	overrides Overrides
+	mu        sync.Mutex
+	profile   *Profile
+	path      string
+	network   string
+	iface     string
+	log       *log.Logger
+	routes    *RouteManager
+	probing   map[string]bool
+	sem       chan struct{}
+	reporter  *splitReporter
 	// blockedIPs remembers which addresses were routed for each domain, so an
 	// allowed verdict can remove exactly those routes.
 	blockedIPs map[string][]string
@@ -47,6 +48,7 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 		sem:        make(chan struct{}, probeParallel),
 		blockedIPs: map[string][]string{},
 	}
+	c.overrides = LoadOverrides(ProfileDir())
 	c.load(network)
 	c.reporter = newSplitReporter(network, ProfileDir(), logger)
 	c.reporter.SetMergeFunc(c.mergeFeed)
@@ -267,6 +269,14 @@ func (c *Controller) refreshProtocols() {
 
 func (c *Controller) mergeFeed(domains []feedDomain, protocols []feedProtocol) {
 	now := time.Now()
+	// A domain pinned direct locally is never pulled in by the shared table.
+	filtered := domains[:0]
+	for _, d := range domains {
+		if !c.overrides.Allowed(d.Domain) {
+			filtered = append(filtered, d)
+		}
+	}
+	domains = filtered
 	c.mu.Lock()
 	added := mergeFeedDomains(c.profile, domains, now)
 	protos := mergeProtocols(c.profile, protocols)
@@ -280,7 +290,10 @@ func (c *Controller) mergeFeed(domains []feedDomain, protocols []feedProtocol) {
 	if protos > 0 {
 		c.log.Printf("split: %.0f protocol observations merged", float64(protos))
 	}
-	c.resolveConflicts(domains)
+	// Do not re-check a domain the operator pinned.
+	if len(domains) > 0 {
+		c.resolveConflicts(domains)
+	}
 }
 
 // resolveConflicts answers the server's re-check or verification request for
@@ -320,6 +333,9 @@ func (c *Controller) resolveConflicts(domains []feedDomain) {
 // report; it does not need to be the same client that added the entry.
 func (c *Controller) refreshSites(due []feedDomain) {
 	for _, d := range due {
+		if c.overrides.Allowed(d.Domain) {
+			continue
+		}
 		go func(domain string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()

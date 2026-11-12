@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=egress-socks
 Group=egress-socks
-ExecStart=/usr/local/bin/socksrelay --listen=127.0.0.1:7109 --auth-file=/etc/egress-socks/auth --limit-mbps=10
+ExecStart=/usr/local/bin/socksrelay --listen=127.0.0.1:7109 --auth-file=/etc/egress-socks/auth --limit-mbps=20 --limit-mbps-per-user=5 --owner-user=egress-owner --owner-mbps=20 --usage-file=/var/lib/egress-socks/usage.json
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes

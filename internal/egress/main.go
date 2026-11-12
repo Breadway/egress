@@ -4,6 +4,7 @@ import (
 	"context"
 	"egress/internal/doh"
 	"egress/internal/split"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -490,6 +491,9 @@ func cmdSupervise(args []string) error {
 	}
 	sup := newSupervisor(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
 	sup.iface, sup.gateway = iface, gateway
+	// A protocol picture shared by another device on this network may already
+	// say UDP is blocked; start on the relay instead of failing over.
+	sup.preferRelay = split.UDPBlocked(split.NetworkKey("", gateway))
 	sup.split = splitter
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -560,6 +564,7 @@ func cmdDisable(args []string) error {
 	if err := plat.Disable(); err != nil {
 		return err
 	}
+	reportState("disabled", "partial", "disabled by the user")
 	fmt.Println("egress disabled; DNS and routing are back to the system defaults")
 	return nil
 }
@@ -590,6 +595,7 @@ func cmdEnable(args []string) error {
 	if err := installUpdateTimer(updatePollInterval); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
 	}
+	reportState("installed", "functional", "")
 	fmt.Println("egress enabled")
 	return nil
 }
@@ -681,6 +687,34 @@ func ensureInstalledBinary() (string, error) {
 	}
 	_ = os.Remove(tmp)
 	return "", fmt.Errorf("replace %s: %w", dest, renameErr)
+}
+
+// reportState tells the fleet view that a device was disabled or enabled
+// without going through install. Best effort: a report must never fail the
+// command.
+func reportState(state, status, msg string) {
+	id, err := loadDeviceIdentity()
+	if err != nil || id.Pubkey == "" {
+		return
+	}
+	payload := reportPayload{
+		Pubkey:  id.Pubkey,
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
+		IP:      id.IP,
+		Version: reportVersion(),
+		Status:  status,
+		State:   state,
+		Error:   msg,
+		TS:      time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if err := sendReport(data); err != nil {
+		debugf("state report unsent: %v", err)
+	}
 }
 
 // removeInstalledBinary deletes the canonical install path unless that is the

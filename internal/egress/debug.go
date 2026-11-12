@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"egress/internal/logx"
+	"egress/internal/split"
 )
 
 func appLogger() *log.Logger { return logx.Logger() }
@@ -40,7 +41,17 @@ func writeDiagnose(w io.Writer) error {
 		fmt.Fprintf(w, "  log: %s\n", path)
 	}
 	fmt.Fprintln(w, "  (run as root/Administrator for the WireGuard and listener sections)")
-	return writeDiagnosePlatform(w)
+	if err := writeDiagnosePlatform(w); err != nil {
+		return err
+	}
+	section(w, "split")
+	for _, line := range split.ProfileSummary(split.ProfileDir()) {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+	for _, line := range split.OverrideSummary(split.ProfileDir()) {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+	return nil
 }
 
 func section(w io.Writer, name string) {

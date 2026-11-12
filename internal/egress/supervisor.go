@@ -33,6 +33,9 @@ type supervisor struct {
 
 	manageTunnel   bool
 	manageFallback bool
+	// preferRelay starts the loop on the WebSocket path because the stored
+	// protocol picture says UDP is blocked on this network.
+	preferRelay bool
 
 	iface   string
 	gateway string
@@ -104,7 +107,18 @@ func (s *supervisor) Run(ctx context.Context) error {
 func (s *supervisor) loop(ctx context.Context) error {
 	state := pathUDP
 	failures := 0
-	var lastTrial time.Time
+	if s.preferRelay && s.manageFallback {
+		if err := s.enterWebSocket(ctx); err != nil {
+			s.log.Printf("relay start failed, trying udp: %v", err)
+		} else {
+			state = pathWebSocket
+			s.log.Printf("starting on the websocket path: the profile says udp is blocked")
+		}
+	}
+	lastTrial := time.Time{}
+	if state == pathWebSocket {
+		lastTrial = time.Now()
+	}
 	var lastDNSCheck time.Time
 
 	if !s.plat.TunnelUp() {

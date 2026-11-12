@@ -722,3 +722,26 @@ func TestProtocolsFlushWithoutDomains(t *testing.T) {
 		t.Fatalf("protocols resent without a change: %+v", got)
 	}
 }
+
+func TestOverridesBeatProbingAndFeed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "split-allow.txt"), []byte("# pinned direct\nok.example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "split-block.txt"), []byte("bad.example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	o := LoadOverrides(dir)
+	if state, ok := o.Forced("ok.example"); !ok || state != StateAllowed {
+		t.Fatalf("allow override: %v %v", state, ok)
+	}
+	if state, ok := o.Forced("bad.example"); !ok || state != StateBlocked {
+		t.Fatalf("block override: %v %v", state, ok)
+	}
+	if _, ok := o.Forced("other.example"); ok {
+		t.Fatal("override applied to an unrelated domain")
+	}
+	if got := OverrideSummary(dir); len(got) != 2 {
+		t.Fatalf("summary: %v", got)
+	}
+}

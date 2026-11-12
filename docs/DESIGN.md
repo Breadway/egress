@@ -64,6 +64,22 @@ Entries not seen for 30 days are dropped. Only evidence strings and hashed
 network ids are stored; no device identifiers, browsing history, or plaintext
 SSIDs.
 
+### Operator controls and visibility
+
+- `split-allow.txt` pins domains direct and `split-block.txt` forces them
+  through the tunnel. Both live in the split profile directory and beat
+  probing, the shared table and re-checks, so a wrong classification does not
+  need a release.
+- `disable` and `enable` report their state, so the fleet view does not keep
+  showing a stale install.
+- The device page keeps the last ten reports, and a healthy device that has
+  not reported for three days is shown as stale rather than functional.
+- The admin Relay page lists per-device credentials, their relayed volume and
+  offers rotate or revoke. The relay reloads its auth file on change, so a
+  revocation takes effect within 30 seconds.
+- The supervisor starts on the WebSocket path when the stored protocol picture
+  says UDP is blocked, instead of failing over first.
+
 Relay credentials are per device. `new-device.sh` creates a user:password pair
 on the relay and embeds it in that device's build, and `remove-device.sh`
 removes the pair along with the peer, so revoking a device stops its relay

@@ -173,6 +173,7 @@ func main() {
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
 	s.mux.HandleFunc("/admin/reports", s.adminReports)
 	s.mux.HandleFunc("/admin/split", s.adminSplit)
+	s.mux.HandleFunc("/admin/relay", s.adminRelay)
 	s.mux.HandleFunc("/admin/api/pending", s.adminPending)
 	s.mux.HandleFunc("/admin/api/claim", s.adminClaim)
 	s.mux.HandleFunc("/admin/api/release", s.adminRelease)
@@ -673,7 +674,9 @@ func adminSubnav(active string) string {
 	return `<div class="subnav">` +
 		item("/admin", "Overview", "overview") +
 		item("/admin/applications", "Applications", "applications") +
-		item("/admin/users", "Logins", "users") + `</div>`
+		item("/admin/users", "Logins", "users") +
+		item("/admin/relay", "Relay", "relay") +
+		item("/admin/split", "Split feed", "split") + `</div>`
 }
 
 // ---------------------------------------------------------------- landing ---
@@ -1160,13 +1163,15 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rows := s.deviceRows()
-	var failed, parked int
+	var failed, parked, stale int
 	for _, row := range rows {
 		switch row.Label {
 		case "failed":
 			failed++
 		case "parked":
 			parked++
+		case "stale":
+			stale++
 		}
 	}
 
@@ -1182,8 +1187,8 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 %s`,
 		s.csrfToken(r), adminSubnav("overview"),
 		pending,
-		statClass(failed+parked), len(rows),
-		attentionAlert(failed, parked),
+		statClass(failed+parked+stale), len(rows),
+		attentionAlert(failed, parked, stale),
 		deviceTable(rows))
 	s.renderNav(w, true, "admin", "Admin", body)
 }
@@ -1198,13 +1203,19 @@ func statClass(bad int) string {
 
 // attentionAlert names the counts so the dashboard answers "is anything wrong"
 // before any table is read.
-func attentionAlert(failed, parked int) string {
+func attentionAlert(failed, parked, stale int) string {
+	if stale > 0 {
+		// fall through to the generic builder below
+	}
 	var parts []string
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failed))
 	}
 	if parked > 0 {
 		parts = append(parts, fmt.Sprintf("%d parked", parked))
+	}
+	if stale > 0 {
+		parts = append(parts, fmt.Sprintf("%d stale", stale))
 	}
 	if len(parts) == 0 {
 		return `<div class="alert ok">Every device reported a working install.</div>`
