@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,9 +67,6 @@ func cmdUpdate(args []string) error {
 
 	if err := newPlatform().RequirePrivilege(); err != nil {
 		return err
-	}
-	if runtime.GOOS == "windows" {
-		return errors.New("applying an update from a running Windows client needs the scheduled-task pass, which is not built yet")
 	}
 	if err := applyUpdate(*base, m, pub); err != nil {
 		return err
@@ -143,6 +139,12 @@ func applyUpdate(base string, m UpdateManifest, pub ed25519.PublicKey) error {
 	}
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		return err
+	}
+
+	if runtime.GOOS == "windows" {
+		// The running executable is locked; a scheduled task applies it after
+		// this process exits.
+		return stageWindowsUpdate(m, tmpPath)
 	}
 
 	// Keep a backup so a broken release can be rolled back without a second

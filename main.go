@@ -83,6 +83,8 @@ func realMain() error {
 		return cmdUpdateSign(args)
 	case "update-keygen":
 		return cmdUpdateKeygen(args)
+	case "update-apply":
+		return cmdUpdateApply(args)
 	case "diagnose":
 		return cmdDiagnose(args)
 	case "pubkey", "key":
