@@ -180,8 +180,15 @@ func ProfileDir() string {
 	}
 }
 
-// ProfilePath is the file for one network key.
+// ProfilePath is the file for one network key in the system state directory.
 func ProfilePath(network string) string {
+	return ProfilePathIn(ProfileDir(), network)
+}
+
+// ProfilePathIn is the file for one network key in a caller-provided directory.
+// The per-user proxy keeps its own profile so it can write without the SYSTEM
+// directory's permissions.
+func ProfilePathIn(dir, network string) string {
 	safe := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -195,7 +202,15 @@ func ProfilePath(network string) string {
 	if safe == "" {
 		safe = "unknown"
 	}
-	return filepath.Join(ProfileDir(), "split-"+safe+".json")
+	return filepath.Join(dir, "split-"+safe+".json")
+}
+
+// ProxyDir is the per-user state directory for the split proxy and tray.
+func ProxyDir() string {
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, "egress")
+	}
+	return "."
 }
 
 // LoadProfile reads the profile for a network. A missing file is a fresh one.
