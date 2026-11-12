@@ -320,7 +320,7 @@ func (windowsPlatform) EnsureDNS(iface, gateway string) error {
 
 func (windowsPlatform) InstallService(exePath string, args []string) error {
 	debugf("scheduled task command: %s %s", exePath, strings.Join(args, " "))
-	script, err := windowsTaskScript(winTaskName, exePath, strings.Join(args, " "), winTriggerStartup, true)
+	script, err := windowsTaskScript(winTaskName, exePath, strings.Join(args, " "), winTriggerStartup, systemPrincipal, true)
 	if err != nil {
 		return err
 	}

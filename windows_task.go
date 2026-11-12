@@ -11,7 +11,20 @@ const (
 	winTriggerStartup = "New-ScheduledTaskTrigger -AtStartup"
 	winTriggerLogon   = "New-ScheduledTaskTrigger -AtLogOn"
 	winTriggerDaily   = "New-ScheduledTaskTrigger -Daily -At 3am"
+
+	// systemPrincipal runs a task as SYSTEM whether or not anyone is logged
+	// on. userPrincipal runs in one account's own session, which is where the
+	// proxy settings and the tray belong.
+	systemPrincipal = "New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest"
 )
+
+// userPrincipal runs a task in an interactive user's session with their
+// normal, filtered token. Used for the one-shot step that writes that user's
+// proxy settings, which must not happen in SYSTEM's profile.
+func userPrincipal(user string) string {
+	return "New-ScheduledTaskPrincipal -UserId " + psQuote(user) +
+		" -LogonType Interactive -RunLevel Limited"
+}
 
 // winTriggerRepeat fires shortly after registration and then every interval.
 // Ten years stands in for "indefinitely": Task Scheduler rejects some larger
@@ -43,9 +56,9 @@ func psQuote(s string) string {
 // power, and stop when the machine switches to battery. The explicit settings
 // here also optionally restart the task if it exits unexpectedly, which a
 // long-running supervisor wants and a one-shot update check does not.
-func windowsTaskScript(name, exe, args, trigger string, restart bool) (string, error) {
-	if trigger == "" {
-		return "", errors.New("missing task trigger")
+func windowsTaskScript(name, exe, args, trigger, principal string, restart bool) (string, error) {
+	if trigger == "" || principal == "" {
+		return "", errors.New("missing task trigger or principal")
 	}
 
 	action := "New-ScheduledTaskAction -Execute " + psQuote(exe)
@@ -61,7 +74,7 @@ func windowsTaskScript(name, exe, args, trigger string, restart bool) (string, e
 	return "$ErrorActionPreference = 'Stop'\n" +
 		"$a = " + action + "\n" +
 		"$t = " + trigger + "\n" +
-		"$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest\n" +
+		"$p = " + principal + "\n" +
 		"$s = " + settings + "\n" +
 		"Register-ScheduledTask -TaskName " + psQuote(name) +
 		" -Action $a -Trigger $t -Principal $p -Settings $s -Force -ErrorAction Stop | Out-Null\n", nil

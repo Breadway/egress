@@ -86,6 +86,8 @@ func realMain() error {
 		return cmdUpdateKeygen(args)
 	case "update-apply":
 		return cmdUpdateApply(args)
+	case "split-user":
+		return cmdSplitUser(args)
 	case "diagnose":
 		return cmdDiagnose(args)
 	case "pubkey", "key":

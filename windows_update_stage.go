@@ -36,7 +36,7 @@ func stageWindowsUpdate(m UpdateManifest, stagedSource string) error {
 	// separately, so no shell quoting is involved.
 	applyArgs := fmt.Sprintf(`update-apply --staged "%s" --task %s --delay 8s%s`,
 		staged, windowsUpdateTask, splitArg)
-	taskScript, err := windowsTaskScript(windowsUpdateTask, staged, applyArgs, winTriggerLogon, false)
+	taskScript, err := windowsTaskScript(windowsUpdateTask, staged, applyArgs, winTriggerLogon, systemPrincipal, false)
 	if err != nil {
 		return err
 	}

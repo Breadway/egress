@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
 
 func TestWindowsTaskScriptPowerSettings(t *testing.T) {
-	script, err := windowsTaskScript("egress", `C:\ProgramData\egress\egress.exe`, "supervise --debug", winTriggerStartup, true)
+	script, err := windowsTaskScript("egress", `C:\ProgramData\egress\egress.exe`, "supervise --debug", winTriggerStartup, systemPrincipal, true)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
@@ -32,7 +34,7 @@ func TestWindowsTaskScriptPowerSettings(t *testing.T) {
 }
 
 func TestWindowsTaskScriptOneShotHasNoRestart(t *testing.T) {
-	script, err := windowsTaskScript("egress-update-apply", `C:\x.exe`, "update-apply", winTriggerLogon, false)
+	script, err := windowsTaskScript("egress-update-apply", `C:\x.exe`, "update-apply", winTriggerLogon, systemPrincipal, false)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
@@ -42,7 +44,7 @@ func TestWindowsTaskScriptOneShotHasNoRestart(t *testing.T) {
 }
 
 func TestWindowsTaskScriptQuoting(t *testing.T) {
-	script, err := windowsTaskScript("t", `C:\it's\exe.exe`, `update --staged "C:\a b\egress.exe"`, winTriggerLogon, false)
+	script, err := windowsTaskScript("t", `C:\it's\exe.exe`, `update --staged "C:\a b\egress.exe"`, winTriggerLogon, systemPrincipal, false)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
@@ -55,7 +57,7 @@ func TestWindowsTaskScriptQuoting(t *testing.T) {
 }
 
 func TestWindowsTaskScriptDailyAndRepeat(t *testing.T) {
-	script, err := windowsTaskScript("egress-update-check", `C:\x.exe`, "update --apply", winTriggerDaily, false)
+	script, err := windowsTaskScript("egress-update-check", `C:\x.exe`, "update --apply", winTriggerDaily, systemPrincipal, false)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
@@ -74,8 +76,62 @@ func TestWindowsTaskScriptDailyAndRepeat(t *testing.T) {
 		}
 	}
 
-	if _, err := windowsTaskScript("t", "x", "", "", false); err == nil {
+	if _, err := windowsTaskScript("t", "x", "", "", systemPrincipal, false); err == nil {
 		t.Error("empty trigger accepted")
+	}
+}
+
+func TestUserPrincipalTaskScript(t *testing.T) {
+	args := `split-user --exe "C:\ProgramData\egress\egress.exe" --auth "C:\ProgramData\egress\proxy\socks-auth"`
+	script, err := windowsTaskScript("egress-split-user", `C:\ProgramData\egress\egress.exe`, args,
+		"New-ScheduledTaskTrigger -Once -At (Get-Date)", userPrincipal(`DESKTOP-1\ethan`), false)
+	if err != nil {
+		t.Fatalf("script: %v", err)
+	}
+	for _, want := range []string{
+		"New-ScheduledTaskPrincipal -UserId 'DESKTOP-1\\ethan'",
+		"-LogonType Interactive",
+		"-RunLevel Limited",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("missing %q in:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "ServiceAccount") {
+		t.Errorf("per-user task runs as SYSTEM:\n%s", script)
+	}
+}
+
+func TestBuildReportParkedIsFailed(t *testing.T) {
+	results := checkResults{Tunnel: "skipped", Probe: "skipped"}
+	data, err := buildReport(tunnelConfig{}, results, errors.New("split client setup failed"), true)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["status"] != "failed" {
+		t.Errorf("status = %v, want failed (a parked install is not healthy)", got["status"])
+	}
+	if got["parked"] != true {
+		t.Errorf("parked = %v, want true", got["parked"])
+	}
+
+	ok, err := buildReport(tunnelConfig{}, results, nil, false)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	got = map[string]any{}
+	if err := json.Unmarshal(ok, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["status"] == "failed" {
+		t.Errorf("clean install reported failed: %v", got["status"])
+	}
+	if _, present := got["parked"]; present {
+		t.Errorf("clean install reported parked")
 	}
 }
 

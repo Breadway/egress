@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,20 +27,40 @@ func configureWindowsSplit() error {
 	if err := writeSocksAuth(authPath, user, pass); err != nil {
 		return err
 	}
-	if err := installProxyAutostart(authPath, "127.0.0.1:1080"); err != nil {
-		return err
-	}
-	if err := setUserPAC("http://127.0.0.1:1081/proxy.pac"); err != nil {
-		return err
-	}
-	// The install directory is SYSTEM/Administrators only. A tray launched
-	// unelevated at login runs with a filtered token, so grant this account
-	// read and execute on the two binaries it needs. The directory stays
-	// locked; write access is unchanged.
+	// The install directory is SYSTEM/Administrators only, and the tray runs
+	// with the user's own token, so grant read and execute on what it needs.
+	// The directory stays locked; write access is unchanged.
 	for _, path := range []string{exe, filepath.Join(filepath.Dir(exe), "wstunnel.exe")} {
 		if err := grantUserExecute(path); err != nil {
 			return err
 		}
+	}
+	// The proxy, its PAC and its login entry belong to the logged-in user, so
+	// they must be applied in that user's session. An update runs install as
+	// SYSTEM, and doing it here would write SYSTEM's profile and start a tray
+	// in session 0.
+	if runningAsSystem() {
+		console, err := consoleUser()
+		if err != nil {
+			return err
+		}
+		if console == "" {
+			fmt.Println("no interactive user is logged on; the proxy and PAC will be applied by the next install")
+			return nil
+		}
+		return runSplitUserTask(console, exe, authPath)
+	}
+	return applyUserSplit(exe, authPath)
+}
+
+// applyUserSplit writes the per-user proxy settings and starts the tray. It
+// must run in the target user's session: PAC and the Run key live in HKCU.
+func applyUserSplit(exe, authPath string) error {
+	if err := installProxyAutostart(authPath, proxyListenAddr); err != nil {
+		return err
+	}
+	if err := setUserPAC(pacURL); err != nil {
+		return err
 	}
 	// Start it now without flashing a console window.
 	cmd := exec.Command(exe, "proxy", "--tray", "--start-relay", "--socks-auth", authPath)
@@ -49,18 +68,14 @@ func configureWindowsSplit() error {
 	return cmd.Start()
 }
 
-// grantUserExecute grants the current account read and execute on one file.
+// grantUserExecute lets any interactive account read and run one file. The
+// grantee is a SID: a name lookup fails when the account cannot be resolved,
+// which is what broke an update that ran install as SYSTEM and asked for
+// HOST\SYSTEM (EGRESS-97).
 func grantUserExecute(path string) error {
-	user := os.Getenv("USERNAME")
-	if user == "" {
-		return errors.New("USERNAME is not set")
-	}
-	if domain := os.Getenv("USERDOMAIN"); domain != "" {
-		user = domain + `\` + user
-	}
-	out, err := exec.Command("icacls", path, "/grant", user+":(RX)").CombinedOutput()
+	out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(RX)").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("grant %s: %v: %s", user, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("grant users read on %s: %v: %s", path, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

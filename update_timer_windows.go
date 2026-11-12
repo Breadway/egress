@@ -17,7 +17,7 @@ func installUpdateTimer(interval time.Duration) error {
 	if interval > 0 {
 		trigger = winTriggerRepeat(int(interval.Minutes()))
 	}
-	script, err := windowsTaskScript("egress-update-check", exe, "update --apply", trigger, false)
+	script, err := windowsTaskScript("egress-update-check", exe, "update --apply", trigger, systemPrincipal, false)
 	if err != nil {
 		return err
 	}
