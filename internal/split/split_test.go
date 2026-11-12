@@ -695,3 +695,30 @@ func TestMergeProtocolsKeepsLocalObservation(t *testing.T) {
 		t.Errorf("changed = %d, want 1", changed)
 	}
 }
+
+func TestProtocolsFlushWithoutDomains(t *testing.T) {
+	var got splitReport
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	r := newSplitReporter("net", t.TempDir(), log.New(testWriter{t}, "", 0))
+	r.reportURL = srv.URL
+	r.SetProtocols([]splitProtocolReport{{Protocol: "udp", State: "blocked", Evidence: "no-reply"}})
+	if err := r.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Protocols) != 1 || got.Protocols[0].Protocol != "udp" {
+		t.Fatalf("protocols not sent: %+v", got)
+	}
+	// A second flush with nothing new must not resend them.
+	got = splitReport{}
+	if err := r.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Protocols) != 0 {
+		t.Fatalf("protocols resent without a change: %+v", got)
+	}
+}
