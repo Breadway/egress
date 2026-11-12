@@ -377,6 +377,12 @@ func (p windowsPlatform) Disable() error {
 	_ = runLogged("schtasks", "/delete", "/tn", "egress-update-apply", "/f")
 	removeProxyAutostart()
 	clearUserPAC()
+	stopUserProxy()
+	// A proxy left in WinHTTP or a stale PAC is enough to look offline even
+	// with working DNS. Clear every layer, then flush the resolver cache so
+	// answers learned through 127.0.0.1 are not reused.
+	_ = runLogged("netsh", "winhttp", "reset", "proxy")
+	_ = runLogged("ipconfig", "/flushdns")
 
 	_ = p.StopTunnel()
 	stopWstunnel()
