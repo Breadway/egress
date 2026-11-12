@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/split"
 	"errors"
 	"fmt"
 	"os"
@@ -25,7 +26,7 @@ func cmdProxy(args []string) (err error) {
 	fs := newFlagSet("proxy")
 	listen := fs.String("listen", "127.0.0.1:1081", "local CONNECT proxy and PAC address")
 	relay := fs.String("relay", "127.0.0.1:1080", "local wstunnel forward to the Aegis SOCKS relay")
-	authPath := fs.String("socks-auth", filepath.Join(ProxyDir(), "socks-auth"), "file with user:password for the relay")
+	authPath := fs.String("socks-auth", filepath.Join(split.ProfileDir(), "socks-auth"), "file with user:password for the relay")
 	userFlag := fs.String("socks-user", "", "relay username (overrides the auth file)")
 	passFlag := fs.String("socks-pass", "", "relay password (overrides the auth file)")
 	tray := fs.Bool("tray", false, "show the Windows tray icon")
@@ -66,7 +67,7 @@ func cmdProxy(args []string) (err error) {
 	if err != nil {
 		appLogger().Printf("proxy: no default route yet (%v)", err)
 	}
-	p := newSplitProxy(NetworkKey("", gateway), ProxyDir(), *listen, *relay, user, pass, appLogger())
+	p := split.NewProxy(split.NetworkKey("", gateway), split.ProfileDir(), *listen, *relay, user, pass, appLogger())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -95,15 +96,25 @@ func cmdProxy(args []string) (err error) {
 }
 
 func resolveSocksAuth(path, user, pass string) (string, string) {
-	if user == "" && pass == "" {
-		user, pass = embeddedSocksUser, embeddedSocksPass
-	}
+	// Explicit flags win: `proxy --install` passes a fresh pair.
 	if user != "" && pass != "" {
 		return user, pass
 	}
+	// The file on disk is the device's own credential. It is written at
+	// install and must survive updates, whose generic builds embed only a
+	// bootstrap pair. Preferring the embedded values here would silently
+	// replace a device credential on every auto-update.
+	if u, p, ok := readAuthFile(path); ok {
+		return u, p
+	}
+	return embeddedSocksUser, embeddedSocksPass
+}
+
+// readAuthFile returns the first user:password line, if the file is readable.
+func readAuthFile(path string) (string, string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return user, pass
+		return "", "", false
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -111,10 +122,10 @@ func resolveSocksAuth(path, user, pass string) (string, string) {
 			continue
 		}
 		if u, p, ok := strings.Cut(line, ":"); ok {
-			return u, p
+			return u, p, true
 		}
 	}
-	return user, pass
+	return "", "", false
 }
 
 // startSocksRelay runs the embedded wstunnel client for the SOCKS relay. It is

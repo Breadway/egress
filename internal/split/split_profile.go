@@ -1,17 +1,16 @@
-package egress
+package split
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/binary"
+	"egress/internal/core"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,113 +20,6 @@ import (
 	"sync"
 	"time"
 )
-
-// dnsQueryName returns the first question name from a DNS query, lowercased.
-// Empty on malformed input, which the resolver then ignores.
-func dnsQueryName(query []byte) string {
-	if len(query) < 12 || binary.BigEndian.Uint16(query[4:6]) == 0 {
-		return ""
-	}
-	name, _, ok := dnsNameAt(query, 12)
-	if !ok {
-		return ""
-	}
-	return NormalizeDomain(name)
-}
-
-// dnsNameAt decodes a possibly compressed name starting at off and returns the
-// name plus the offset just past the name in the original position.
-func dnsNameAt(msg []byte, off int) (string, int, bool) {
-	var name []byte
-	next := off
-	jumped := false
-	for steps := 0; steps < 64; steps++ {
-		if off >= len(msg) {
-			return "", 0, false
-		}
-		length := int(msg[off])
-		switch {
-		case length == 0:
-			off++
-			if !jumped {
-				next = off
-			}
-			return string(name), next, true
-		case length&0xc0 == 0xc0:
-			if off+1 >= len(msg) {
-				return "", 0, false
-			}
-			ptr := int(binary.BigEndian.Uint16(msg[off:off+2]) & 0x3fff)
-			if !jumped {
-				next = off + 2
-				jumped = true
-			}
-			if ptr >= len(msg) {
-				return "", 0, false
-			}
-			off = ptr
-		case length&0xc0 != 0:
-			return "", 0, false
-		default:
-			if off+1+length > len(msg) {
-				return "", 0, false
-			}
-			if len(name) > 0 {
-				name = append(name, '.')
-			}
-			name = append(name, msg[off+1:off+1+length]...)
-			off += 1 + length
-		}
-	}
-	return "", 0, false
-}
-
-// dnsAnswerIPv4 extracts A records from a response and the smallest TTL among
-// them. A response with no A records returns nil and a zero TTL.
-func dnsAnswerIPv4(resp []byte) ([]net.IP, time.Duration) {
-	if len(resp) < 12 {
-		return nil, 0
-	}
-	qd := int(binary.BigEndian.Uint16(resp[4:6]))
-	an := int(binary.BigEndian.Uint16(resp[6:8]))
-	off := 12
-	for i := 0; i < qd; i++ {
-		_, next, ok := dnsNameAt(resp, off)
-		if !ok || next+4 > len(resp) {
-			return nil, 0
-		}
-		off = next + 4
-	}
-
-	var ips []net.IP
-	var minTTL uint32
-	for i := 0; i < an; i++ {
-		_, next, ok := dnsNameAt(resp, off)
-		if !ok || next+10 > len(resp) {
-			break
-		}
-		rrType := binary.BigEndian.Uint16(resp[next : next+2])
-		ttl := binary.BigEndian.Uint32(resp[next+4 : next+8])
-		rdlen := int(binary.BigEndian.Uint16(resp[next+8 : next+10]))
-		rdata := next + 10
-		if rdata+rdlen > len(resp) {
-			break
-		}
-		if rrType == 1 && rdlen == 4 {
-			ip := make(net.IP, 4)
-			copy(ip, resp[rdata:rdata+4])
-			ips = append(ips, ip)
-			if minTTL == 0 || ttl < minTTL {
-				minTTL = ttl
-			}
-		}
-		off = rdata + rdlen
-	}
-	if len(ips) == 0 {
-		return nil, 0
-	}
-	return ips, time.Duration(minTTL) * time.Second
-}
 
 const (
 	splitSeedURL     = "https://bypass.breadway.dev/api/seed"
@@ -218,7 +110,7 @@ func (r *splitReporter) Report(domain string, evidence Evidence) {
 	if r.disabled {
 		return
 	}
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" {
 		return
 	}
@@ -282,13 +174,13 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.client.Do(req)
 	if err != nil {
-		debugf("split: report failed, keeping %d queued: %v", len(batch), err)
+		log.Printf("split: report failed, keeping %d queued: %v", len(batch), err)
 		return err
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		debugf("split: report rejected: %s", resp.Status)
+		log.Printf("split: report rejected: %s", resp.Status)
 		return errors.New(resp.Status)
 	}
 	r.mu.Lock()
@@ -296,7 +188,7 @@ func (r *splitReporter) flush(ctx context.Context) error {
 		delete(r.queue, d.Domain)
 	}
 	r.mu.Unlock()
-	debugf("split: reported %d domains for %s", len(batch), network)
+	log.Printf("split: reported %d domains for %s", len(batch), network)
 	return nil
 }
 
@@ -315,20 +207,20 @@ func (r *splitReporter) fetchFeed(ctx context.Context) {
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		debugf("split: feed fetch failed: %v", err)
+		log.Printf("split: feed fetch failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		debugf("split: feed status %s", resp.Status)
+		log.Printf("split: feed status %s", resp.Status)
 		return
 	}
 	var feed feedResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&feed); err != nil {
-		debugf("split: feed decode: %v", err)
+		log.Printf("split: feed decode: %v", err)
 		return
 	}
-	debugf("split: feed has %d domains for %s", len(feed.Domains), network)
+	log.Printf("split: feed has %d domains for %s", len(feed.Domains), network)
 	r.merge(feed.Domains)
 }
 
@@ -355,7 +247,7 @@ func (r *splitReporter) SetMergeFunc(fn func([]feedDomain)) {
 func mergeFeedDomains(p *Profile, domains []feedDomain, now time.Time) int {
 	added := 0
 	for _, d := range domains {
-		domain := NormalizeDomain(d.Domain)
+		domain := core.NormalizeDomain(d.Domain)
 		if !plausibleDomain(domain) || probeIgnoredName(domain) {
 			continue
 		}
@@ -459,11 +351,6 @@ func NewProfile(network string) *Profile {
 	return &Profile{Version: 1, Network: network, Entries: map[string]DomainEntry{}}
 }
 
-// NormalizeDomain lowercases a domain and strips a trailing dot.
-func NormalizeDomain(domain string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
-}
-
 // NetworkKey identifies a network by SSID and gateway. Roaming between APs on
 // the same gateway keeps one profile; a new gateway starts a new one.
 func NetworkKey(ssid, gateway string) string {
@@ -480,7 +367,7 @@ func NetworkKey(ssid, gateway string) string {
 
 // State returns the current state, expiring stale allowed verdicts.
 func (p *Profile) State(domain string, now time.Time) DomainState {
-	entry, ok := p.Entries[NormalizeDomain(domain)]
+	entry, ok := p.Entries[core.NormalizeDomain(domain)]
 	if !ok {
 		return StateUnknown
 	}
@@ -493,7 +380,7 @@ func (p *Profile) State(domain string, now time.Time) DomainState {
 // RecordProbe applies a definitive probe result. Transient failures must not be
 // recorded: the caller only calls this when the classifier is sure.
 func (p *Profile) RecordProbe(domain string, evidence Evidence, blocked bool, now time.Time) {
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" {
 		return
 	}
@@ -530,7 +417,7 @@ func (p *Profile) RecordProbe(domain string, evidence Evidence, blocked bool, no
 // entries. It still counts as a full failure streak so a single later success
 // can clear it.
 func (p *Profile) AddBlocked(domain string, evidence Evidence, now time.Time) {
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" || len(p.Entries) >= maxProfileEntries {
 		return
 	}

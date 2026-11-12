@@ -1,10 +1,11 @@
-package egress
+package split
 
 import (
 	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"egress/internal/core"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -263,17 +264,17 @@ func buildAnswer() []byte {
 func TestDNSQueryName(t *testing.T) {
 	query := []byte{0xab, 0xcd, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0,
 		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
-	if got := dnsQueryName(query); got != "example.com" {
+	if got := core.DNSQueryName(query); got != "example.com" {
 		t.Errorf("query name: %q", got)
 	}
-	if got := dnsQueryName(nil); got != "" {
+	if got := core.DNSQueryName(nil); got != "" {
 		t.Errorf("nil query should be empty, got %q", got)
 	}
 }
 
 func TestDNSAnswerIPv4(t *testing.T) {
 	resp := buildAnswer()
-	ips, ttl := dnsAnswerIPv4(resp)
+	ips, ttl := core.DNSAnswerIPv4(resp)
 	if len(ips) != 1 || !ips[0].Equal(net.IPv4(93, 184, 216, 34)) {
 		t.Fatalf("ips: %v", ips)
 	}
@@ -284,7 +285,7 @@ func TestDNSAnswerIPv4(t *testing.T) {
 
 func TestRouteManagerAddCleanup(t *testing.T) {
 	var calls [][]string
-	rm := &routeManager{
+	rm := &RouteManager{
 		dev:    "wg0",
 		log:    log.New(testWriter{t}, "", 0),
 		routes: map[string]time.Time{},
@@ -309,7 +310,7 @@ func TestRouteManagerAddCleanup(t *testing.T) {
 
 func TestRouteManagerRemove(t *testing.T) {
 	var calls [][]string
-	rm := &routeManager{
+	rm := &RouteManager{
 		dev:    "wg0",
 		log:    log.New(testWriter{t}, "", 0),
 		routes: map[string]time.Time{},
@@ -337,7 +338,7 @@ func TestRouteManagerRemove(t *testing.T) {
 
 func TestSplitControllerRoutesBlockedDomain(t *testing.T) {
 	var calls [][]string
-	rm := &routeManager{
+	rm := &RouteManager{
 		dev:    "wg0",
 		log:    log.New(testWriter{t}, "", 0),
 		routes: map[string]time.Time{},
@@ -346,7 +347,7 @@ func TestSplitControllerRoutesBlockedDomain(t *testing.T) {
 			return nil
 		},
 	}
-	c := newSplitController("testnet", "wlan0", rm, log.New(testWriter{t}, "", 0))
+	c := NewController("testnet", "wlan0", rm, log.New(testWriter{t}, "", 0))
 	now := time.Now()
 	c.profile = NewProfile("testnet")
 	c.profile.AddBlocked("discord.com", EvidenceSeed, now)
@@ -468,7 +469,7 @@ func TestReporterFeedFetch(t *testing.T) {
 }
 
 func TestPACScript(t *testing.T) {
-	script := pacScript("127.0.0.1:1081")
+	script := PacScript("127.0.0.1:1081")
 	if !strings.Contains(script, "PROXY 127.0.0.1:1081; DIRECT") {
 		t.Fatalf("pac: %s", script)
 	}
@@ -550,7 +551,7 @@ func itoa(n int) string {
 
 func TestProxyDecidesAndRecords(t *testing.T) {
 	dir := t.TempDir()
-	p := newSplitProxy("net", dir, "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
+	p := NewProxy("net", dir, "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
 	calls := 0
 	p.probe = func(ctx context.Context, domain string, opts ProbeOptions) ProbeResult {
 		calls++
@@ -589,7 +590,7 @@ func TestProxyConnectDirect(t *testing.T) {
 		_, _ = io.Copy(conn, conn)
 	}()
 
-	p := newSplitProxy("net", t.TempDir(), "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
+	p := NewProxy("net", t.TempDir(), "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
 	p.probe = func(ctx context.Context, domain string, opts ProbeOptions) ProbeResult {
 		return ProbeResult{Domain: domain, State: StateAllowed}
 	}
@@ -630,7 +631,7 @@ func TestProxyForwardsPlainHTTP(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p := newSplitProxy("net", t.TempDir(), "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
+	p := NewProxy("net", t.TempDir(), "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
 	p.probe = func(ctx context.Context, domain string, opts ProbeOptions) ProbeResult {
 		return ProbeResult{Domain: domain, State: StateAllowed}
 	}

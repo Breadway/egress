@@ -4,6 +4,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/split"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,7 +118,7 @@ func stopUserProxy() {
 // removeProxyAutostart drops the per-user Run entry and its launcher.
 func removeProxyAutostart() {
 	_ = regDeleteValue(`Software\Microsoft\Windows\CurrentVersion\Run`, "egress")
-	_ = os.Remove(filepath.Join(ProxyDir(), "launch-tray.vbs"))
+	_ = os.Remove(filepath.Join(split.ProfileDir(), "launch-tray.vbs"))
 }
 
 // setUserPAC points WinINet at the local PAC file so browsers that follow the
@@ -138,7 +139,7 @@ func installProxyAutostart(authPath, relay string) error {
 	if err != nil {
 		return err
 	}
-	dir := ProxyDir()
+	dir := split.ProfileDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
@@ -257,11 +258,11 @@ var (
 // runTray shows the notification icon, refreshes the two RTTs every five
 // seconds, and blocks on the Windows message loop until Exit. It owns the OS
 // thread for the lifetime of the loop.
-func runTray(ctx context.Context, p *splitProxy) error {
+func runTray(ctx context.Context, p *split.Proxy) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	trayPacURL = "http://" + p.listenAddr + "/proxy.pac"
+	trayPacURL = "http://" + p.ListenAddr() + "/proxy.pac"
 	trayPing = []string{"1.1.1.1: ...", "example.com: ..."}
 
 	className, err := syscall.UTF16PtrFromString("egressTrayWindow")

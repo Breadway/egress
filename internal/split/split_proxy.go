@@ -1,10 +1,11 @@
-package egress
+package split
 
 import (
 	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"egress/internal/core"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	probeTimeout   = 5 * time.Second
+	ProbeTimeout   = 5 * time.Second
 	probeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 	maxProbeIPs    = 4
 )
@@ -128,7 +129,7 @@ func (r ProbeResult) String() string {
 // tunnel unless TunnelStatus does, and it returns transient for anything that
 // is not clearly a filter.
 func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeResult {
-	res := ProbeResult{Domain: NormalizeDomain(domain)}
+	res := ProbeResult{Domain: core.NormalizeDomain(domain)}
 	if res.Domain == "" {
 		res.Transient = true
 		res.Err = errors.New("empty domain")
@@ -141,7 +142,7 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
-		timeout = probeTimeout
+		timeout = ProbeTimeout
 	}
 	ua := opts.UserAgent
 	if ua == "" {
@@ -322,7 +323,7 @@ func classifyDialError(err error) (DomainState, Evidence) {
 // be probed or routed. A DNS-only name such as ipv4only.arpa has no HTTPS
 // service, and probing it would mark it blocked forever.
 func probeIgnoredName(domain string) bool {
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" || !strings.Contains(domain, ".") {
 		return true
 	}
@@ -398,14 +399,14 @@ func isCertError(err error) bool {
 	return errors.As(err, &invalid)
 }
 
-// splitProxy is the per-user Windows split client: an HTTP CONNECT proxy that
+// Proxy is the per-user Windows split client: an HTTP CONNECT proxy that
 // decides per destination whether to go direct or through the Aegis relay. It
 // also serves the PAC file the browser points at.
 //
 // Unknown destinations are probed once; the result is stored in the same
 // per-network profile the Linux split mode uses, so both paths learn the same
 // way.
-type splitProxy struct {
+type Proxy struct {
 	listenAddr string
 	relayAddr  string
 	user       string
@@ -425,8 +426,8 @@ type splitProxy struct {
 	relayed atomic.Int64
 }
 
-func newSplitProxy(network, dir, listen, relay, user, pass string, logger *log.Logger) *splitProxy {
-	p := &splitProxy{
+func NewProxy(network, dir, listen, relay, user, pass string, logger *log.Logger) *Proxy {
+	p := &Proxy{
 		listenAddr: listen,
 		relayAddr:  relay,
 		user:       user,
@@ -448,7 +449,10 @@ func newSplitProxy(network, dir, listen, relay, user, pass string, logger *log.L
 	return p
 }
 
-func (p *splitProxy) handler() http.Handler {
+// ListenAddr is where the proxy accepts CONNECT and serves the PAC.
+func (p *Proxy) ListenAddr() string { return p.listenAddr }
+
+func (p *Proxy) handler() http.Handler {
 	// CONNECT requests use authority-form URLs, so a ServeMux would 404 them.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -464,7 +468,7 @@ func (p *splitProxy) handler() http.Handler {
 	})
 }
 
-func (p *splitProxy) Serve(ctx context.Context) error {
+func (p *Proxy) Serve(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              p.listenAddr,
 		Handler:           p.handler(),
@@ -481,7 +485,7 @@ func (p *splitProxy) Serve(ctx context.Context) error {
 	return err
 }
 
-func pacScript(listen string) string {
+func PacScript(listen string) string {
 	return fmt.Sprintf(`function FindProxyForURL(url, host) {
   // Every request goes to the local proxy, which decides per destination
   // whether to go direct or through the Aegis relay.
@@ -490,17 +494,17 @@ func pacScript(listen string) string {
 `, listen)
 }
 
-func (p *splitProxy) servePAC(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) servePAC(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.WriteString(w, pacScript(p.listenAddr))
+	_, _ = io.WriteString(w, PacScript(p.listenAddr))
 }
 
 // serveHTTP forwards a plain http request. A browser configured for a proxy
 // sends these as absolute URLs rather than a CONNECT tunnel, and Windows'
 // connectivity probe is one of them, so dropping them reports the machine as
 // offline even though https still works (EGRESS-99).
-func (p *splitProxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
@@ -522,7 +526,7 @@ func (p *splitProxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	out.Header.Del("Proxy-Authorization")
 	resp, err := transport.RoundTrip(out)
 	if err != nil {
-		debugf("proxy: %s (%s): %v", r.URL.Host, mode, err)
+		log.Printf("proxy: %s (%s): %v", r.URL.Host, mode, err)
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -537,7 +541,7 @@ func (p *splitProxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveConnect tunnels https and other protocols after a CONNECT request.
-func (p *splitProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodConnect {
 		http.Error(w, "this proxy only supports CONNECT", http.StatusMethodNotAllowed)
 		return
@@ -560,7 +564,7 @@ func (p *splitProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		p.direct.Add(1)
 	}
 	if err != nil {
-		debugf("proxy: %s (%s): %v", r.Host, mode, err)
+		log.Printf("proxy: %s (%s): %v", r.Host, mode, err)
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -594,8 +598,8 @@ func (p *splitProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 
 // decide returns the state for one destination, probing unknown names once and
 // recording the result.
-func (p *splitProxy) decide(ctx context.Context, host string) DomainState {
-	host = NormalizeDomain(host)
+func (p *Proxy) decide(ctx context.Context, host string) DomainState {
+	host = core.NormalizeDomain(host)
 	now := time.Now()
 	p.mu.Lock()
 	state := p.profile.State(host, now)
@@ -624,8 +628,8 @@ func (p *splitProxy) decide(ctx context.Context, host string) DomainState {
 
 // probeWithConfirm takes a second sample after a weak connect timeout, using
 // the injectable probe so tests can stay offline.
-func (p *splitProxy) probeWithConfirm(ctx context.Context, host string) ProbeResult {
-	first := p.probe(ctx, host, ProbeOptions{Timeout: probeTimeout})
+func (p *Proxy) probeWithConfirm(ctx context.Context, host string) ProbeResult {
+	first := p.probe(ctx, host, ProbeOptions{Timeout: ProbeTimeout})
 	if !first.Weak {
 		return first
 	}
@@ -634,13 +638,13 @@ func (p *splitProxy) probeWithConfirm(ctx context.Context, host string) ProbeRes
 	case <-ctx.Done():
 		return first
 	}
-	second := p.probe(ctx, host, ProbeOptions{Timeout: probeTimeout})
+	second := p.probe(ctx, host, ProbeOptions{Timeout: ProbeTimeout})
 	combined := combineProbeSamples(first, second)
 	combined.Confirmed = true
 	return combined
 }
 
-func (p *splitProxy) stats() (direct, relayed int64) {
+func (p *Proxy) stats() (direct, relayed int64) {
 	return p.direct.Load(), p.relayed.Load()
 }
 

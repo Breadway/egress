@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/doh"
 	"log"
 	"os"
 	"sync/atomic"
@@ -54,7 +55,7 @@ func (f *dnsWatchdogFake) InstallWstunnel() (string, error)      { return "", ni
 // resolver: without it a DHCP renew silently drops protection.
 func TestDNSLoopMaintainsResolver(t *testing.T) {
 	fake := &dnsWatchdogFake{routes: []Route{{Iface: "eth0", Gateway: "192.168.1.1"}}}
-	resolver := newDoHResolver("", log.New(os.Stderr, "test: ", 0))
+	resolver := doh.New("", log.New(os.Stderr, "test: ", 0))
 	wst := newWstunnelProc("", log.New(os.Stderr, "test: ", 0))
 	s := newSupervisor(fake, resolver, wst, log.New(os.Stderr, "test: ", 0), false, false)
 	s.iface, s.gateway = "eth0", "192.168.1.1"

@@ -1,8 +1,8 @@
-package egress
+package split
 
 import (
 	"context"
-	"errors"
+	"egress/internal/core"
 	"fmt"
 	"log"
 	"net"
@@ -12,32 +12,6 @@ import (
 	"time"
 )
 
-// cmdProbe classifies domains over the direct path without changing routes or
-// the tunnel. On Linux, --interface pins the probe to the physical link while
-// the full tunnel is up.
-func cmdProbe(args []string) error {
-	fs := newFlagSet("probe")
-	iface := fs.String("interface", "", "bind probes to this interface (Linux)")
-	timeout := fs.Duration("timeout", probeTimeout, "per-probe timeout")
-	debug := fs.Bool("debug", false, "trace")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	setupLogging(resolveDebug(*debug))
-
-	domains := fs.Args()
-	if len(domains) == 0 {
-		return errors.New("usage: egress probe [--interface wlan0] [--timeout 5s] domain...")
-	}
-	for _, domain := range domains {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*(*timeout))
-		res := ProbeDomain(ctx, domain, ProbeOptions{Interface: *iface, Timeout: *timeout})
-		cancel()
-		fmt.Println(res.String())
-	}
-	return nil
-}
-
 const (
 	probeCooldown = 10 * time.Minute
 	sweepEvery    = 30 * time.Minute
@@ -45,17 +19,17 @@ const (
 	probeParallel = 6
 )
 
-// splitController ties the learned profile to DNS answers and host routes. It
+// Controller ties the learned profile to DNS answers and host routes. It
 // only acts on names the resolver actually saw, so the profile stays small and
 // relevant to what this machine browses.
-type splitController struct {
+type Controller struct {
 	mu       sync.Mutex
 	profile  *Profile
 	path     string
 	network  string
 	iface    string
 	log      *log.Logger
-	routes   *routeManager
+	routes   *RouteManager
 	probing  map[string]bool
 	sem      chan struct{}
 	reporter *splitReporter
@@ -64,8 +38,8 @@ type splitController struct {
 	blockedIPs map[string][]string
 }
 
-func newSplitController(network, iface string, routes *routeManager, logger *log.Logger) *splitController {
-	c := &splitController{
+func NewController(network, iface string, routes *RouteManager, logger *log.Logger) *Controller {
+	c := &Controller{
 		iface:      iface,
 		log:        logger,
 		routes:     routes,
@@ -79,7 +53,7 @@ func newSplitController(network, iface string, routes *routeManager, logger *log
 	return c
 }
 
-func (c *splitController) load(network string) {
+func (c *Controller) load(network string) {
 	path := ProfilePath(network)
 	profile, err := LoadProfile(path, network)
 	if err != nil {
@@ -92,7 +66,7 @@ func (c *splitController) load(network string) {
 }
 
 // SetNetwork switches to another network's profile and drops the old routes.
-func (c *splitController) SetNetwork(network, iface string) {
+func (c *Controller) SetNetwork(network, iface string) {
 	c.mu.Lock()
 	if network == c.network && iface == c.iface {
 		c.mu.Unlock()
@@ -114,11 +88,11 @@ func (c *splitController) SetNetwork(network, iface string) {
 // HandleAnswer is called for every DNS answer the listener forwards. Blocked
 // names get host routes immediately; unknown names are probed in the
 // background so the next visit can be routed.
-func (c *splitController) HandleAnswer(domain string, ips []net.IP, ttl time.Duration) {
+func (c *Controller) HandleAnswer(domain string, ips []net.IP, ttl time.Duration) {
 	if len(ips) == 0 {
 		return
 	}
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" || probeIgnoredName(domain) {
 		return
 	}
@@ -139,7 +113,7 @@ func (c *splitController) HandleAnswer(domain string, ips []net.IP, ttl time.Dur
 	c.startProbe(domain, probeCooldown)
 }
 
-func (c *splitController) startProbe(domain string, minAge time.Duration) {
+func (c *Controller) startProbe(domain string, minAge time.Duration) {
 	if probeIgnoredName(domain) {
 		return
 	}
@@ -159,11 +133,11 @@ func (c *splitController) startProbe(domain string, minAge time.Duration) {
 	go c.probe(domain)
 }
 
-func (c *splitController) probe(domain string) {
+func (c *Controller) probe(domain string) {
 	c.sem <- struct{}{}
 	res := ProbeConfirmed(context.Background(), domain, ProbeOptions{
 		Interface: c.iface,
-		Timeout:   probeTimeout,
+		Timeout:   ProbeTimeout,
 	})
 	<-c.sem
 
@@ -196,19 +170,19 @@ func (c *splitController) probe(domain string) {
 	if len(remove) > 0 {
 		c.routes.Remove(remove)
 	}
-	debugf("split: probe %s", res.String())
+	log.Printf("split: probe %s", res.String())
 }
 
 // Sweep probes seed candidates that have not been tested recently, so common
 // sites are classified before the first visit on a new network.
-func (c *splitController) Sweep() {
+func (c *Controller) Sweep() {
 	for _, domain := range SeedCandidates() {
-		c.startProbe(NormalizeDomain(domain), sweepMinAge)
+		c.startProbe(core.NormalizeDomain(domain), sweepMinAge)
 	}
 }
 
 // Run keeps the route table tidy and re-sweeps on a timer.
-func (c *splitController) Run(ctx context.Context) {
+func (c *Controller) Run(ctx context.Context) {
 	clean := time.NewTicker(routeCleanEvery)
 	defer clean.Stop()
 	sweep := time.NewTicker(sweepEvery)
@@ -228,7 +202,7 @@ func (c *splitController) Run(ctx context.Context) {
 	}
 }
 
-func (c *splitController) trackIPsLocked(domain string, ips []net.IP) {
+func (c *Controller) trackIPsLocked(domain string, ips []net.IP) {
 	if c.blockedIPs == nil {
 		c.blockedIPs = map[string][]string{}
 	}
@@ -258,7 +232,7 @@ func parseProbeIPs(raw []string) []net.IP {
 }
 
 // mergeFeed installs domains learned by other devices as blocked entries.
-func (c *splitController) mergeFeed(domains []feedDomain) {
+func (c *Controller) mergeFeed(domains []feedDomain) {
 	now := time.Now()
 	c.mu.Lock()
 	added := mergeFeedDomains(c.profile, domains, now)
@@ -271,24 +245,24 @@ func (c *splitController) mergeFeed(domains []feedDomain) {
 	}
 }
 
-func (c *splitController) saveLocked() {
+func (c *Controller) saveLocked() {
 	if err := c.profile.Save(c.path); err != nil {
 		c.log.Printf("split: save profile: %v", err)
 	}
 }
 
 // BlockedCount is used by diagnose.
-func (c *splitController) BlockedCount() (domains, routed int) {
+func (c *Controller) BlockedCount() (domains, routed int) {
 	c.mu.Lock()
 	domains = len(c.profile.BlockedDomains(time.Now()))
 	c.mu.Unlock()
 	return domains, c.routes.Count()
 }
 
-// splitEnabled reports split mode. It is unconditional now: routing all
-// traffic through the tunnel was removed so a client can never spend the
-// relay's bandwidth on ordinary browsing.
-func splitEnabled() bool { return true }
+// Enabled reports split mode. It is unconditional: routing all traffic
+// through the tunnel was removed so a client can never spend the relay's
+// bandwidth on ordinary browsing.
+func Enabled() bool { return true }
 
 const (
 	// Route lifetimes. The DNS TTL is honoured with a floor so short TTLs do
@@ -302,10 +276,10 @@ const (
 // routeRunner runs one `ip route` invocation. Tests replace it.
 type routeRunner func(args ...string) error
 
-// routeManager owns the /32 routes that send learned-blocked destinations into
+// RouteManager owns the /32 routes that send learned-blocked destinations into
 // wg0. Routes disappear with the interface, but expiry keeps the table small
 // between network changes.
-type routeManager struct {
+type RouteManager struct {
 	mu     sync.Mutex
 	dev    string
 	log    *log.Logger
@@ -314,8 +288,8 @@ type routeManager struct {
 	order  []string
 }
 
-func newRouteManager(dev string, logger *log.Logger) *routeManager {
-	return &routeManager{
+func NewRouteManager(dev string, logger *log.Logger) *RouteManager {
+	return &RouteManager{
 		dev:    dev,
 		log:    logger,
 		routes: map[string]time.Time{},
@@ -346,7 +320,7 @@ func routeCommands(dev string) routeRunner {
 	}
 }
 
-func (m *routeManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
+func (m *RouteManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
 	if m == nil || m.dev == "" {
 		return
 	}
@@ -377,16 +351,16 @@ func (m *routeManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
 			_ = m.run("del", oldest)
 		}
 		if err := m.run("replace", key); err != nil {
-			debugf("split: route add %s failed: %v", key, err)
+			log.Printf("split: route add %s failed: %v", key, err)
 			continue
 		}
 		m.routes[key] = expiry
 		m.order = append(m.order, key)
-		debugf("split: routed %s via %s until %s", key, m.dev, expiry.Format(time.RFC3339))
+		log.Printf("split: routed %s via %s until %s", key, m.dev, expiry.Format(time.RFC3339))
 	}
 }
 
-func (m *routeManager) Cleanup(now time.Time) {
+func (m *RouteManager) Cleanup(now time.Time) {
 	if m == nil {
 		return
 	}
@@ -410,7 +384,7 @@ func (m *routeManager) Cleanup(now time.Time) {
 
 // Remove deletes specific host routes, used when a domain becomes allowed
 // again.
-func (m *routeManager) Remove(keys []string) {
+func (m *RouteManager) Remove(keys []string) {
 	if m == nil || len(keys) == 0 {
 		return
 	}
@@ -426,7 +400,7 @@ func (m *routeManager) Remove(keys []string) {
 }
 
 // Clear removes every route this manager added, for a network change.
-func (m *routeManager) Clear() {
+func (m *RouteManager) Clear() {
 	if m == nil {
 		return
 	}
@@ -439,7 +413,7 @@ func (m *routeManager) Clear() {
 	m.order = nil
 }
 
-func (m *routeManager) Count() int {
+func (m *RouteManager) Count() int {
 	if m == nil {
 		return 0
 	}

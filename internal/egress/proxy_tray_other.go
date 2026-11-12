@@ -4,10 +4,11 @@ package egress
 
 import (
 	"context"
+	"egress/internal/split"
 	"errors"
 )
 
-func runTray(ctx context.Context, p *splitProxy) error {
+func runTray(ctx context.Context, p *split.Proxy) error {
 	return errors.New("the tray is Windows only; run without --tray")
 }
 
