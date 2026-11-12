@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/doh"
 	"fmt"
 	"log"
 	"net"
@@ -24,7 +25,7 @@ const (
 // one.
 type supervisor struct {
 	plat     platform
-	resolver *dohResolver
+	resolver *doh.Resolver
 	tcfg     tunnelConfig
 	wst      *wstunnelProc
 	log      *log.Logger
@@ -58,7 +59,7 @@ type supervisor struct {
 	split *splitController
 }
 
-func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
+func newSupervisor(plat platform, resolver *doh.Resolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
 	return &supervisor{
 		plat:           plat,
 		resolver:       resolver,
@@ -71,7 +72,7 @@ func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logg
 
 func (s *supervisor) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
-	go func() { errCh <- s.resolver.serve(ctx) }()
+	go func() { errCh <- s.resolver.Serve(ctx) }()
 	if s.split != nil {
 		network := NetworkKey("", s.gateway)
 		s.split.SetNetwork(network, s.iface)

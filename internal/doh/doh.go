@@ -1,9 +1,10 @@
-package egress
+package doh
 
 import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"egress/internal/core"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,7 +18,7 @@ import (
 	"time"
 )
 
-// dohResolver is both the DoH client and the local plain-DNS server on
+// Resolver is both the DoH client and the local plain-DNS server on
 // 127.0.0.1:7103. Queries arrive over UDP or TCP, go out as RFC 8484 POSTs, and
 // the answers come back untouched, so EDNS, DNSSEC and large responses all
 // behave the same way they do upstream.
@@ -27,7 +28,7 @@ import (
 // DoH client independent of whatever DNS the system is currently using, so it
 // cannot deadlock against its own listener, and no per-domain routing rule is
 // needed.
-type dohResolver struct {
+type Resolver struct {
 	url        string
 	listenAddr string
 
@@ -45,20 +46,24 @@ type dohResolver struct {
 	// lookup swaps in tests: production is exchange, tests echo canned
 	// answers so TCP/UDP framing is covered without network.
 	lookup func(context.Context, []byte) ([]byte, error)
+	// Ready and NotReady bookend the serving loop: the installer uses the
+	// marker to prove the process answering is the one it started.
+	Ready    func() error
+	NotReady func()
 	// observer, when set, sees every forwarded answer. Split mode uses it to
 	// learn blocked domains and route their addresses.
 	observer func(domain string, ips []net.IP, ttl time.Duration)
 }
 
-func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
-	r := &dohResolver{
-		url:        dohURL,
-		listenAddr: dohListenAddr,
-		host:       dohHost,
+func New(gateway string, logger *log.Logger) *Resolver {
+	r := &Resolver{
+		url:        core.DoHURL,
+		listenAddr: core.DoHListenAddr,
+		host:       core.DoHHost,
 		gateway:    gateway,
 		// Seed with the known address so the very first query works even if the
 		// gateway resolver is unavailable or slow.
-		addrs: []string{aegisIPv4},
+		addrs: []string{core.AegisIPv4},
 		log:   logger,
 	}
 	transport := r.newTransport()
@@ -69,10 +74,10 @@ func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
 
 // newTransport builds the HTTP/2 DoH transport. A fresh one is installed by
 // Reset when pooled connections stop working.
-func (r *dohResolver) newTransport() *http.Transport {
+func (r *Resolver) newTransport() *http.Transport {
 	return &http.Transport{
 		ForceAttemptHTTP2:     true,
-		TLSClientConfig:       &tls.Config{ServerName: dohHost, MinVersion: tls.VersionTLS12},
+		TLSClientConfig:       &tls.Config{ServerName: core.DoHHost, MinVersion: tls.VersionTLS12},
 		DialContext:           r.dial,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConns:          16,
@@ -82,7 +87,7 @@ func (r *dohResolver) newTransport() *http.Transport {
 	}
 }
 
-func (r *dohResolver) SetGateway(gateway string) {
+func (r *Resolver) SetGateway(gateway string) {
 	if gateway == "" {
 		return
 	}
@@ -94,7 +99,7 @@ func (r *dohResolver) SetGateway(gateway string) {
 // CloseIdle drops pooled DoH connections. The supervisor calls it on network
 // change so queries do not keep using established connections bound to the
 // old interface.
-func (r *dohResolver) CloseIdle() {
+func (r *Resolver) CloseIdle() {
 	r.mu.RLock()
 	client := r.client
 	r.mu.RUnlock()
@@ -106,13 +111,13 @@ func (r *dohResolver) CloseIdle() {
 // ConsecutiveFailures reports how many lookups have failed in a row since the
 // last answer. A listening port on 127.0.0.1:7103 does not prove the upstream
 // path works, so the supervisor watches this instead of the socket.
-func (r *dohResolver) ConsecutiveFailures() int {
+func (r *Resolver) ConsecutiveFailures() int {
 	return int(r.failures.Load())
 }
 
 // SetObserver installs a callback for every forwarded answer. Split mode sets
 // this to learn blocked destinations.
-func (r *dohResolver) SetObserver(fn func(domain string, ips []net.IP, ttl time.Duration)) {
+func (r *Resolver) SetObserver(fn func(domain string, ips []net.IP, ttl time.Duration)) {
 	r.mu.Lock()
 	r.observer = fn
 	r.mu.Unlock()
@@ -120,18 +125,18 @@ func (r *dohResolver) SetObserver(fn func(domain string, ips []net.IP, ttl time.
 
 // observe parses one query/answer pair and hands the A records to the observer.
 // Parsing a 100-byte message is cheap next to the HTTPS round trip.
-func (r *dohResolver) observe(query, resp []byte) {
+func (r *Resolver) observe(query, resp []byte) {
 	r.mu.RLock()
 	fn := r.observer
 	r.mu.RUnlock()
 	if fn == nil {
 		return
 	}
-	domain := dnsQueryName(query)
+	domain := core.DNSQueryName(query)
 	if domain == "" {
 		return
 	}
-	ips, ttl := dnsAnswerIPv4(resp)
+	ips, ttl := core.DNSAnswerIPv4(resp)
 	if len(ips) == 0 {
 		return
 	}
@@ -143,7 +148,7 @@ func (r *dohResolver) observe(query, resp []byte) {
 // fresh transport is the only way out short of restarting the process. The
 // seeded Aegis address survives a failed bootstrap, so Reset never leaves the
 // resolver without a target.
-func (r *dohResolver) Reset() {
+func (r *Resolver) Reset() {
 	r.mu.Lock()
 	old := r.client
 	r.client = &http.Client{Transport: r.newTransport(), Timeout: 10 * time.Second}
@@ -154,11 +159,11 @@ func (r *dohResolver) Reset() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := r.refresh(ctx); err != nil {
-		debugf("doh reset: bootstrap failed, keeping %v: %v", r.targets(), err)
+		r.log.Printf("doh reset: bootstrap failed, keeping %v: %v", r.targets(), err)
 	}
 }
 
-func (r *dohResolver) targets() []string {
+func (r *Resolver) targets() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]string(nil), r.addrs...)
@@ -167,7 +172,7 @@ func (r *dohResolver) targets() []string {
 // dial ignores the address the transport asks for and connects to one of the
 // resolved Aegis addresses instead. TLS still verifies dns.breadway.dev, so a
 // wrong address fails closed.
-func (r *dohResolver) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+func (r *Resolver) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	var lastErr error
 
@@ -194,14 +199,14 @@ func (r *dohResolver) dial(ctx context.Context, network, addr string) (net.Conn,
 		lastErr = err
 	}
 	if lastErr == nil {
-		lastErr = errors.New("no address for " + dohHost)
+		lastErr = errors.New("no address for " + core.DoHHost)
 	}
 	return nil, lastErr
 }
 
 // refresh resolves the DoH host through the gateway resolver only. It is never
 // called from refresh itself, so it cannot recurse.
-func (r *dohResolver) refresh(ctx context.Context) error {
+func (r *Resolver) refresh(ctx context.Context) error {
 	r.mu.RLock()
 	gateway := r.gateway
 	r.mu.RUnlock()
@@ -222,7 +227,7 @@ func (r *dohResolver) refresh(ctx context.Context) error {
 		// started early): the system resolver may be this process's own
 		// listener, which would deadlock the bootstrap against itself.
 		// Keep the seeded Aegis address instead.
-		debugf("no gateway for bootstrap; keeping the seeded address")
+		r.log.Printf("no gateway for bootstrap; keeping the seeded address")
 		return nil
 	}
 
@@ -245,9 +250,9 @@ func (r *dohResolver) refresh(ctx context.Context) error {
 	}
 
 	r.mu.Lock()
-	r.addrs = mergeAddresses(v4, aegisIPv4)
+	r.addrs = mergeAddresses(v4, core.AegisIPv4)
 	r.mu.Unlock()
-	debugf("bootstrap %s via gateway %q: %v", r.host, gateway, v4)
+	r.log.Printf("bootstrap %s via gateway %q: %v", r.host, gateway, v4)
 	return nil
 }
 
@@ -270,7 +275,7 @@ func mergeAddresses(addrs []string, seed string) []string {
 	return out
 }
 
-func (r *dohResolver) exchange(ctx context.Context, query []byte) ([]byte, error) {
+func (r *Resolver) exchange(ctx context.Context, query []byte) ([]byte, error) {
 	body, err := r.exchangeOnce(ctx, query)
 	if err == nil {
 		r.failures.Store(0)
@@ -292,14 +297,14 @@ func (r *dohResolver) exchange(ctx context.Context, query []byte) ([]byte, error
 		err = retryErr
 	}
 	failures := r.failures.Add(1)
-	if failures >= dohResetAfterFailures {
-		debugf("doh: %d consecutive lookup failures, rebuilding the client", failures)
+	if failures >= core.DoHResetAfterFailures {
+		r.log.Printf("doh: %d consecutive lookup failures, rebuilding the client", failures)
 		r.Reset()
 	}
 	return nil, err
 }
 
-func (r *dohResolver) exchangeOnce(ctx context.Context, query []byte) ([]byte, error) {
+func (r *Resolver) exchangeOnce(ctx context.Context, query []byte) ([]byte, error) {
 	// Trace how far each lookup gets: TCP connect, TLS handshake, first
 	// response byte, or a reused pool connection. On failure the stages say
 	// whether the path is dead (no connect), the handshake stalls, or the
@@ -353,7 +358,7 @@ func (r *dohResolver) exchangeOnce(ctx context.Context, query []byte) ([]byte, e
 	if len(body) < 12 {
 		return nil, errors.New("short DNS response")
 	}
-	debugf("doh: query %d bytes, answer %d bytes", len(query), len(body))
+	r.log.Printf("doh: query %d bytes, answer %d bytes", len(query), len(body))
 	return body, nil
 }
 
@@ -446,10 +451,10 @@ func skipDNSName(msg []byte, pos int) (int, bool) {
 	}
 }
 
-// truncateUDP cuts resp to size with the TC bit set when it had to cut, so
+// TruncateUDP cuts resp to size with the TC bit set when it had to cut, so
 // the client retries over TCP instead of receiving a silently truncated
 // datagram. Short responses pass through untouched.
-func truncateUDP(resp []byte, size int) []byte {
+func TruncateUDP(resp []byte, size int) []byte {
 	if len(resp) <= size || len(resp) < 12 {
 		return resp
 	}
@@ -481,7 +486,7 @@ func (s dohStages) describe() string {
 	return "no TCP connection"
 }
 
-func (r *dohResolver) serve(ctx context.Context) error {
+func (r *Resolver) Serve(ctx context.Context) error {
 	udp, err := net.ListenPacket("udp", r.listenAddr)
 	if err != nil {
 		return fmt.Errorf("udp %s: %w", r.listenAddr, err)
@@ -500,15 +505,19 @@ func (r *dohResolver) serve(ctx context.Context) error {
 
 	go r.serveTCP(tcp)
 	r.log.Printf("DoH resolver listening on %s", r.listenAddr)
-	if err := writeReadyMarker(); err != nil {
-		r.log.Printf("could not write the readiness marker: %v", err)
+	if r.Ready != nil {
+		if err := r.Ready(); err != nil {
+			r.log.Printf("could not write the readiness marker: %v", err)
+		}
 	}
 	r.serveUDP(udp)
-	removeReadyMarker()
+	if r.NotReady != nil {
+		r.NotReady()
+	}
 	return nil
 }
 
-func (r *dohResolver) serveUDP(conn net.PacketConn) {
+func (r *Resolver) serveUDP(conn net.PacketConn) {
 	buf := make([]byte, 65535)
 	for {
 		n, addr, err := conn.ReadFrom(buf)
@@ -530,7 +539,7 @@ func (r *dohResolver) serveUDP(conn net.PacketConn) {
 			// oversized datagram: recvfrom truncates it and the client
 			// retries instead of falling back to TCP. Cut to the
 			// advertised size with TC set so the retry goes over TCP.
-			resp = truncateUDP(resp, ednsUDPSize(query))
+			resp = TruncateUDP(resp, ednsUDPSize(query))
 			if _, err := conn.WriteTo(resp, addr); err != nil {
 				r.log.Printf("udp write: %v", err)
 			}
@@ -538,7 +547,7 @@ func (r *dohResolver) serveUDP(conn net.PacketConn) {
 	}
 }
 
-func (r *dohResolver) serveTCP(ln net.Listener) {
+func (r *Resolver) serveTCP(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -548,7 +557,7 @@ func (r *dohResolver) serveTCP(ln net.Listener) {
 	}
 }
 
-func (r *dohResolver) handleTCP(conn net.Conn) {
+func (r *Resolver) handleTCP(conn net.Conn) {
 	defer conn.Close()
 	for {
 		conn.SetDeadline(time.Now().Add(30 * time.Second))

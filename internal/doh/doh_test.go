@@ -1,8 +1,7 @@
-package egress
+package doh
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"io"
 	"log"
@@ -12,82 +11,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestPublicKeyVector(t *testing.T) {
-	const private = "MCqypbvCdUOQ3YIitFcch4jsAbxw75Kpr2YWm18KXW4="
-	const public = "FIE3IB/8DltS0rF7sywrFM9mCm+svM3sw0SwYWqVWB8="
-
-	got, err := publicKey(private)
-	if err != nil {
-		t.Fatalf("publicKey: %v", err)
-	}
-	if got != public {
-		t.Fatalf("publicKey = %s, want %s", got, public)
-	}
-}
-
-func TestNormalizeKey(t *testing.T) {
-	const valid = "MCqypbvCdUOQ3YIitFcch4jsAbxw75Kpr2YWm18KXW4="
-
-	if got, err := normalizeKey("  " + valid + "\n"); err != nil || got != valid {
-		t.Fatalf("valid key: got %q, %v", got, err)
-	}
-
-	cases := map[string]string{
-		"empty":      "",
-		"short":      "abcd",
-		"bad base64": strings.Repeat("!", 44),
-		"31 bytes":   base64.StdEncoding.EncodeToString(make([]byte, 31)),
-		"33 bytes":   base64.StdEncoding.EncodeToString(make([]byte, 33)),
-	}
-	for name, key := range cases {
-		if _, err := normalizeKey(key); err == nil {
-			t.Errorf("%s: expected an error", name)
-		}
-	}
-}
-
-func TestGrade(t *testing.T) {
-	cases := []struct {
-		name string
-		r    checkResults
-		want string
-	}{
-		{"all ok", checkResults{Tunnel: "up", Probe: "ok", Exit: aegisIPv4}, "functional"},
-		{"dns only", checkResults{Tunnel: "skipped", Probe: "skipped"}, "functional"},
-		{"tunnel down", checkResults{Tunnel: "down", Probe: "failed", Exit: "no result"}, "partial"},
-		{"wrong exit", checkResults{Tunnel: "up", Probe: "ok", Exit: "got 1.2.3.4, expected " + aegisIPv4}, "partial"},
-		{"dns down", checkResults{DNS: "i/o timeout", Tunnel: "down", Probe: "failed", Exit: "no result"}, "failed"},
-		{"foreign resolver on port", checkResults{Probe: "ok", Exit: aegisIPv4, Supervisor: "egress service is not active"}, "failed"},
-		{"checker unreachable", checkResults{Tunnel: "up", Probe: "ok", Exit: exitUnverifiedPrefix + "timeout"}, "partial"},
-	}
-	for _, c := range cases {
-		if got := c.r.grade(); got != c.want {
-			t.Errorf("%s: grade = %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
-func TestRenderedConfig(t *testing.T) {
-	cfg := renderWGConfig(tunnelConfig{
-		ClientIP:   "10.88.0.4",
-		PrivateKey: "MCqypbvCdUOQ3YIitFcch4jsAbxw75Kpr2YWm18KXW4=",
-		Endpoint:   "152.69.174.7:7105",
-	})
-
-	for _, want := range []string{
-		"Address = 10.88.0.4/32",
-		"PrivateKey = MCqypbvCdUOQ3YIitFcch4jsAbxw75Kpr2YWm18KXW4=",
-		"PublicKey = " + aegisPublicKey,
-		"Endpoint = 152.69.174.7:7105",
-		"dev %i",
-		"Table = off",
-	} {
-		if !strings.Contains(cfg, want) {
-			t.Errorf("config is missing %q:\n%s", want, cfg)
-		}
-	}
-}
 
 func dnsQuery(id uint16, name string) []byte {
 	b := make([]byte, 0, 64)
@@ -127,13 +50,13 @@ func startTestResolver(t *testing.T) (string, func()) {
 	t.Helper()
 
 	addr := "127.0.0.1:15353"
-	resolver := newDoHResolver("", log.New(io.Discard, "", 0))
+	resolver := New("", log.New(io.Discard, "", 0))
 	resolver.listenAddr = addr
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = resolver.serve(ctx)
+		_ = resolver.Serve(ctx)
 		close(done)
 	}()
 
@@ -215,30 +138,6 @@ func TestResolverTCP(t *testing.T) {
 	checkAnswer(t, id, resp)
 }
 
-func TestSameRouteSet(t *testing.T) {
-	a := []Route{{Iface: "eth0", Gateway: "192.168.1.1"}, {Iface: "wlan0", Gateway: "192.168.1.1"}}
-	b := []Route{{Iface: "wlan0", Gateway: "192.168.1.1"}, {Iface: "eth0", Gateway: "192.168.1.1"}}
-	if !sameRouteSet(a, b) {
-		t.Error("same routes in different order should match")
-	}
-	if sameRouteSet(a, a[:1]) {
-		t.Error("different sizes should not match")
-	}
-	if sameRouteSet(a, []Route{{Iface: "eth0", Gateway: "10.0.0.1"}, {Iface: "wlan0", Gateway: "192.168.1.1"}}) {
-		t.Error("different gateways should not match")
-	}
-	if !sameRouteSet(nil, nil) {
-		t.Error("two empty sets should match")
-	}
-	dup := []Route{{Iface: "eth0", Gateway: "1.1.1.1"}, {Iface: "eth0", Gateway: "1.1.1.1"}}
-	if !sameRouteSet(dup, append([]Route(nil), dup...)) {
-		t.Error("identical duplicates should match")
-	}
-	if sameRouteSet(dup, dup[:1]) {
-		t.Error("duplicate count must matter")
-	}
-}
-
 func TestDohStagesDescribe(t *testing.T) {
 	cases := []struct {
 		stages dohStages
@@ -260,7 +159,7 @@ func TestDohStagesDescribe(t *testing.T) {
 // TestDoHHandleTCPFraming proves the 2-byte length-prefix framing round-trips
 // over loopback without touching the network: the stub lookup echoes.
 func TestDoHHandleTCPFraming(t *testing.T) {
-	r := newDoHResolver("", log.New(os.Stderr, "test: ", 0))
+	r := New("", log.New(os.Stderr, "test: ", 0))
 	want := []byte{0xde, 0xad, 0xbe, 0xef}
 	r.lookup = func(context.Context, []byte) ([]byte, error) { return want, nil }
 
@@ -299,77 +198,6 @@ func TestDoHHandleTCPFraming(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Error("handleTCP did not exit after client close")
-	}
-}
-
-func TestMergeAddresses(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []string
-		seed string
-		want []string
-	}{
-		{"seed only", nil, "152.69.174.7", []string{"152.69.174.7"}},
-		{"seed already there", []string{"152.69.174.7"}, "152.69.174.7", []string{"152.69.174.7"}},
-		{"seed appended", []string{"203.0.113.9"}, "152.69.174.7", []string{"203.0.113.9", "152.69.174.7"}},
-		{"dedupe", []string{"203.0.113.9", "203.0.113.9"}, "152.69.174.7", []string{"203.0.113.9", "152.69.174.7"}},
-	}
-	for _, tc := range cases {
-		got := mergeAddresses(tc.in, tc.seed)
-		if len(got) != len(tc.want) {
-			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
-				break
-			}
-		}
-	}
-}
-
-func TestDoHRecoveryStep(t *testing.T) {
-	base := time.Date(2026, 11, 12, 13, 0, 0, 0, time.UTC)
-	cases := []struct {
-		name     string
-		now      time.Time
-		since    time.Time
-		recovery time.Time
-		want     dohAction
-	}{
-		{
-			name:  "first wedge resets",
-			now:   base.Add(10 * time.Second),
-			since: base,
-			want:  dohReset,
-		},
-		{
-			name:     "recent reset waits",
-			now:      base.Add(30 * time.Second),
-			since:    base,
-			recovery: base.Add(10 * time.Second),
-			want:     dohWait,
-		},
-		{
-			name:     "reset interval elapsed",
-			now:      base.Add(70 * time.Second),
-			since:    base,
-			recovery: base.Add(10 * time.Second),
-			want:     dohReset,
-		},
-		{
-			name:     "gives up after the window even if resetting",
-			now:      base.Add(5 * time.Minute),
-			since:    base,
-			recovery: base.Add(4*time.Minute + 50*time.Second),
-			want:     dohGiveUp,
-		},
-	}
-	for _, tc := range cases {
-		if got := dohRecoveryStep(tc.now, tc.since, tc.recovery); got != tc.want {
-			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
-		}
 	}
 }
 
@@ -417,11 +245,11 @@ func TestTruncateUDP(t *testing.T) {
 	header[2] = 0x81
 	header[3] = 0x80
 	short := append(append([]byte(nil), header...), 0x01, 0x02)
-	if got := truncateUDP(short, 512); string(got) != string(short) {
+	if got := TruncateUDP(short, 512); string(got) != string(short) {
 		t.Error("short response must pass through untouched")
 	}
 	long := append(append([]byte(nil), header...), make([]byte, 600)...)
-	got := truncateUDP(long, 512)
+	got := TruncateUDP(long, 512)
 	if len(got) != 512 {
 		t.Fatalf("cut length = %d, want 512", len(got))
 	}
@@ -434,7 +262,7 @@ func TestTruncateUDP(t *testing.T) {
 }
 
 func TestRefreshKeepsSeedWithoutGateway(t *testing.T) {
-	r := newDoHResolver("", log.New(os.Stderr, "test: ", 0))
+	r := New("", log.New(os.Stderr, "test: ", 0))
 	r.mu.Lock()
 	r.addrs = []string{"9.9.9.9"}
 	r.mu.Unlock()
@@ -444,5 +272,32 @@ func TestRefreshKeepsSeedWithoutGateway(t *testing.T) {
 	got := r.targets()
 	if len(got) != 1 || got[0] != "9.9.9.9" {
 		t.Errorf("addrs = %v, want the seeded address kept", got)
+	}
+}
+
+func TestMergeAddresses(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		seed string
+		want []string
+	}{
+		{"seed only", nil, "152.69.174.7", []string{"152.69.174.7"}},
+		{"seed already there", []string{"152.69.174.7"}, "152.69.174.7", []string{"152.69.174.7"}},
+		{"seed appended", []string{"203.0.113.9"}, "152.69.174.7", []string{"203.0.113.9", "152.69.174.7"}},
+		{"dedupe", []string{"203.0.113.9", "203.0.113.9"}, "152.69.174.7", []string{"203.0.113.9", "152.69.174.7"}},
+	}
+	for _, tc := range cases {
+		got := mergeAddresses(tc.in, tc.seed)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+				break
+			}
+		}
 	}
 }

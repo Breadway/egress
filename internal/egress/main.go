@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/doh"
 	"errors"
 	"flag"
 	"fmt"
@@ -465,7 +466,7 @@ func cmdSupervise(args []string) error {
 		appLogger().Printf("no default route yet (%v); will keep trying", err)
 	}
 
-	resolver := newDoHResolver(gateway, appLogger())
+	resolver := doh.New(gateway, appLogger())
 
 	wstPath := ""
 	if !*noTunnel && !*noFallback {
