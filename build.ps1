@@ -118,11 +118,22 @@ if ($DebugBuild) { $debugLdflag = " -X egress/internal/egress.defaultDebug=true"
     -o $Out .
 if ($LASTEXITCODE -ne 0) { Fail "go build failed" }
 
-# The key is a plain string in the binary, so it must be findable there.
+# The binary's strings, read once for the checks below.
 $raw = [System.IO.File]::ReadAllText((Resolve-Path $Out), [System.Text.Encoding]::Latin1)
-if (-not $raw.Contains($Key)) {
-    Fail "the key is not in the output binary; check the -X variable names"
+
+# Every -X value is a plain string in the binary. A moved symbol makes the
+# linker drop the flag silently, so each supplied value must be findable.
+function AssertEmbedded([string]$Value, [string]$What) {
+    if (-not $Value) { return }
+    if (-not $raw.Contains($Value)) { Fail "$What is not in the output binary; check the -X variable names" }
 }
+AssertEmbedded $Key "WG key"
+AssertEmbedded $IP "tunnel address"
+AssertEmbedded $Version "version"
+AssertEmbedded $UpdateKey "update public key"
+AssertEmbedded $SocksUser "SOCKS user"
+AssertEmbedded $SocksPass "SOCKS password"
+if (-not $UpdateKey) { Write-Warning "no -UpdateKey; this build cannot update itself" }
 
 if ($SaveKey) {
     Set-Content -Path $SaveKey -Value $Key -NoNewline
