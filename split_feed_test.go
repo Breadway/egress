@@ -22,6 +22,7 @@ func TestMergeFeedDomains(t *testing.T) {
 		{Domain: "Discord.com", Evidence: "tls-stall", Count: 3},
 		{Domain: "poki.com", Evidence: "ip-rejected"},
 		{Domain: "not a domain", Evidence: "tls-stall"},
+		{Domain: "ipv4only.arpa", Evidence: "connect-stall"},
 	}, now)
 	if added != 1 {
 		t.Fatalf("added %d, want 1", added)

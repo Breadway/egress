@@ -180,14 +180,7 @@ func (p *splitProxy) decide(ctx context.Context, host string) DomainState {
 	cancel()
 
 	p.mu.Lock()
-	switch res.State {
-	case StateBlocked:
-		p.profile.RecordProbe(host, res.Evidence, true, now)
-		p.profile.RecordProbe(host, res.Evidence, true, now)
-	case StateAllowed:
-		p.profile.RecordProbe(host, EvidenceNone, false, now)
-	}
-	if res.State == StateBlocked || res.State == StateAllowed {
+	if recordProbeOutcome(p.profile, host, res, now) {
 		if err := p.profile.Save(p.path); err != nil {
 			p.log.Printf("proxy: save profile: %v", err)
 		}
