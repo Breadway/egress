@@ -65,13 +65,19 @@ func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error, parke
 			pub = derived
 		}
 	}
+	status := results.grade()
+	// A recorded failure is a failed install even when every probe passed:
+	// a later setup step failed and the install is parked, not healthy.
+	if verifyErr != nil {
+		status = "failed"
+	}
 	payload := reportPayload{
 		Pubkey:  pub,
 		OS:      runtime.GOOS,
 		Arch:    runtime.GOARCH,
 		IP:      tcfg.ClientIP,
 		Version: reportVersion(),
-		Status:  results.grade(),
+		Status:  status,
 		Parked:  parked,
 		Checks:  results,
 		TS:      time.Now().UTC().Format(time.RFC3339),
