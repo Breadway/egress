@@ -2,11 +2,42 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
+
+// cmdProbe classifies domains over the direct path without changing routes or
+// the tunnel. On Linux, --interface pins the probe to the physical link while
+// the full tunnel is up.
+func cmdProbe(args []string) error {
+	fs := newFlagSet("probe")
+	iface := fs.String("interface", "", "bind probes to this interface (Linux)")
+	timeout := fs.Duration("timeout", probeTimeout, "per-probe timeout")
+	debug := fs.Bool("debug", false, "trace")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(resolveDebug(*debug))
+
+	domains := fs.Args()
+	if len(domains) == 0 {
+		return errors.New("usage: egress probe [--interface wlan0] [--timeout 5s] domain...")
+	}
+	for _, domain := range domains {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*(*timeout))
+		res := ProbeDomain(ctx, domain, ProbeOptions{Interface: *iface, Timeout: *timeout})
+		cancel()
+		fmt.Println(res.String())
+	}
+	return nil
+}
 
 const (
 	probeCooldown = 10 * time.Minute
@@ -253,4 +284,216 @@ func (c *splitController) BlockedCount() (domains, routed int) {
 	domains = len(c.profile.BlockedDomains(time.Now()))
 	c.mu.Unlock()
 	return domains, c.routes.Count()
+}
+
+// splitMarkerPath marks a Linux machine as running split mode. The supervisor
+// reads it at startup; install writes or removes it.
+func splitMarkerPath() string {
+	return filepath.Join(ProfileDir(), "split-mode")
+}
+
+// splitEnabled reports whether split mode is configured. On Linux the marker
+// drives the route supervisor; on Windows it marks the proxy/PAC install so
+// updates keep that mode.
+func splitEnabled() bool {
+	_, err := os.Stat(splitMarkerPath())
+	return err == nil
+}
+
+func setSplitEnabled(on bool) error {
+	if !on {
+		if err := os.Remove(splitMarkerPath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(ProfileDir(), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(splitMarkerPath(), []byte("1\n"), 0600)
+}
+
+const (
+	// Route lifetimes. The DNS TTL is honoured with a floor so short TTLs do
+	// not thrash the table, and a cap so a stale entry cannot live for days.
+	routeMinTTL     = 10 * time.Minute
+	routeMaxTTL     = 6 * time.Hour
+	maxSplitRoutes  = 500
+	routeCleanEvery = 60 * time.Second
+)
+
+// routeRunner runs one `ip route` invocation. Tests replace it.
+type routeRunner func(args ...string) error
+
+// routeManager owns the /32 routes that send learned-blocked destinations into
+// wg0. Routes disappear with the interface, but expiry keeps the table small
+// between network changes.
+type routeManager struct {
+	mu     sync.Mutex
+	dev    string
+	log    *log.Logger
+	run    routeRunner
+	routes map[string]time.Time
+	order  []string
+}
+
+func newRouteManager(dev string, logger *log.Logger) *routeManager {
+	return &routeManager{
+		dev:    dev,
+		log:    logger,
+		routes: map[string]time.Time{},
+		run: func(args ...string) error {
+			return exec.Command("ip", args...).Run()
+		},
+	}
+}
+
+func (m *routeManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
+	if m == nil || m.dev == "" {
+		return
+	}
+	if ttl < routeMinTTL {
+		ttl = routeMinTTL
+	}
+	if ttl > routeMaxTTL {
+		ttl = routeMaxTTL
+	}
+	expiry := now.Add(ttl)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ip := range ips {
+		v4 := ip.To4()
+		if v4 == nil {
+			continue
+		}
+		key := v4.String()
+		if _, ok := m.routes[key]; ok {
+			m.routes[key] = expiry
+			continue
+		}
+		if len(m.routes) >= maxSplitRoutes && len(m.order) > 0 {
+			oldest := m.order[0]
+			m.order = m.order[1:]
+			delete(m.routes, oldest)
+			_ = m.run("route", "del", oldest+"/32", "dev", m.dev)
+		}
+		if err := m.run("route", "replace", key+"/32", "dev", m.dev); err != nil {
+			debugf("split: route add %s failed: %v", key, err)
+			continue
+		}
+		m.routes[key] = expiry
+		m.order = append(m.order, key)
+		debugf("split: routed %s via %s until %s", key, m.dev, expiry.Format(time.RFC3339))
+	}
+}
+
+func (m *routeManager) Cleanup(now time.Time) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := m.order[:0]
+	for _, key := range m.order {
+		expiry, ok := m.routes[key]
+		if !ok {
+			continue
+		}
+		if now.After(expiry) {
+			_ = m.run("route", "del", key+"/32", "dev", m.dev)
+			delete(m.routes, key)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	m.order = kept
+}
+
+// Remove deletes specific host routes, used when a domain becomes allowed
+// again.
+func (m *routeManager) Remove(keys []string) {
+	if m == nil || len(keys) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, key := range keys {
+		if _, ok := m.routes[key]; !ok {
+			continue
+		}
+		_ = m.run("route", "del", key+"/32", "dev", m.dev)
+		delete(m.routes, key)
+	}
+}
+
+// Clear removes every route this manager added, for a network change.
+func (m *routeManager) Clear() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, key := range m.order {
+		_ = m.run("route", "del", key+"/32", "dev", m.dev)
+	}
+	m.routes = map[string]time.Time{}
+	m.order = nil
+}
+
+func (m *routeManager) Count() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.routes)
+}
+
+// seedCandidates are the domains worth testing on a new network. They are not
+// assumed blocked: the sweep probes each one directly and records the result in
+// the network profile. The list comes from measurements on Australian school
+// networks in November 2026, plus the obvious redirect targets.
+var seedCandidates = []string{
+	// Social and messaging
+	"discord.com",
+	"x.com",
+	"twitter.com",
+	"instagram.com",
+	"facebook.com",
+	"www.facebook.com",
+	"tiktok.com",
+	"www.tiktok.com",
+	"reddit.com",
+	"www.reddit.com",
+	"old.reddit.com",
+	// Video and streaming
+	"netflix.com",
+	"www.netflix.com",
+	"twitch.tv",
+	"www.twitch.tv",
+	"youtube.com",
+	"www.youtube.com",
+	// Music
+	"spotify.com",
+	"open.spotify.com",
+	// Gaming
+	"store.steampowered.com",
+	"steamcommunity.com",
+	"poki.com",
+	"www.poki.com",
+	"roblox.com",
+	"www.roblox.com",
+	// Commonly allowed, useful as controls
+	"google.com",
+	"www.google.com",
+	"github.com",
+	"chatgpt.com",
+}
+
+// SeedCandidates returns a copy so callers cannot mutate the seed.
+func SeedCandidates() []string {
+	out := make([]string, len(seedCandidates))
+	copy(out, seedCandidates)
+	return out
 }
