@@ -19,15 +19,16 @@ const (
 // only acts on names the resolver actually saw, so the profile stays small and
 // relevant to what this machine browses.
 type splitController struct {
-	mu      sync.Mutex
-	profile *Profile
-	path    string
-	network string
-	iface   string
-	log     *log.Logger
-	routes  *routeManager
-	probing map[string]bool
-	sem     chan struct{}
+	mu       sync.Mutex
+	profile  *Profile
+	path     string
+	network  string
+	iface    string
+	log      *log.Logger
+	routes   *routeManager
+	probing  map[string]bool
+	sem      chan struct{}
+	reporter *splitReporter
 }
 
 func newSplitController(network, iface string, routes *routeManager, logger *log.Logger) *splitController {
@@ -39,6 +40,8 @@ func newSplitController(network, iface string, routes *routeManager, logger *log
 		sem:     make(chan struct{}, probeParallel),
 	}
 	c.load(network)
+	c.reporter = newSplitReporter(network, logger)
+	c.reporter.SetMergeFunc(c.mergeFeed)
 	return c
 }
 
@@ -64,7 +67,10 @@ func (c *splitController) SetNetwork(network, iface string) {
 	c.iface = iface
 	c.load(network)
 	c.probing = map[string]bool{}
+	reporter := c.reporter
 	c.mu.Unlock()
+	reporter.SetNetwork(network)
+	go reporter.fetchFeed(context.Background())
 	c.routes.Clear()
 	c.log.Printf("split: profile %s (routes cleared)", network)
 	c.Sweep()
@@ -123,6 +129,7 @@ func (c *splitController) probe(domain string) {
 
 	now := time.Now()
 	c.mu.Lock()
+	before := c.profile.State(domain, now)
 	switch res.State {
 	case StateBlocked:
 		// The classifier only reports blocked for a definite stall or a
@@ -136,7 +143,11 @@ func (c *splitController) probe(domain string) {
 		c.saveLocked()
 	}
 	delete(c.probing, domain)
+	reporter := c.reporter
 	c.mu.Unlock()
+	if res.State == StateBlocked && before != StateBlocked && reporter != nil {
+		reporter.Report(domain, res.Evidence)
+	}
 
 	if res.State == StateBlocked {
 		ips := make([]net.IP, 0, len(res.IPs))
@@ -165,6 +176,7 @@ func (c *splitController) Run(ctx context.Context) {
 	sweep := time.NewTicker(sweepEvery)
 	defer sweep.Stop()
 
+	go c.reporter.Run(ctx)
 	c.Sweep()
 	for {
 		select {
@@ -175,6 +187,20 @@ func (c *splitController) Run(ctx context.Context) {
 		case <-sweep.C:
 			c.Sweep()
 		}
+	}
+}
+
+// mergeFeed installs domains learned by other devices as blocked entries.
+func (c *splitController) mergeFeed(domains []feedDomain) {
+	now := time.Now()
+	c.mu.Lock()
+	added := mergeFeedDomains(c.profile, domains, now)
+	if added > 0 {
+		c.saveLocked()
+	}
+	c.mu.Unlock()
+	if added > 0 {
+		c.log.Printf("split: merged %d domains from the shared feed", added)
 	}
 }
 

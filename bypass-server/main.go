@@ -112,6 +112,8 @@ type server struct {
 	fails     map[string][]time.Time
 	applys    map[string][]time.Time
 	reports   map[string][]time.Time
+	splits    map[string][]time.Time
+	feedMu    sync.Mutex
 }
 
 func main() {
@@ -153,6 +155,7 @@ func main() {
 		token: token, dummy: dummy,
 		fails: map[string][]time.Time{}, applys: map[string][]time.Time{},
 		reports: map[string][]time.Time{},
+		splits:  map[string][]time.Time{},
 	}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", s.landing)
@@ -167,7 +170,10 @@ func main() {
 	s.mux.HandleFunc("/admin/api/users", s.adminAddUser)
 	s.mux.HandleFunc("/admin/api/link", s.adminLink)
 	s.mux.HandleFunc("/api/report", s.apiReport)
+	s.mux.HandleFunc("/api/blocked-report", s.apiBlockedReport)
+	s.mux.HandleFunc("/api/seed", s.apiSeed)
 	s.mux.HandleFunc("/admin/reports", s.adminReports)
+	s.mux.HandleFunc("/admin/split", s.adminSplit)
 	s.mux.HandleFunc("/admin/api/pending", s.adminPending)
 	s.mux.HandleFunc("/admin/api/claim", s.adminClaim)
 	s.mux.HandleFunc("/admin/api/release", s.adminRelease)
