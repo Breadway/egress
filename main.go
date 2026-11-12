@@ -77,6 +77,12 @@ func realMain() error {
 		return cmdProbe(args)
 	case "proxy":
 		return cmdProxy(args)
+	case "update":
+		return cmdUpdate(args)
+	case "update-sign":
+		return cmdUpdateSign(args)
+	case "update-keygen":
+		return cmdUpdateKeygen(args)
 	case "diagnose":
 		return cmdDiagnose(args)
 	case "pubkey", "key":
@@ -106,6 +112,9 @@ Commands:
   diagnose     print routing, DNS, tunnel and log state
   probe        classify domains over the direct path (split-mode foundation)
   proxy        run the per-user split proxy and PAC (Windows split mode)
+  update       check for or apply a signed update over the tunnel
+  update-sign  sign a release manifest (publisher side)
+  update-keygen make an Ed25519 update signing key
   disable      stop now, restore DNS, and do not start at boot; keep the config
   enable       let it start at boot again and start it now
   remove       remove every installed part, including configs, logs and wstunnel
@@ -139,12 +148,16 @@ func runInstall(plat platform, args []string) (err error) {
 	noTunnel := fs.Bool("no-tunnel", false, "configure DNS only")
 	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
 	split := fs.Bool("split", false, "Linux: route only learned-blocked destinations through the tunnel")
+	keepConfig := fs.Bool("keep-config", false, "reuse the existing tunnel key and address (upgrade)")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *split && *noTunnel {
 		return errors.New("--split needs the tunnel; it cannot be combined with --no-tunnel")
+	}
+	if *keepConfig && *noTunnel {
+		return errors.New("--keep-config needs the tunnel config; it cannot be combined with --no-tunnel")
 	}
 	if *split && runtime.GOOS != "linux" {
 		return errors.New("--split is Linux only for now; the Windows proxy path is not built yet")
@@ -164,22 +177,44 @@ func runInstall(plat platform, args []string) (err error) {
 		return fmt.Errorf("find the default route: %w", err)
 	}
 
-	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort, Split: *split}
+	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort}
 	if validIPv4(embeddedClientIP) {
 		tcfg.ClientIP = embeddedClientIP
 	}
 	if *ipFlag != "" {
 		tcfg.ClientIP = *ipFlag
 	}
+
+	var keepKey string
+	if *keepConfig {
+		var keepIP string
+		keepKey, keepIP, err = existingTunnelConfig()
+		if err != nil {
+			return fmt.Errorf("--keep-config: %w", err)
+		}
+		if *ipFlag == "" {
+			tcfg.ClientIP = keepIP
+		}
+		// Preserve split mode across the upgrade.
+		if splitEnabled() {
+			*split = true
+		}
+	}
+	tcfg.Split = *split
 	if !validIPv4(tcfg.ClientIP) {
 		return fmt.Errorf("invalid tunnel address %q", tcfg.ClientIP)
 	}
 
 	var pub string
 	if !*noTunnel {
-		key, err := resolveKey(*keyFlag, *keyFile)
-		if err != nil {
-			return err
+		var key string
+		if *keepConfig && *keyFlag == "" && *keyFile == "" {
+			key = keepKey
+		} else {
+			key, err = resolveKey(*keyFlag, *keyFile)
+			if err != nil {
+				return err
+			}
 		}
 		tcfg.PrivateKey = key
 		pub, err = publicKey(key)

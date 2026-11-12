@@ -35,7 +35,12 @@ Usage: ./build.sh [options]
   --os <goos>          linux or windows (default: host OS)
   --arch <goarch>      amd64 or arm64 (default: amd64)
   --out <path>         Output path (default: dist/egress-<os>-<arch>[.exe])
+  --version <semver>   Release version, for example 0.3.0 (default 0.0.0)
   --save-key <path>    Also write the private key to this file, mode 0600
+  --no-key             Build without an embedded device key (generic update
+                       artifact; reuse an existing config with install
+                       --keep-config)
+  --update-key <b64>   Embed the Ed25519 update public key (44 chars)
   --quiet              Do not print the private key, next steps or warnings
   --debug-build        Bake in debug mode: the binary behaves as if --debug
                        were passed to every command. For diagnosing other
@@ -57,8 +62,11 @@ ip="10.88.0.4"
 goos=""
 goarch="amd64"
 out=""
+version="0.0.0"
 save_key=""
 quiet=0
+no_key=0
+update_key=""
 debug_build=0
 
 while [ $# -gt 0 ]; do
@@ -70,7 +78,10 @@ while [ $# -gt 0 ]; do
         --os)         goos="$2"; shift 2 ;;
         --arch)       goarch="$2"; shift 2 ;;
         --out)        out="$2"; shift 2 ;;
+        --version)    version="$2"; shift 2 ;;
         --save-key)   save_key="$2"; shift 2 ;;
+        --no-key)     no_key=1; shift ;;
+        --update-key) update_key="$2"; shift 2 ;;
         --quiet)      quiet=1; shift ;;
         --debug-build) debug_build=1; shift ;;
         -h|--help)    usage; exit 0 ;;
@@ -135,15 +146,23 @@ elif [ -n "$key_file" ]; then
     key=$(tr -d ' \t\r\n' < "$key_file")
 fi
 
-[ -n "$key" ] || die "no key given; use --key, --key-file or --generate"
+if [ "$no_key" -eq 0 ]; then
+    [ -n "$key" ] || die "no key given; use --key, --key-file or --generate (or --no-key for a generic build)"
+    case "$key" in
+        *[!A-Za-z0-9+/=]*) die "key contains characters outside the base64 alphabet" ;;
+    esac
+    [ "${#key}" -eq 44 ] || die "key must be 44 characters, got ${#key}"
+    [ "${key: -1}" = "=" ] || die "key must end with '='"
+    decoded=$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c)
+    [ "$decoded" -eq 32 ] || die "key does not decode to 32 bytes"
+fi
 
-case "$key" in
-    *[!A-Za-z0-9+/=]*) die "key contains characters outside the base64 alphabet" ;;
-esac
-[ "${#key}" -eq 44 ] || die "key must be 44 characters, got ${#key}"
-[ "${key: -1}" = "=" ] || die "key must end with '='"
-decoded=$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c)
-[ "$decoded" -eq 32 ] || die "key does not decode to 32 bytes"
+if [ -n "$update_key" ]; then
+    case "$update_key" in
+        *[!A-Za-z0-9+/=]*) die "update key contains characters outside the base64 alphabet" ;;
+    esac
+    [ "${#update_key}" -eq 44 ] || die "update key must be 44 characters, got ${#update_key}"
+fi
 
 case "$ip" in
     *[!0-9.]*) die "--ip must be a dotted IPv4 address" ;;
@@ -151,7 +170,9 @@ esac
 [ "$(printf '%s' "$ip" | awk -F. 'NF==4 && $1<256 && $2<256 && $3<256 && $4<256 {print "ok"}')" = ok ] \
     || die "--ip is not a valid IPv4 address: $ip"
 
-if command -v wg >/dev/null 2>&1; then
+if [ -z "$key" ]; then
+    pubkey="(no embedded key; generic update artifact)"
+elif command -v wg >/dev/null 2>&1; then
     pubkey=$(printf '%s' "$key" | wg pubkey)
 else
     pubkey="(unknown on this host; run the built binary with 'egress pubkey')"
@@ -184,10 +205,14 @@ debug_ldflag=""
 if [ "$debug_build" -eq 1 ]; then
     debug_ldflag=" -X main.defaultDebug=true"
 fi
+update_ldflag=""
+if [ -n "$update_key" ]; then
+    update_ldflag=" -X main.updatePublicKey=$update_key"
+fi
 
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
     go build -tags delivery -trimpath -buildvcs=false \
-    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$(date +%Y%m%d)${debug_ldflag}" \
+    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$version${debug_ldflag}${update_ldflag}" \
     -o "$out" .
 
 case "$goos" in
