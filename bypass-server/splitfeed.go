@@ -441,10 +441,6 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 		entry := feed.Domains[domain]
 		out.Refresh = append(out.Refresh, seedDomain{Domain: domain, Evidence: entry.Evidence, Count: entry.Count})
 	}
-	for _, domain := range claimed {
-		entry := feed.Domains[domain]
-		out.Refresh = append(out.Refresh, seedDomain{Domain: domain, Evidence: entry.Evidence, Count: entry.Count})
-	}
 	protos := make([]string, 0, len(feed.Protocols))
 	for proto := range feed.Protocols {
 		protos = append(protos, proto)
