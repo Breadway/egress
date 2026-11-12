@@ -50,6 +50,7 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	c.load(network)
 	c.reporter = newSplitReporter(network, ProfileDir(), logger)
 	c.reporter.SetMergeFunc(c.mergeFeed)
+	go c.refreshProtocols()
 	return c
 }
 
@@ -232,17 +233,91 @@ func parseProbeIPs(raw []string) []net.IP {
 }
 
 // mergeFeed installs domains learned by other devices as blocked entries.
-func (c *Controller) mergeFeed(domains []feedDomain) {
+// refreshProtocols probes outbound UDP, TCP, DNS and ICMP once per network so
+// the shared table carries a protocol picture too. A joining device then knows
+// to start on the WebSocket path when UDP is blocked.
+func (c *Controller) refreshProtocols() {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	reports := ProbeProtocols(ctx)
+	c.reporter.SetProtocols(reports)
+	c.mu.Lock()
+	changed := 0
+	if c.profile.Protocols == nil {
+		c.profile.Protocols = map[string]string{}
+	}
+	for _, r := range reports {
+		if r.State == "" || r.State == "unknown" {
+			continue
+		}
+		if c.profile.Protocols[r.Protocol] != r.State {
+			c.profile.Protocols[r.Protocol] = r.State
+			changed++
+		}
+	}
+	if changed > 0 {
+		c.saveLocked()
+	}
+	c.mu.Unlock()
+	if changed > 0 {
+		c.log.Printf("split: protocol picture %v", c.profile.Protocols)
+	}
+}
+
+func (c *Controller) mergeFeed(domains []feedDomain, protocols []feedProtocol) {
 	now := time.Now()
 	c.mu.Lock()
 	added := mergeFeedDomains(c.profile, domains, now)
-	if added > 0 {
+	protos := mergeProtocols(c.profile, protocols)
+	if added > 0 || protos > 0 {
 		c.saveLocked()
 	}
 	c.mu.Unlock()
 	if added > 0 {
 		c.log.Printf("split: merged %d domains from the shared feed", added)
 	}
+	if protos > 0 {
+		c.log.Printf("split: %.0f protocol observations merged", float64(protos))
+	}
+	c.resolveConflicts(domains)
+}
+
+// resolveConflicts answers the server's re-check or verification request for
+// a contested domain and shares the answer. The blocked side verifies, the
+// allowing side re-checks; either way the answer is a final observation.
+func (c *Controller) resolveConflicts(domains []feedDomain) {
+	for _, d := range domains {
+		if !d.Recheck && !d.Verify {
+			continue
+		}
+		state := c.localState(d.Domain)
+		if d.Recheck && state == StateBlocked {
+			continue
+		}
+		if d.Verify && state != StateBlocked {
+			continue
+		}
+		go func(domain string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			res := ProbeConfirmed(ctx, domain, ProbeOptions{Interface: c.iface, Timeout: ProbeTimeout})
+			answer := "allowed"
+			if res.State == StateBlocked {
+				answer = "blocked"
+			}
+			evidence := string(res.Evidence)
+			if evidence == "" {
+				evidence = string(EvidenceFeed)
+			}
+			c.reporter.ReportFinal(ctx, domain, answer, evidence)
+		}(d.Domain)
+	}
+}
+
+func (c *Controller) localState(domain string) DomainState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.profile.State(domain, time.Now())
 }
 
 func (c *Controller) saveLocked() {

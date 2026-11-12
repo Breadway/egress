@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -28,7 +30,22 @@ const (
 	maxSplitReport  = 50
 )
 
+// splitNetworkPepper separates the SSID hash from a bare SHA-256. It is not a
+// secret: an SSID has a small search space, so this is obfuscation of the
+// network name, not proof of secrecy.
+const splitNetworkPepper = "egress-split-v1:"
+
+const (
+	splitFeedVersion = 2
+	splitEntryTTL    = 30 * 24 * time.Hour
+)
+
 var (
+	splitNetworkIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	splitProtocols   = map[string]bool{"udp": true, "tcp": true, "icmp": true, "dns": true, "quic": true}
+	splitStates      = map[string]bool{"blocked": true, "allowed": true}
+	splitProtoStates = map[string]bool{"ok": true, "blocked": true, "unknown": true}
+
 	splitDomainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 	splitEvidence = map[string]bool{
 		"connect-stall":     true,
@@ -40,62 +57,113 @@ var (
 	}
 )
 
+// splitDomainReport is one device's observation about one domain. State is
+// "blocked" or "allowed"; Final marks the answer to a recheck or verification
+// the server asked for while resolving a conflict.
 type splitDomainReport struct {
 	Domain   string `json:"domain"`
+	State    string `json:"state,omitempty"`
+	Evidence string `json:"evidence"`
+	Final    bool   `json:"final,omitempty"`
+}
+
+// splitProtocolReport is one device's observation about outbound protocol
+// reachability on this network.
+type splitProtocolReport struct {
+	Protocol string `json:"protocol"`
+	State    string `json:"state"`
 	Evidence string `json:"evidence"`
 }
 
 type splitReport struct {
-	Device  string              `json:"device"`
-	Network string              `json:"network"`
-	Domains []splitDomainReport `json:"domains"`
+	Device    string                `json:"device"`
+	Network   string                `json:"network,omitempty"`
+	NetworkID string                `json:"network_id,omitempty"`
+	Domains   []splitDomainReport   `json:"domains"`
+	Protocols []splitProtocolReport `json:"protocols,omitempty"`
 }
 
+// feedEntry holds the merged state of one domain. Block wins a conflict: a
+// single blocked observation among the verification answers keeps the domain
+// blocked.
 type feedEntry struct {
+	State           string   `json:"state"` // blocked or allowed
+	Evidence        string   `json:"evidence"`
+	Count           int      `json:"count"`
+	LastSeen        string   `json:"last_seen"`
+	AllowedEvidence string   `json:"allowed_evidence,omitempty"`
+	AllowedSeen     string   `json:"allowed_seen,omitempty"`
+	Contested       bool     `json:"contested,omitempty"`
+	ContestSince    string   `json:"contest_since,omitempty"`
+	RecheckAsked    bool     `json:"recheck_asked,omitempty"`
+	VerifyAsked     bool     `json:"verify_asked,omitempty"`
+	Finals          []string `json:"finals,omitempty"`
+}
+
+// protocolEntry is the merged reachability of one outbound protocol.
+type protocolEntry struct {
+	State    string `json:"state"` // ok, blocked, or unknown
 	Evidence string `json:"evidence"`
 	Count    int    `json:"count"`
 	LastSeen string `json:"last_seen"`
 }
 
 type networkFeed struct {
-	Version int                  `json:"version"`
-	Network string               `json:"network"`
-	Updated string               `json:"updated"`
-	Domains map[string]feedEntry `json:"domains"`
+	Version   int                      `json:"version"`
+	NetworkID string                   `json:"network_id"`
+	Updated   string                   `json:"updated"`
+	Domains   map[string]feedEntry     `json:"domains"`
+	Protocols map[string]protocolEntry `json:"protocols,omitempty"`
 }
 
 func (s *server) splitDir() string { return filepath.Join(s.state, "split") }
 
-func splitSlug(network string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(network) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '.', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
+// networkID returns the hashed network key. Legacy plaintext names are hashed
+// on arrival so the server never stores the SSID itself.
+func networkID(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if splitNetworkIDRe.MatchString(raw) {
+		return raw
 	}
-	out := b.String()
-	if len(out) > 80 {
-		out = out[:80]
-	}
-	if out == "" {
-		out = "unknown"
-	}
-	return out
+	sum := sha256.Sum256([]byte(splitNetworkPepper + raw))
+	return hex.EncodeToString(sum[:])[:32]
 }
 
-func (s *server) loadFeed(network string) networkFeed {
-	feed := networkFeed{Version: 1, Network: network, Domains: map[string]feedEntry{}}
-	data, err := os.ReadFile(filepath.Join(s.splitDir(), splitSlug(network)+".json"))
+func (s *server) feedPath(id string) string {
+	return filepath.Join(s.splitDir(), id+".json")
+}
+
+func (s *server) loadFeed(id string) networkFeed {
+	feed := networkFeed{Version: splitFeedVersion, NetworkID: id,
+		Domains: map[string]feedEntry{}, Protocols: map[string]protocolEntry{}}
+	data, err := os.ReadFile(s.feedPath(id))
 	if err != nil {
 		return feed
 	}
-	if err := json.Unmarshal(data, &feed); err != nil || feed.Domains == nil {
-		return networkFeed{Version: 1, Network: network, Domains: map[string]feedEntry{}}
+	if err := json.Unmarshal(data, &feed); err != nil {
+		return networkFeed{Version: splitFeedVersion, NetworkID: id,
+			Domains: map[string]feedEntry{}, Protocols: map[string]protocolEntry{}}
+	}
+	if feed.Domains == nil {
+		feed.Domains = map[string]feedEntry{}
+	}
+	if feed.Protocols == nil {
+		feed.Protocols = map[string]protocolEntry{}
+	}
+	feed.Version = splitFeedVersion
+	feed.NetworkID = id
+	// Drop stale entries: a block that nobody has seen for a month is a
+	// different network or a different censorship regime.
+	cutoff := time.Now().UTC().Add(-splitEntryTTL).Format(time.RFC3339)
+	for domain, entry := range feed.Domains {
+		if entry.LastSeen < cutoff {
+			delete(feed.Domains, domain)
+		}
+	}
+	for proto, entry := range feed.Protocols {
+		if entry.LastSeen < cutoff {
+			delete(feed.Protocols, proto)
+		}
 	}
 	return feed
 }
@@ -108,7 +176,7 @@ func (s *server) saveFeed(feed networkFeed) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.splitDir(), splitSlug(feed.Network)+".json")
+	path := s.feedPath(feed.NetworkID)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
@@ -116,8 +184,13 @@ func (s *server) saveFeed(feed networkFeed) error {
 	return os.Rename(tmp, path)
 }
 
+// validSplitNetwork accepts a hashed network id, or a legacy plaintext name
+// which callers hash before use.
 func validSplitNetwork(network string) bool {
 	network = strings.TrimSpace(network)
+	if splitNetworkIDRe.MatchString(network) {
+		return true
+	}
 	return len(network) >= 1 && len(network) <= 120
 }
 
@@ -125,6 +198,19 @@ func validSplitDomain(domain string) bool {
 	return len(domain) <= 253 && splitDomainRe.MatchString(domain)
 }
 
+func containsState(states []string, want string) bool {
+	for _, s := range states {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// apiBlockedReport merges one device's observations. Blocked and allowed
+// observations about the same domain contest it; the blocked device and the
+// allowing device are then asked to re-check, and any blocked answer keeps the
+// domain blocked.
 func (s *server) apiBlockedReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -141,34 +227,64 @@ func (s *server) apiBlockedReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep.Device = truncateText(strings.TrimSpace(rep.Device), 64)
-	rep.Network = truncateText(strings.TrimSpace(rep.Network), 120)
-	if rep.Device == "" || !validSplitNetwork(rep.Network) {
+	raw := rep.NetworkID
+	if raw == "" {
+		raw = rep.Network
+	}
+	if rep.Device == "" || !validSplitNetwork(raw) {
 		http.Error(w, "bad device or network", http.StatusBadRequest)
 		return
 	}
-	if len(rep.Domains) == 0 || len(rep.Domains) > maxSplitReport {
-		http.Error(w, "bad domain count", http.StatusBadRequest)
+	if len(rep.Domains) == 0 && len(rep.Protocols) == 0 {
+		http.Error(w, "nothing to report", http.StatusBadRequest)
 		return
 	}
 
 	s.feedMu.Lock()
 	defer s.feedMu.Unlock()
-	feed := s.loadFeed(rep.Network)
+	feed := s.loadFeed(networkID(raw))
 	now := time.Now().UTC().Format(time.RFC3339)
 	added := 0
+
+	if len(rep.Domains) > maxSplitReport {
+		rep.Domains = rep.Domains[:maxSplitReport]
+	}
 	for _, d := range rep.Domains {
 		domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d.Domain)), ".")
 		if !validSplitDomain(domain) || !splitEvidence[d.Evidence] {
+			continue
+		}
+		state := strings.ToLower(strings.TrimSpace(d.State))
+		if state == "" {
+			state = "blocked"
+		}
+		if !splitStates[state] {
 			continue
 		}
 		entry, ok := feed.Domains[domain]
 		if !ok && len(feed.Domains) >= maxSplitDomains {
 			continue
 		}
-		entry.Evidence = d.Evidence
+		entry = mergeDomainObservation(entry, state, d.Evidence, d.Final, now)
+		feed.Domains[domain] = entry
+		added++
+	}
+
+	if len(rep.Protocols) > len(splitProtocols) {
+		rep.Protocols = rep.Protocols[:len(splitProtocols)]
+	}
+	for _, p := range rep.Protocols {
+		proto := strings.ToLower(strings.TrimSpace(p.Protocol))
+		state := strings.ToLower(strings.TrimSpace(p.State))
+		if !splitProtocols[proto] || !splitProtoStates[state] {
+			continue
+		}
+		entry := feed.Protocols[proto]
+		entry.State = state
+		entry.Evidence = truncateText(p.Evidence, 40)
 		entry.Count++
 		entry.LastSeen = now
-		feed.Domains[domain] = entry
+		feed.Protocols[proto] = entry
 		added++
 	}
 	if added == 0 {
@@ -183,30 +299,98 @@ func (s *server) apiBlockedReport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// mergeDomainObservation applies the conflict rules for one observation.
+func mergeDomainObservation(entry feedEntry, state, evidence string, final bool, now string) feedEntry {
+	if entry.State == "" {
+		entry.State = state
+	}
+	switch state {
+	case "blocked":
+		entry.State = "blocked"
+		entry.Evidence = evidence
+		entry.Count++
+		entry.LastSeen = now
+		if entry.Contested {
+			// Ask the blocked side to confirm once the allowing side has
+			// re-checked; either answer is evidence, but only a block wins.
+			if entry.RecheckAsked || entry.VerifyAsked {
+				entry.VerifyAsked = true
+			}
+		}
+		if final {
+			entry.Finals = append(entry.Finals, "blocked")
+			entry.State = "blocked"
+			entry.Contested = false
+			entry.RecheckAsked = false
+			entry.VerifyAsked = false
+		}
+	case "allowed":
+		entry.AllowedEvidence = evidence
+		entry.AllowedSeen = now
+		if entry.Count == 0 {
+			entry.State = "allowed"
+			entry.LastSeen = now
+			break
+		}
+		if !entry.Contested {
+			entry.Contested = true
+			entry.ContestSince = now
+		}
+		// The device that says allowed re-checks first.
+		entry.RecheckAsked = true
+		if final {
+			entry.Finals = append(entry.Finals, "allowed")
+			entry.RecheckAsked = false
+			if !containsState(entry.Finals, "blocked") {
+				entry.State = "allowed"
+				entry.Contested = false
+				entry.VerifyAsked = false
+			}
+		}
+	}
+	return entry
+}
+
+// apiSeed returns the merged table for one network, including the protocol
+// picture and the domains this device should re-check or verify.
 func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	network := strings.TrimSpace(r.URL.Query().Get("network"))
-	if !validSplitNetwork(network) {
+	raw := strings.TrimSpace(r.URL.Query().Get("n"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.URL.Query().Get("network"))
+	}
+	if !validSplitNetwork(raw) {
 		http.Error(w, "bad network", http.StatusBadRequest)
 		return
 	}
+	id := networkID(raw)
 	s.feedMu.Lock()
-	feed := s.loadFeed(network)
+	feed := s.loadFeed(id)
 	s.feedMu.Unlock()
 
-	type seedEntry struct {
-		Domain   string `json:"domain"`
-		Evidence string `json:"evidence"`
+	type seedDomain struct {
+		Domain    string `json:"domain"`
+		Evidence  string `json:"evidence"`
+		Count     int    `json:"count"`
+		Contested bool   `json:"contested,omitempty"`
+		Recheck   bool   `json:"recheck,omitempty"`
+		Verify    bool   `json:"verify,omitempty"`
+	}
+	type seedProtocol struct {
+		Protocol string `json:"protocol"`
+		State    string `json:"state"`
 		Count    int    `json:"count"`
 	}
 	out := struct {
-		Version int         `json:"version"`
-		Network string      `json:"network"`
-		Domains []seedEntry `json:"domains"`
-	}{Version: 1, Network: network}
+		Version   int            `json:"version"`
+		NetworkID string         `json:"network_id"`
+		Domains   []seedDomain   `json:"domains"`
+		Protocols []seedProtocol `json:"protocols,omitempty"`
+	}{Version: splitFeedVersion, NetworkID: id}
+
 	names := make([]string, 0, len(feed.Domains))
 	for domain := range feed.Domains {
 		names = append(names, domain)
@@ -214,21 +398,37 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(names)
 	for _, domain := range names {
 		entry := feed.Domains[domain]
-		out.Domains = append(out.Domains, seedEntry{Domain: domain, Evidence: entry.Evidence, Count: entry.Count})
+		if entry.State != "blocked" {
+			continue
+		}
+		out.Domains = append(out.Domains, seedDomain{
+			Domain: domain, Evidence: entry.Evidence, Count: entry.Count,
+			Contested: entry.Contested, Recheck: entry.RecheckAsked, Verify: entry.VerifyAsked,
+		})
+	}
+	protos := make([]string, 0, len(feed.Protocols))
+	for proto := range feed.Protocols {
+		protos = append(protos, proto)
+	}
+	sort.Strings(protos)
+	for _, proto := range protos {
+		entry := feed.Protocols[proto]
+		out.Protocols = append(out.Protocols, seedProtocol{Protocol: proto, State: entry.State, Count: entry.Count})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// adminSplit is a read-only view of the merged feeds and counters.
+// adminSplit is a read-only view of the merged feeds: blocked domains,
+// conflicts and the protocol picture per network.
 func (s *server) adminSplit(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
 	entries, _ := os.ReadDir(s.splitDir())
 	var b strings.Builder
-	b.WriteString(`<h1>Split feed</h1><p>Domains reported blocked per network. No client identifiers are stored.</p>`)
+	b.WriteString(`<h1>Split feed</h1><p>Per-network tables keyed by a hashed SSID. No client identifiers or plaintext network names are stored. Block wins a conflict: one blocked verification keeps the domain blocked.</p>`)
 	if len(entries) == 0 {
 		b.WriteString(`<p class="muted">No reports yet.</p>`)
 	}
@@ -249,20 +449,46 @@ func (s *server) adminSplit(w http.ResponseWriter, r *http.Request) {
 			names = append(names, domain)
 		}
 		sort.Strings(names)
-		fmt.Fprintf(&b, `<h2>%s <span class="muted">(%d domains, updated %s)</span></h2>`,
-			template.HTMLEscapeString(feed.Network), len(names), template.HTMLEscapeString(feed.Updated))
-		b.WriteString(`<table><thead><tr><th>Domain</th><th>Evidence</th><th>Reports</th><th>Last seen</th></tr></thead><tbody>`)
+		contested := 0
+		for _, domain := range names {
+			if feed.Domains[domain].Contested {
+				contested++
+			}
+		}
+		fmt.Fprintf(&b, `<h2>%s <span class="muted">(%d domains, %d contested, updated %s)</span></h2>`,
+			template.HTMLEscapeString(feed.NetworkID), len(names), contested, template.HTMLEscapeString(feed.Updated))
+		if len(feed.Protocols) > 0 {
+			protos := make([]string, 0, len(feed.Protocols))
+			for proto := range feed.Protocols {
+				protos = append(protos, proto)
+			}
+			sort.Strings(protos)
+			b.WriteString(`<p class="muted">Protocols: `)
+			for i, proto := range protos {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				fmt.Fprintf(&b, `%s %s`, template.HTMLEscapeString(proto), template.HTMLEscapeString(feed.Protocols[proto].State))
+			}
+			b.WriteString(`</p>`)
+		}
+		b.WriteString(`<table><thead><tr><th>Domain</th><th>State</th><th>Evidence</th><th>Reports</th><th>Contested</th><th>Last seen</th></tr></thead><tbody>`)
 		for i, domain := range names {
 			if i >= 200 {
-				fmt.Fprintf(&b, `<tr><td colspan="4" class="muted">and %d more</td></tr>`, len(names)-i)
+				fmt.Fprintf(&b, `<tr><td colspan="6" class="muted">and %d more</td></tr>`, len(names)-i)
 				break
 			}
 			entry := feed.Domains[domain]
-			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%d</td><td>%s</td></tr>`,
-				template.HTMLEscapeString(domain), template.HTMLEscapeString(entry.Evidence),
-				entry.Count, template.HTMLEscapeString(entry.LastSeen))
+			contested := ""
+			if entry.Contested {
+				contested = "yes"
+			}
+			fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>`,
+				template.HTMLEscapeString(domain), template.HTMLEscapeString(entry.State),
+				template.HTMLEscapeString(entry.Evidence), entry.Count, contested,
+				template.HTMLEscapeString(entry.LastSeen))
 		}
 		b.WriteString(`</tbody></table>`)
 	}
-	s.render(w, true, "Split feed", b.String())
+	s.renderNav(w, true, "admin", "Split feed", b.String())
 }

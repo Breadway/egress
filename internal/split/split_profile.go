@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"egress/internal/core"
 	"encoding/hex"
 	"encoding/json"
@@ -12,7 +13,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,26 +35,47 @@ const (
 const EvidenceFeed Evidence = "feed"
 
 type feedDomain struct {
-	Domain   string `json:"domain"`
-	Evidence string `json:"evidence"`
+	Domain    string `json:"domain"`
+	Evidence  string `json:"evidence"`
+	Count     int    `json:"count"`
+	Contested bool   `json:"contested,omitempty"`
+	// Recheck asks the device that believes the domain is allowed to probe
+	// again; Verify asks the device that believes it is blocked to confirm.
+	Recheck bool `json:"recheck,omitempty"`
+	Verify  bool `json:"verify,omitempty"`
+}
+
+type feedProtocol struct {
+	Protocol string `json:"protocol"`
+	State    string `json:"state"`
 	Count    int    `json:"count"`
 }
 
 type feedResponse struct {
-	Version int          `json:"version"`
-	Network string       `json:"network"`
-	Domains []feedDomain `json:"domains"`
+	Version   int            `json:"version"`
+	NetworkID string         `json:"network_id"`
+	Domains   []feedDomain   `json:"domains"`
+	Protocols []feedProtocol `json:"protocols,omitempty"`
 }
 
 type splitDomainReport struct {
 	Domain   string `json:"domain"`
+	State    string `json:"state,omitempty"`
+	Evidence string `json:"evidence"`
+	Final    bool   `json:"final,omitempty"`
+}
+
+type splitProtocolReport struct {
+	Protocol string `json:"protocol"`
+	State    string `json:"state"`
 	Evidence string `json:"evidence"`
 }
 
 type splitReport struct {
-	Device  string              `json:"device"`
-	Network string              `json:"network"`
-	Domains []splitDomainReport `json:"domains"`
+	Device    string                `json:"device"`
+	NetworkID string                `json:"network_id"`
+	Domains   []splitDomainReport   `json:"domains"`
+	Protocols []splitProtocolReport `json:"protocols,omitempty"`
 }
 
 // splitReporter batches newly blocked domains and shares the merged feed.
@@ -70,10 +91,15 @@ type splitReporter struct {
 	log      *log.Logger
 	disabled bool
 
+	// protocols is what this device last observed about outbound protocols.
+	protocols []splitProtocolReport
+	// recheck probes a contested domain and returns the answer to share.
+	recheck func(context.Context, string) (string, string)
+
 	// test hooks
 	seedURL   string
 	reportURL string
-	mergeFunc func([]feedDomain)
+	mergeFunc func([]feedDomain, []feedProtocol)
 }
 
 func newSplitReporter(network, dir string, logger *log.Logger) *splitReporter {
@@ -156,14 +182,20 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	device := r.device
 	batch := make([]splitDomainReport, 0, len(r.queue))
 	for domain, evidence := range r.queue {
-		batch = append(batch, splitDomainReport{Domain: domain, Evidence: string(evidence)})
+		batch = append(batch, splitDomainReport{Domain: domain, State: "blocked", Evidence: string(evidence)})
 		if len(batch) >= splitReportBatch {
 			break
 		}
 	}
+	protocols := r.protocols
 	r.mu.Unlock()
 
-	payload, err := json.Marshal(splitReport{Device: device, Network: network, Domains: batch})
+	payload, err := json.Marshal(splitReport{
+		Device:    device,
+		NetworkID: NetworkID(network),
+		Domains:   batch,
+		Protocols: protocols,
+	})
 	if err != nil {
 		return err
 	}
@@ -200,7 +232,7 @@ func (r *splitReporter) fetchFeed(ctx context.Context) {
 	network := r.network
 	r.mu.Unlock()
 
-	u := r.seedURL + "?network=" + url.QueryEscape(network)
+	u := r.seedURL + "?n=" + NetworkID(network)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return
@@ -220,27 +252,94 @@ func (r *splitReporter) fetchFeed(ctx context.Context) {
 		log.Printf("split: feed decode: %v", err)
 		return
 	}
-	log.Printf("split: feed has %d domains for %s", len(feed.Domains), network)
-	r.merge(feed.Domains)
+	log.Printf("split: feed has %d domains and %d protocol notes", len(feed.Domains), len(feed.Protocols))
+	r.merge(feed.Domains, feed.Protocols)
 }
 
 // merge writes feed entries into the profile as blocked. It is called from the
 // reporter goroutine, so the caller does it through the controller to keep the
 // profile lock honest.
-func (r *splitReporter) merge(domains []feedDomain) {
+func (r *splitReporter) merge(domains []feedDomain, protocols []feedProtocol) {
 	r.mu.Lock()
 	cb := r.mergeFunc
 	r.mu.Unlock()
 	if cb != nil {
-		cb(domains)
+		cb(domains, protocols)
 	}
 }
 
 // mergeFunc is installed by the split controller.
-func (r *splitReporter) SetMergeFunc(fn func([]feedDomain)) {
+func (r *splitReporter) SetMergeFunc(fn func([]feedDomain, []feedProtocol)) {
 	r.mu.Lock()
 	r.mergeFunc = fn
 	r.mu.Unlock()
+}
+
+// ReportFinal shares the answer to a re-check or verification the server asked
+// for while resolving a conflict. It is sent immediately: the whole point is
+// to settle the domain without waiting for the batch timer.
+func (r *splitReporter) ReportFinal(ctx context.Context, domain, state, evidence string) {
+	if r.disabled {
+		return
+	}
+	r.mu.Lock()
+	network := r.network
+	device := r.device
+	r.mu.Unlock()
+	payload, err := json.Marshal(splitReport{
+		Device:    device,
+		NetworkID: NetworkID(network),
+		Domains:   []splitDomainReport{{Domain: domain, State: state, Evidence: evidence, Final: true}},
+	})
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.reportURL, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		log.Printf("split: final observation failed: %v", err)
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+	resp.Body.Close()
+	log.Printf("split: conflict answer %s=%s (%s)", domain, state, evidence)
+}
+
+// SetProtocols records this device's protocol observations for the next report.
+func (r *splitReporter) SetProtocols(protocols []splitProtocolReport) {
+	r.mu.Lock()
+	r.protocols = protocols
+	r.mu.Unlock()
+}
+
+// mergeProtocols records the shared protocol picture. Only states this device
+// has no measurement for are filled, so a local observation wins.
+func mergeProtocols(p *Profile, protocols []feedProtocol) int {
+	if p.Protocols == nil {
+		p.Protocols = map[string]string{}
+	}
+	changed := 0
+	for _, proto := range protocols {
+		if proto.State == "" || p.Protocols[proto.Protocol] != "" {
+			continue
+		}
+		p.Protocols[proto.Protocol] = proto.State
+		changed++
+	}
+	return changed
+}
+
+// ProtocolStates returns the shared protocol picture, for reports and diagnose.
+func (p *Profile) ProtocolStates() map[string]string {
+	out := map[string]string{}
+	for k, v := range p.Protocols {
+		out[k] = v
+	}
+	return out
 }
 
 // mergeFeedDomains adds feed entries as blocked. It returns how many were new.
@@ -345,10 +444,23 @@ type Profile struct {
 	Network string                 `json:"network"`
 	Updated time.Time              `json:"updated"`
 	Entries map[string]DomainEntry `json:"entries"`
+	// Protocols is what the network was last seen to allow outbound: udp,
+	// tcp, icmp, dns. Shared between devices so a joining client can start
+	// in the right mode instead of rediscovering a UDP block.
+	Protocols map[string]string `json:"protocols,omitempty"`
 }
 
 func NewProfile(network string) *Profile {
-	return &Profile{Version: 1, Network: network, Entries: map[string]DomainEntry{}}
+	return &Profile{Version: 1, Network: network, Entries: map[string]DomainEntry{},
+		Protocols: map[string]string{}}
+}
+
+// NetworkID is the key the shared table uses. It hashes the SSID so the server
+// never stores the name. The pepper makes the hash domain-specific, not secret:
+// an SSID has a small search space.
+func NetworkID(network string) string {
+	sum := sha256.Sum256([]byte("egress-split-v1:" + strings.ToLower(strings.TrimSpace(network))))
+	return hex.EncodeToString(sum[:])[:32]
 }
 
 // NetworkKey identifies a network by SSID and gateway. Roaming between APs on
@@ -386,6 +498,9 @@ func (p *Profile) RecordProbe(domain string, evidence Evidence, blocked bool, no
 	}
 	if p.Entries == nil {
 		p.Entries = map[string]DomainEntry{}
+	}
+	if p.Protocols == nil {
+		p.Protocols = map[string]string{}
 	}
 	entry, ok := p.Entries[domain]
 	if !ok && len(p.Entries) >= maxProfileEntries {
@@ -508,6 +623,9 @@ func LoadProfile(path, network string) (*Profile, error) {
 	}
 	if p.Entries == nil {
 		p.Entries = map[string]DomainEntry{}
+	}
+	if p.Protocols == nil {
+		p.Protocols = map[string]string{}
 	}
 	if p.Network == "" {
 		p.Network = network
