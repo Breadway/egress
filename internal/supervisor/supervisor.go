@@ -1,9 +1,14 @@
-package egress
+package supervisor
 
 import (
 	"context"
+	"egress/internal/core"
 	"egress/internal/doh"
+	"egress/internal/health"
+	"egress/internal/logx"
+	"egress/internal/platform"
 	"egress/internal/split"
+	"egress/internal/wstunnel"
 	"fmt"
 	"log"
 	"net"
@@ -17,33 +22,33 @@ const (
 	pathWebSocket
 )
 
-// supervisor keeps the DoH resolver running and moves the WireGuard exit
+// Supervisor keeps the DoH resolver running and moves the WireGuard exit
 // between the direct UDP path and the WebSocket fallback.
 //
 // The health signal is a probe of Aegis's tunnel address, not the WireGuard
 // handshake: while the fallback carries traffic the handshake stays fresh
 // through it, so handshake age cannot tell a working UDP path from a rescued
 // one.
-type supervisor struct {
-	plat     platform
+type Supervisor struct {
+	plat     platform.Interface
 	resolver *doh.Resolver
-	tcfg     tunnelConfig
-	wst      *wstunnelProc
+	tcfg     core.TunnelConfig
+	wst      *wstunnel.Proc
 	log      *log.Logger
 
 	manageTunnel   bool
 	manageFallback bool
 	// preferRelay starts the loop on the WebSocket path because the stored
 	// protocol picture says UDP is blocked on this network.
-	preferRelay bool
+	PreferRelay bool
 
-	iface   string
-	gateway string
+	Iface   string
+	Gateway string
 
 	// Candidate default routes, best first, with the index currently
 	// pinned. On sustained probe failure the pin walks the list so one dead
 	// interface cannot strand the tunnel, DNS and fallback together.
-	routes []Route
+	routes []platform.Route
 	pinIdx int
 
 	// Consecutive failed probes while on the relay path. A listening relay
@@ -60,11 +65,11 @@ type supervisor struct {
 
 	// split, when set, learns blocked domains from DNS and routes only those
 	// destinations into the tunnel.
-	split *split.Controller
+	Split *split.Controller
 }
 
-func newSupervisor(plat platform, resolver *doh.Resolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
-	return &supervisor{
+func New(plat platform.Interface, resolver *doh.Resolver, wst *wstunnel.Proc, logger *log.Logger, manageTunnel, manageFallback bool) *Supervisor {
+	return &Supervisor{
 		plat:           plat,
 		resolver:       resolver,
 		wst:            wst,
@@ -74,16 +79,16 @@ func newSupervisor(plat platform, resolver *doh.Resolver, wst *wstunnelProc, log
 	}
 }
 
-func (s *supervisor) Run(ctx context.Context) error {
+func (s *Supervisor) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- s.resolver.Serve(ctx) }()
-	if s.split != nil {
-		network := split.NetworkKey("", s.gateway)
-		s.split.SetNetwork(network, s.iface)
+	if s.Split != nil {
+		network := split.NetworkKey("", s.Gateway)
+		s.Split.SetNetwork(network, s.Iface)
 		s.resolver.SetObserver(func(domain string, ips []net.IP, ttl time.Duration) {
-			s.split.HandleAnswer(domain, ips, ttl)
+			s.Split.HandleAnswer(domain, ips, ttl)
 		})
-		go s.split.Run(ctx)
+		go s.Split.Run(ctx)
 		s.log.Printf("split mode: learned-blocked destinations only (%s)", network)
 	}
 	if s.manageTunnel {
@@ -104,10 +109,10 @@ func (s *supervisor) Run(ctx context.Context) error {
 	}
 }
 
-func (s *supervisor) loop(ctx context.Context) error {
+func (s *Supervisor) loop(ctx context.Context) error {
 	state := pathUDP
 	failures := 0
-	if s.preferRelay && s.manageFallback {
+	if s.PreferRelay && s.manageFallback {
 		if err := s.enterWebSocket(ctx); err != nil {
 			s.log.Printf("relay start failed, trying udp: %v", err)
 		} else {
@@ -129,14 +134,14 @@ func (s *supervisor) loop(ctx context.Context) error {
 
 	// Re-assert the resolver as soon as the loop starts. After a reboot the
 	// adapter may have been reset to DHCP, and after `enable` this is what
-	// restores DNS without waiting a full dnsCheckEvery.
-	if s.iface != "" {
-		if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
+	// restores DNS without waiting a full core.DNSCheckEvery.
+	if s.Iface != "" {
+		if err := s.plat.EnsureDNS(s.Iface, s.Gateway); err != nil {
 			s.log.Printf("dns apply at startup failed: %v", err)
 		}
 	}
 
-	ticker := time.NewTicker(probeInterval)
+	ticker := time.NewTicker(core.ProbeInterval)
 	defer ticker.Stop()
 
 	for {
@@ -146,8 +151,8 @@ func (s *supervisor) loop(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		debugf("tick: state=%d failures=%d tunnel=%v iface=%s gateway=%s",
-			state, failures, s.plat.TunnelUp(), s.iface, s.gateway)
+		logx.Debugf("tick: state=%d failures=%d tunnel=%v iface=%s gateway=%s",
+			state, failures, s.plat.TunnelUp(), s.Iface, s.Gateway)
 
 		// changed tracks a fresh route flip for this tick only. The first
 		// probe after a flip fails over immediately instead of waiting out
@@ -157,7 +162,7 @@ func (s *supervisor) loop(ctx context.Context) error {
 
 		// Deliver a spooled install report from a previous failed run, if any.
 		// Cheap when there is nothing to send: one stat call.
-		flushPendingReport()
+		health.FlushPendingReport()
 
 		// Track the whole default-route set, not just the best route. A new
 		// escape path can appear (or vanish) without the best route
@@ -168,28 +173,28 @@ func (s *supervisor) loop(ctx context.Context) error {
 					routes[0] != s.routes[0]
 				s.routes = routes
 				if bestChanged && len(routes) > 0 {
-					s.iface, s.gateway = routes[0].Iface, routes[0].Gateway
-					s.resolver.SetGateway(s.gateway)
+					s.Iface, s.Gateway = routes[0].Iface, routes[0].Gateway
+					s.resolver.SetGateway(s.Gateway)
 					// Drop pooled connections bound to the old interface.
 					s.resolver.CloseIdle()
-					if err := s.plat.ApplyDNS(s.iface, s.gateway); err != nil {
+					if err := s.plat.ApplyDNS(s.Iface, s.Gateway); err != nil {
 						s.log.Printf("dns re-apply failed: %v", err)
 					}
 					// The endpoint pin points at the old gateway. Without a
 					// refresh, handshakes, DoH and the fallback all keep
 					// going out the dead interface while everything else
 					// follows the new default route.
-					if err := s.plat.RepinEndpoint(s.gateway, s.iface); err != nil {
+					if err := s.plat.RepinEndpoint(s.Gateway, s.Iface); err != nil {
 						s.log.Printf("endpoint re-pin failed: %v", err)
 					}
 					s.pinIdx = 0
-					s.log.Printf("network changed: interface %s, gateway %s", s.iface, s.gateway)
+					s.log.Printf("network changed: interface %s, gateway %s", s.Iface, s.Gateway)
 					changed = true
 					failures = 0
 					s.dnsWedgeSince = time.Time{}
 					s.lastDNSRecovery = time.Time{}
-					if s.split != nil {
-						s.split.SetNetwork(split.NetworkKey("", s.gateway), s.iface)
+					if s.Split != nil {
+						s.Split.SetNetwork(split.NetworkKey("", s.Gateway), s.Iface)
 					}
 					if state == pathWebSocket {
 						lastTrial = time.Time{}
@@ -201,9 +206,9 @@ func (s *supervisor) loop(ctx context.Context) error {
 			}
 		}
 
-		if time.Since(lastDNSCheck) >= dnsCheckEvery {
+		if time.Since(lastDNSCheck) >= core.DNSCheckEvery {
 			lastDNSCheck = time.Now()
-			if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
+			if err := s.plat.EnsureDNS(s.Iface, s.Gateway); err != nil {
 				s.log.Printf("dns check failed: %v", err)
 			}
 		}
@@ -231,7 +236,7 @@ func (s *supervisor) loop(ctx context.Context) error {
 				continue
 			}
 			failures++
-			s.log.Printf("probe %s failed (%d in a row)", aegisTunnelIP, failures)
+			s.log.Printf("probe %s failed (%d in a row)", core.AegisTunnelIP, failures)
 			// Rotate only on sustained failure: two routes with
 			// intermittent loss would otherwise flap the Aegis pin
 			// every tick instead of riding it out.
@@ -262,7 +267,7 @@ func (s *supervisor) loop(ctx context.Context) error {
 				s.log.Printf("could not keep the relay endpoint: %v", err)
 			}
 			s.probeRelay()
-			if s.relayFailures >= relayFailThreshold {
+			if s.relayFailures >= core.RelayFailThreshold {
 				s.log.Printf("relay path failed %d probes in a row; restarting wstunnel and retrying udp early",
 					s.relayFailures)
 				s.wst.Stop()
@@ -272,7 +277,7 @@ func (s *supervisor) loop(ctx context.Context) error {
 				s.relayFailures = 0
 				lastTrial = time.Time{}
 			}
-			if time.Since(lastTrial) >= trialInterval {
+			if time.Since(lastTrial) >= core.TrialInterval {
 				lastTrial = time.Now()
 				if s.trialUDP(ctx) {
 					state = pathUDP
@@ -289,16 +294,16 @@ func (s *supervisor) loop(ctx context.Context) error {
 // endpoint pin: without a tunnel there is nothing to move, but DHCP renews
 // still need ApplyDNS/EnsureDNS or the machine silently stops using the
 // listener.
-func (s *supervisor) dnsLoop(ctx context.Context) error {
+func (s *Supervisor) dnsLoop(ctx context.Context) error {
 	var lastDNSCheck time.Time
 
-	if s.iface != "" {
-		if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
+	if s.Iface != "" {
+		if err := s.plat.EnsureDNS(s.Iface, s.Gateway); err != nil {
 			s.log.Printf("dns apply at startup failed: %v", err)
 		}
 	}
 
-	ticker := time.NewTicker(probeInterval)
+	ticker := time.NewTicker(core.ProbeInterval)
 	defer ticker.Stop()
 
 	for {
@@ -308,7 +313,7 @@ func (s *supervisor) dnsLoop(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		flushPendingReport()
+		health.FlushPendingReport()
 
 		if routes, err := s.plat.DefaultRoutes(); err == nil {
 			if !sameRouteSet(routes, s.routes) {
@@ -316,14 +321,14 @@ func (s *supervisor) dnsLoop(ctx context.Context) error {
 					routes[0] != s.routes[0]
 				s.routes = routes
 				if bestChanged && len(routes) > 0 {
-					s.iface, s.gateway = routes[0].Iface, routes[0].Gateway
-					s.resolver.SetGateway(s.gateway)
+					s.Iface, s.Gateway = routes[0].Iface, routes[0].Gateway
+					s.resolver.SetGateway(s.Gateway)
 					s.resolver.CloseIdle()
-					if err := s.plat.ApplyDNS(s.iface, s.gateway); err != nil {
+					if err := s.plat.ApplyDNS(s.Iface, s.Gateway); err != nil {
 						s.log.Printf("dns re-apply failed: %v", err)
 					}
 					s.pinIdx = 0
-					s.log.Printf("network changed: interface %s, gateway %s", s.iface, s.gateway)
+					s.log.Printf("network changed: interface %s, gateway %s", s.Iface, s.Gateway)
 					s.dnsWedgeSince = time.Time{}
 					s.lastDNSRecovery = time.Time{}
 				} else if len(routes) > 0 {
@@ -333,9 +338,9 @@ func (s *supervisor) dnsLoop(ctx context.Context) error {
 			}
 		}
 
-		if time.Since(lastDNSCheck) >= dnsCheckEvery {
+		if time.Since(lastDNSCheck) >= core.DNSCheckEvery {
 			lastDNSCheck = time.Now()
-			if err := s.plat.EnsureDNS(s.iface, s.gateway); err != nil {
+			if err := s.plat.EnsureDNS(s.Iface, s.Gateway); err != nil {
 				s.log.Printf("dns check failed: %v", err)
 			}
 		}
@@ -358,10 +363,10 @@ const (
 // dohRecoveryStep is the timing rule for a wedged resolver, kept pure so it
 // can be tested without one.
 func dohRecoveryStep(now, wedgeSince, lastRecovery time.Time) dohAction {
-	if now.Sub(wedgeSince) >= dohWedgeRestartAfter {
+	if now.Sub(wedgeSince) >= core.DoHWedgeRestartAfter {
 		return dohGiveUp
 	}
-	if lastRecovery.IsZero() || now.Sub(lastRecovery) >= dohRecoverEvery {
+	if lastRecovery.IsZero() || now.Sub(lastRecovery) >= core.DoHRecoverEvery {
 		return dohReset
 	}
 	return dohWait
@@ -371,10 +376,10 @@ func dohRecoveryStep(now, wedgeSince, lastRecovery time.Time) dohAction {
 // that answers nothing is a whole-stack failure here, not a DNS-only one: the
 // relay child resolves through that listener, so a wedged DoH client also
 // strands the fallback. Rebuild the client and restart the child; if that does
-// not clear after dohWedgeRestartAfter, exit so systemd starts a clean process
+// not clear after core.DoHWedgeRestartAfter, exit so systemd starts a clean process
 // instead of sitting wedged forever.
-func (s *supervisor) checkDoH() error {
-	if s.resolver.ConsecutiveFailures() < dohResetAfterFailures {
+func (s *Supervisor) checkDoH() error {
+	if s.resolver.ConsecutiveFailures() < core.DoHResetAfterFailures {
 		s.dnsWedgeSince = time.Time{}
 		s.lastDNSRecovery = time.Time{}
 		return nil
@@ -402,24 +407,24 @@ func (s *supervisor) checkDoH() error {
 // consecutive failures. A listening relay port does not prove the WebSocket
 // underneath is alive, so the relay gets the same treatment as the direct
 // path: short probes, and the caller restarts the child past the threshold.
-func (s *supervisor) probeRelay() bool {
-	if s.probe(relayProbeWindow) {
+func (s *Supervisor) probeRelay() bool {
+	if s.probe(core.RelayProbeWindow) {
 		s.relayFailures = 0
 		return true
 	}
 	s.relayFailures++
-	s.log.Printf("probe %s failed on the relay path (%d in a row)", aegisTunnelIP, s.relayFailures)
+	s.log.Printf("probe %s failed on the relay path (%d in a row)", core.AegisTunnelIP, s.relayFailures)
 	return false
 }
 
 // sameRouteSet reports whether two route lists contain the same entries,
 // ignoring order. Used to notice escape paths appearing or vanishing without
 // the best route changing.
-func sameRouteSet(a, b []Route) bool {
+func sameRouteSet(a, b []platform.Route) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	counts := make(map[Route]int, len(a))
+	counts := make(map[platform.Route]int, len(a))
 	for _, r := range a {
 		counts[r]++
 	}
@@ -434,7 +439,7 @@ func sameRouteSet(a, b []Route) bool {
 
 // refreshRoutes reloads the candidate default routes after a network change
 // and pins Aegis traffic to the best one.
-func (s *supervisor) refreshRoutes() {
+func (s *Supervisor) refreshRoutes() {
 	routes, err := s.plat.DefaultRoutes()
 	if err != nil || len(routes) == 0 {
 		return
@@ -448,7 +453,7 @@ func (s *supervisor) refreshRoutes() {
 // staying pinned to it would strand the tunnel, DNS and fallback together.
 // Single-route machines re-apply the same pin. Always logs: silent rotation
 // once hid a real outage from the journal.
-func (s *supervisor) rotatePin() {
+func (s *Supervisor) rotatePin() {
 	if len(s.routes) == 0 {
 		s.refreshRoutes()
 	}
@@ -464,7 +469,7 @@ func (s *supervisor) rotatePin() {
 			return
 		}
 		s.log.Printf("route rotation: only one route, re-pinned %s via %s",
-			aegisIPv4, candidate.Gateway)
+			core.AegisIPv4, candidate.Gateway)
 		return
 	}
 	s.pinIdx = next
@@ -477,7 +482,7 @@ func (s *supervisor) rotatePin() {
 		candidate.Iface, candidate.Gateway)
 }
 
-func (s *supervisor) enterWebSocket(ctx context.Context) error {
+func (s *Supervisor) enterWebSocket(ctx context.Context) error {
 	if err := s.wst.Ensure(ctx); err != nil {
 		return err
 	}
@@ -486,7 +491,7 @@ func (s *supervisor) enterWebSocket(ctx context.Context) error {
 
 // trialUDP briefly moves the endpoint back to the direct address. If the probe
 // answers, the fallback stops; otherwise the relay endpoint is restored.
-func (s *supervisor) trialUDP(ctx context.Context) bool {
+func (s *Supervisor) trialUDP(ctx context.Context) bool {
 	if err := s.plat.EnsureEndpoint(s.tcfg.DirectEndpoint()); err != nil {
 		s.log.Printf("udp trial failed to switch: %v", err)
 		return false
@@ -501,11 +506,11 @@ func (s *supervisor) trialUDP(ctx context.Context) bool {
 	return false
 }
 
-func (s *supervisor) probe(window time.Duration) bool {
+func (s *Supervisor) probe(window time.Duration) bool {
 	deadline := time.Now().Add(window)
 	for {
-		ok := s.plat.Ping(aegisTunnelIP)
-		debugf("probe %s: %v", aegisTunnelIP, ok)
+		ok := s.plat.Ping(core.AegisTunnelIP)
+		logx.Debugf("probe %s: %v", core.AegisTunnelIP, ok)
 		if ok {
 			return true
 		}

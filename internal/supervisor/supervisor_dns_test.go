@@ -1,8 +1,11 @@
-package egress
+package supervisor
 
 import (
 	"context"
+	"egress/internal/core"
 	"egress/internal/doh"
+	"egress/internal/platform"
+	"egress/internal/wstunnel"
 	"log"
 	"os"
 	"sync/atomic"
@@ -13,20 +16,20 @@ import (
 type dnsWatchdogFake struct {
 	ensureCalls int32
 	applyCalls  int32
-	routes      []Route
+	routes      []platform.Route
 }
 
-func (f *dnsWatchdogFake) RequirePrivilege() error                      { return nil }
-func (f *dnsWatchdogFake) DefaultRoute() (string, string, error)        { return "eth0", "192.168.1.1", nil }
-func (f *dnsWatchdogFake) DefaultRoutes() ([]Route, error)              { return f.routes, nil }
-func (f *dnsWatchdogFake) InstallTools() error                          { return nil }
-func (f *dnsWatchdogFake) WriteTunnelConfig(tunnelConfig) (bool, error) { return false, nil }
-func (f *dnsWatchdogFake) StartTunnel() error                           { return nil }
-func (f *dnsWatchdogFake) StopTunnel() error                            { return nil }
-func (f *dnsWatchdogFake) TunnelUp() bool                               { return false }
-func (f *dnsWatchdogFake) TunnelConfigured() bool                       { return false }
-func (f *dnsWatchdogFake) EnsureEndpoint(string) error                  { return nil }
-func (f *dnsWatchdogFake) RepinEndpoint(string, string) error           { return nil }
+func (f *dnsWatchdogFake) RequirePrivilege() error                           { return nil }
+func (f *dnsWatchdogFake) DefaultRoute() (string, string, error)             { return "eth0", "192.168.1.1", nil }
+func (f *dnsWatchdogFake) DefaultRoutes() ([]platform.Route, error)          { return f.routes, nil }
+func (f *dnsWatchdogFake) InstallTools() error                               { return nil }
+func (f *dnsWatchdogFake) WriteTunnelConfig(core.TunnelConfig) (bool, error) { return false, nil }
+func (f *dnsWatchdogFake) StartTunnel() error                                { return nil }
+func (f *dnsWatchdogFake) StopTunnel() error                                 { return nil }
+func (f *dnsWatchdogFake) TunnelUp() bool                                    { return false }
+func (f *dnsWatchdogFake) TunnelConfigured() bool                            { return false }
+func (f *dnsWatchdogFake) EnsureEndpoint(string) error                       { return nil }
+func (f *dnsWatchdogFake) RepinEndpoint(string, string) error                { return nil }
 func (f *dnsWatchdogFake) ApplyDNS(string, string) error {
 	atomic.AddInt32(&f.applyCalls, 1)
 	return nil
@@ -36,7 +39,7 @@ func (f *dnsWatchdogFake) EnsureDNS(string, string) error {
 	return nil
 }
 
-// SecureInstallDir is a no-op here to satisfy the platform interface; the
+// SecureInstallDir is a no-op here to satisfy the platform.Interface interface; the
 // DNS watchdog never touches the install directory.
 func (f *dnsWatchdogFake) SecureInstallDir() error               { return nil }
 func (f *dnsWatchdogFake) InstallService(string, []string) error { return nil }
@@ -54,11 +57,11 @@ func (f *dnsWatchdogFake) InstallWstunnel() (string, error)      { return "", ni
 // TestDNSLoopMaintainsResolver proves the DNS-only loop re-applies the
 // resolver: without it a DHCP renew silently drops protection.
 func TestDNSLoopMaintainsResolver(t *testing.T) {
-	fake := &dnsWatchdogFake{routes: []Route{{Iface: "eth0", Gateway: "192.168.1.1"}}}
+	fake := &dnsWatchdogFake{routes: []platform.Route{{Iface: "eth0", Gateway: "192.168.1.1"}}}
 	resolver := doh.New("", log.New(os.Stderr, "test: ", 0))
-	wst := newWstunnelProc("", log.New(os.Stderr, "test: ", 0))
-	s := newSupervisor(fake, resolver, wst, log.New(os.Stderr, "test: ", 0), false, false)
-	s.iface, s.gateway = "eth0", "192.168.1.1"
+	wst := wstunnel.NewProc("", log.New(os.Stderr, "test: ", 0))
+	s := New(fake, resolver, wst, log.New(os.Stderr, "test: ", 0), false, false)
+	s.Iface, s.Gateway = "eth0", "192.168.1.1"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

@@ -142,16 +142,6 @@ func TestParseWGConfigFile(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
-
-
-
-
 func TestBuildReportParkedIsFailed(t *testing.T) {
 	results := checkResults{Tunnel: "skipped", Probe: "skipped"}
 	data, err := buildReport(tunnelConfig{}, results, errors.New("split client setup failed"), true)

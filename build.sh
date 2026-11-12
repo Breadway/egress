@@ -229,7 +229,7 @@ fi
 
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
     go build -tags delivery -trimpath -buildvcs=false \
-    -ldflags "-s -w -X egress/internal/egress.embeddedKey=$key -X egress/internal/egress.embeddedClientIP=$ip -X egress/internal/egress.buildVersion=$version${debug_ldflag}${update_ldflag}${socks_ldflag}${split_ldflag}" \
+    -ldflags "-s -w -X egress/internal/egress.embeddedKey=$key -X egress/internal/egress.embeddedClientIP=$ip -X egress/internal/core.BuildVersion=$version${debug_ldflag}${update_ldflag}${socks_ldflag}${split_ldflag}" \
     -o "$out" .
 
 case "$goos" in

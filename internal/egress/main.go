@@ -2,9 +2,11 @@ package egress
 
 import (
 	"context"
+	"egress/internal/core"
 	"egress/internal/doh"
+	"egress/internal/health"
 	"egress/internal/split"
-	"encoding/json"
+	"egress/internal/supervisor"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,12 +20,12 @@ import (
 
 // Set at build time:
 //
-//	go build -ldflags "-X main.embeddedKey=... -X main.embeddedClientIP=... -X main.buildVersion=..."
+//	go build -ldflags "-X main.embeddedKey=... -X main.embeddedClientIP=... -X egress/internal/core.BuildVersion=..."
 var (
 	embeddedKey          string
 	embeddedClientIP     string
 	embeddedDefaultSplit string
-	buildVersion         string
+	buildVersion         string = core.BuildVersion
 )
 
 // defaultDebug is set to "true" at build time for delivery builds where the
@@ -498,12 +500,12 @@ func cmdSupervise(args []string) error {
 		splitter = split.NewController(split.NetworkKey("", gateway), iface,
 			split.NewRouteManager(wgInterface, appLogger()), appLogger())
 	}
-	sup := newSupervisor(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
-	sup.iface, sup.gateway = iface, gateway
+	sup := supervisor.New(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
+	sup.Iface, sup.Gateway = iface, gateway
 	// A protocol picture shared by another device on this network may already
 	// say UDP is blocked; start on the relay instead of failing over.
-	sup.preferRelay = split.UDPBlocked(split.NetworkKey("", gateway))
-	sup.split = splitter
+	sup.PreferRelay = split.UDPBlocked(split.NetworkKey("", gateway))
+	sup.Split = splitter
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -636,24 +638,7 @@ func reportState(state, status, msg string) {
 	if err != nil || id.Pubkey == "" {
 		return
 	}
-	payload := reportPayload{
-		Pubkey:  id.Pubkey,
-		OS:      runtime.GOOS,
-		Arch:    runtime.GOARCH,
-		IP:      id.IP,
-		Version: reportVersion(),
-		Status:  status,
-		State:   state,
-		Error:   msg,
-		TS:      time.Now().UTC().Format(time.RFC3339),
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	if err := sendReport(data); err != nil {
-		debugf("state report unsent: %v", err)
-	}
+	health.SendState(id.Pubkey, id.IP, reportVersion(), state, status, msg)
 }
 
 func newFlagSet(name string) *flag.FlagSet {

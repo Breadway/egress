@@ -1,7 +1,11 @@
-package egress
+package health
 
 import (
 	"context"
+	"egress/internal/core"
+	"egress/internal/logx"
+	"egress/internal/platform"
+	"egress/internal/split"
 	"errors"
 	"fmt"
 	"io"
@@ -11,12 +15,12 @@ import (
 	"time"
 )
 
-func checkLocalDNS() error {
+func CheckLocalDNS() error {
 	resolver := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			d := &net.Dialer{Timeout: 3 * time.Second}
-			return d.DialContext(ctx, "udp", dohListenAddr)
+			return d.DialContext(ctx, "udp", core.DoHListenAddr)
 		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -40,10 +44,10 @@ const (
 	exitCheckBackoff  = 2 * time.Second
 )
 
-// exitUnverifiedPrefix marks an Exit value where the checker was
+// ExitUnverifiedPrefix marks an Exit value where the checker was
 // unreachable: the address is unknown, not wrong. verifyAll warns instead
 // of failing, and grade stays partial instead of rolling back.
-const exitUnverifiedPrefix = "unverified: "
+const ExitUnverifiedPrefix = "unverified: "
 
 func checkExitIPOnce(timeout time.Duration) (string, error) {
 	transport := &http.Transport{
@@ -88,14 +92,14 @@ func checkExitIP() (string, error) {
 		if ip, err = checkExitIPOnce(10 * time.Second); err == nil {
 			return ip, nil
 		}
-		debugf("exit check attempt %d failed: %v", attempt+1, err)
+		logx.Debugf("exit check attempt %d failed: %v", attempt+1, err)
 	}
 	return "", err
 }
 
-// checkResults holds one install verification as data, so the CLI output and
+// Results holds one install verification as data, so the CLI output and
 // the phone-home report describe the same run.
-type checkResults struct {
+type Results struct {
 	DNS    string `json:"dns,omitempty"`    // error text, empty when ok
 	Tunnel string `json:"tunnel,omitempty"` // "up", "down", or "skipped"
 	Probe  string `json:"probe,omitempty"`  // "ok", "failed", or "skipped"
@@ -111,19 +115,19 @@ type checkResults struct {
 // describeSplit adds the Windows split client's state to a result set. It is
 // deliberately not part of runChecks: install verifies before split setup has
 // run, so a split probe there would fail every fresh install.
-func describeSplit(r checkResults, tcfg tunnelConfig) checkResults {
+func DescribeSplit(r Results, tcfg core.TunnelConfig) Results {
 	if tcfg.Split {
-		r.Split = checkWindowsSplit()
+		r.Split = split.HealthCheck()
 	}
 	return r
 }
 
-func runChecks(p platform, tcfg tunnelConfig) checkResults {
-	var r checkResults
-	if err := checkLocalDNS(); err != nil {
+func RunChecks(p platform.Interface, tcfg core.TunnelConfig) Results {
+	var r Results
+	if err := CheckLocalDNS(); err != nil {
 		r.DNS = err.Error()
 	}
-	if err := checkSupervisorLive(p, 0); err != nil {
+	if err := CheckSupervisorLive(p, 0); err != nil {
 		r.Supervisor = err.Error()
 	}
 	if tcfg.PrivateKey == "" {
@@ -136,7 +140,7 @@ func runChecks(p platform, tcfg tunnelConfig) checkResults {
 	} else {
 		r.Tunnel = "down"
 	}
-	if p.Ping(aegisTunnelIP) {
+	if p.Ping(core.AegisTunnelIP) {
 		r.Probe = "ok"
 	} else {
 		r.Probe = "failed"
@@ -148,7 +152,7 @@ func runChecks(p platform, tcfg tunnelConfig) checkResults {
 }
 
 // grade maps check results to the status the admin UI shows.
-func (r checkResults) grade() string {
+func (r Results) Grade() string {
 	// DNS answering while our supervisor is down means a foreign process
 	// holds the port: never report that as healthy.
 	if r.DNS != "" || r.Supervisor != "" {
@@ -159,31 +163,31 @@ func (r checkResults) grade() string {
 	}
 	if (r.Tunnel == "up" || r.Tunnel == "skipped") &&
 		(r.Probe == "ok" || r.Probe == "skipped") &&
-		(r.Exit == "" || r.Exit == aegisIPv4 || r.Exit == "split") {
+		(r.Exit == "" || r.Exit == core.AegisIPv4 || r.Exit == "split") {
 		return "functional"
 	}
 	return "partial"
 }
 
-func (r checkResults) failed() bool {
+func (r Results) failed() bool {
 	if r.DNS != "" {
 		return true
 	}
-	return r.grade() != "functional"
+	return r.Grade() != "functional"
 }
 
-func verifyAll(p platform, tcfg tunnelConfig, checkSplit bool) error {
-	r := runChecks(p, tcfg)
+func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) error {
+	r := RunChecks(p, tcfg)
 	if checkSplit {
-		r = describeSplit(r, tcfg)
+		r = DescribeSplit(r, tcfg)
 	}
 	failed := false
 
 	if r.DNS != "" {
-		fmt.Printf("[FAIL] dns through %s: %v\n", dohListenAddr, r.DNS)
+		fmt.Printf("[FAIL] dns through %s: %v\n", core.DoHListenAddr, r.DNS)
 		failed = true
 	} else {
-		fmt.Printf("[ok]   dns through %s\n", dohListenAddr)
+		fmt.Printf("[ok]   dns through %s\n", core.DoHListenAddr)
 	}
 
 	if r.Supervisor != "" {
@@ -211,23 +215,23 @@ func verifyAll(p platform, tcfg tunnelConfig, checkSplit bool) error {
 		}
 
 		if r.Probe == "ok" {
-			fmt.Printf("[ok]   %s answers through the tunnel\n", aegisTunnelIP)
+			fmt.Printf("[ok]   %s answers through the tunnel\n", core.AegisTunnelIP)
 		} else {
-			fmt.Printf("[FAIL] %s does not answer through the tunnel\n", aegisTunnelIP)
+			fmt.Printf("[FAIL] %s does not answer through the tunnel\n", core.AegisTunnelIP)
 			failed = true
 		}
 
 		switch {
 		case tcfg.Split && r.Exit == "split":
 			fmt.Println("[ok]   split routing: only learned-blocked destinations use the tunnel")
-		case r.Exit == aegisIPv4:
+		case r.Exit == core.AegisIPv4:
 			fmt.Printf("[ok]   exit address is %s\n", r.Exit)
 		case r.Exit == "":
 			fmt.Printf("[FAIL] exit address: no result\n")
 			failed = true
-		case strings.HasPrefix(r.Exit, exitUnverifiedPrefix):
+		case strings.HasPrefix(r.Exit, ExitUnverifiedPrefix):
 			fmt.Printf("[warn] exit address %s; tunnel and probe passed so keeping the install\n",
-				strings.TrimPrefix(r.Exit, exitUnverifiedPrefix))
+				strings.TrimPrefix(r.Exit, ExitUnverifiedPrefix))
 		default:
 			fmt.Printf("[FAIL] exit address: %s\n", r.Exit)
 			failed = true

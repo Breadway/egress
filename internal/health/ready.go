@@ -1,6 +1,8 @@
-package egress
+package health
 
 import (
+	"egress/internal/logx"
+	"egress/internal/platform"
 	"errors"
 	"fmt"
 	"os"
@@ -11,35 +13,35 @@ import (
 	"time"
 )
 
-// readyMarkerMaxAge bounds how old the install-time marker may be. Install
+// ReadyMarkerMaxAge bounds how old the install-time marker may be. Install
 // just started the service, so a marker older than this cannot be ours: it
 // is either a leftover or a foreign process squatting on the DNS port.
-const readyMarkerMaxAge = 2 * time.Minute
+const ReadyMarkerMaxAge = 2 * time.Minute
 
-func readyMarkerPath() string {
+func ReadyMarkerPath() string {
 	// Shared with the installer through spoolDir, not TempDir: on Windows
 	// TempDir is per-user while install runs elevated and the supervisor
 	// runs as SYSTEM, so the two sides would never see the same marker
 	// (the EGRESS-33 trap).
-	return filepath.Join(spoolDir(), "egress-ready")
+	return filepath.Join(platform.SpoolDir(), "egress-ready")
 }
 
 // writeReadyMarker records our PID once both DNS sockets are bound. Install
 // and verify read it back to prove the process answering on 127.0.0.1:7103
 // is the supervisor they started, not dnscrypt-proxy or a leftover.
-func writeReadyMarker() error {
-	return os.WriteFile(readyMarkerPath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0644)
+func WriteReadyMarker() error {
+	return os.WriteFile(ReadyMarkerPath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0644)
 }
 
 // removeReadyMarker drops the marker on clean shutdown so a later verify
 // cannot mistake a dead supervisor for a live one.
-func removeReadyMarker() {
-	_ = os.Remove(readyMarkerPath())
+func RemoveReadyMarker() {
+	_ = os.Remove(ReadyMarkerPath())
 }
 
 // readReadyMarker returns the recorded PID and the marker's age.
 func readReadyMarker() (pid int, age time.Duration, err error) {
-	data, err := os.ReadFile(readyMarkerPath())
+	data, err := os.ReadFile(ReadyMarkerPath())
 	if err != nil {
 		return 0, 0, err
 	}
@@ -47,7 +49,7 @@ func readReadyMarker() (pid int, age time.Duration, err error) {
 	if err != nil || pid <= 0 {
 		return 0, 0, fmt.Errorf("unreadable readiness marker")
 	}
-	info, err := os.Stat(readyMarkerPath())
+	info, err := os.Stat(ReadyMarkerPath())
 	if err != nil {
 		return 0, 0, err
 	}
@@ -56,9 +58,9 @@ func readReadyMarker() (pid int, age time.Duration, err error) {
 
 // checkSupervisorLive verifies the service is active and the readiness
 // marker points at a running process. maxAge <= 0 skips the freshness check
-// (verify, which may run long after boot); install passes readyMarkerMaxAge
+// (verify, which may run long after boot); install passes ReadyMarkerMaxAge
 // so a stale leftover can never satisfy a fresh start.
-func checkSupervisorLive(p platform, maxAge time.Duration) error {
+func CheckSupervisorLive(p platform.Interface, maxAge time.Duration) error {
 	if !p.ServiceActive() {
 		return errors.New("egress service is not active")
 	}
@@ -79,7 +81,7 @@ func checkSupervisorLive(p platform, maxAge time.Duration) error {
 		if runtime.GOOS != "windows" {
 			return fmt.Errorf("supervisor pid %d is not running", pid)
 		}
-		debugf("ready marker pid %d could not be opened; relying on the task state and the DNS probe", pid)
+		logx.Debugf("ready marker pid %d could not be opened; relying on the task state and the DNS probe", pid)
 	}
 	return nil
 }
