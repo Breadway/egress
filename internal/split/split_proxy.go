@@ -407,6 +407,7 @@ func isCertError(err error) bool {
 // per-network profile the Linux split mode uses, so both paths learn the same
 // way.
 type Proxy struct {
+	dir        string
 	listenAddr string
 	relayAddr  string
 	user       string
@@ -436,6 +437,7 @@ func NewProxy(network, dir, listen, relay, user, pass string, logger *log.Logger
 		network:    network,
 		log:        logger,
 	}
+	p.dir = dir
 	p.path = ProfilePathIn(dir, network)
 	p.overrides = LoadOverrides(dir)
 	profile, err := LoadProfile(p.path, network)
@@ -453,6 +455,49 @@ func NewProxy(network, dir, listen, relay, user, pass string, logger *log.Logger
 
 // ListenAddr is where the proxy accepts CONNECT and serves the PAC.
 func (p *Proxy) ListenAddr() string { return p.listenAddr }
+
+// Stats counts the profile's decisions: blocked, contested among them, and
+// explicitly allowed. The tray and diagnose show these so a filter can be
+// understood without opening a file.
+func (p *Proxy) Stats() (blocked, contested, allowed int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, entry := range p.profile.Entries {
+		switch entry.State {
+		case StateBlocked:
+			blocked++
+			if entry.Contested {
+				contested++
+			}
+		case StateAllowed:
+			allowed++
+		}
+	}
+	return blocked, contested, allowed
+}
+
+// ProtocolStates is a copy of the network's outbound protocol picture.
+func (p *Proxy) ProtocolStates() map[string]string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]string, len(p.profile.Protocols))
+	for k, v := range p.profile.Protocols {
+		out[k] = v
+	}
+	return out
+}
+
+// ReloadOverrides re-reads split-allow.txt and split-block.txt so an edit takes
+// effect from the tray without restarting the proxy.
+func (p *Proxy) ReloadOverrides() {
+	next := LoadOverrides(p.dir)
+	p.mu.Lock()
+	p.overrides = next
+	p.mu.Unlock()
+}
+
+// Network is the local profile key, for display.
+func (p *Proxy) Network() string { return p.network }
 
 func (p *Proxy) handler() http.Handler {
 	// CONNECT requests use authority-form URLs, so a ServeMux would 404 them.

@@ -7,6 +7,7 @@ import (
 	"egress/internal/split"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -176,6 +177,7 @@ var (
 	procShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
 	procShellExecuteW       = shell32.NewProc("ShellExecuteW")
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
+	procMessageBoxW         = user32.NewProc("MessageBoxW")
 )
 
 const (
@@ -253,6 +255,7 @@ var (
 	trayNID    notifyIconData
 	trayPing   []string
 	trayPacURL string
+	trayProxy  *split.Proxy
 )
 
 // runTray shows the notification icon, refreshes the two RTTs every five
@@ -260,6 +263,7 @@ var (
 // thread for the lifetime of the loop.
 func runTray(ctx context.Context, p *split.Proxy) error {
 	runtime.LockOSThread()
+	trayProxy = p
 	defer runtime.UnlockOSThread()
 
 	trayPacURL = "http://" + p.ListenAddr() + "/proxy.pac"
@@ -353,6 +357,21 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			openURL(trayPacURL)
 		case 2:
 			procPostQuitMessage.Call(0)
+		case 3:
+			openPath(filepath.Join(egressDataDir(), "egress.log"))
+		case 4:
+			openPath(egressDataDir())
+		case 5:
+			if trayProxy != nil {
+				trayProxy.ReloadOverrides()
+				trayMu.Lock()
+				setTipLocked(trayTipLocked())
+				trayMu.Unlock()
+				nid := trayNID
+				procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+			}
+		case 6:
+			go runDiagnoseWindow()
 		}
 		return 0
 	}
@@ -377,10 +396,51 @@ func refreshPings() {
 
 func trayTipLocked() string {
 	tip := "egress"
+	if blocked, contested, _ := trayProxy.Stats(); blocked > 0 {
+		tip += fmt.Sprintf(" | %d blocked", blocked)
+		if contested > 0 {
+			tip += fmt.Sprintf(" (%d contested)", contested)
+		}
+	}
 	for _, line := range trayPing {
 		tip += " | " + line
 	}
 	return tip
+}
+
+// trayStatusLines describes the proxy for the menu's greyed header.
+func trayStatusLines(p *split.Proxy) []string {
+	blocked, contested, allowed := p.Stats()
+	lines := []string{
+		"Proxy: listening on " + p.ListenAddr(),
+		fmt.Sprintf("Blocked: %d (contested %d), allowed: %d", blocked, contested, allowed),
+	}
+	if protos := p.ProtocolStates(); len(protos) > 0 {
+		var parts []string
+		for _, name := range []string{"udp", "tcp", "dns", "icmp"} {
+			if state, ok := protos[name]; ok {
+				parts = append(parts, name+"="+state)
+			}
+		}
+		if len(parts) > 0 {
+			lines = append(lines, "Network: "+strings.Join(parts, " "))
+		}
+	}
+	return lines
+}
+
+// openPath opens a file or folder in the shell.
+func openPath(path string) {
+	verb, _ := syscall.UTF16PtrFromString("open")
+	target, _ := syscall.UTF16PtrFromString(path)
+	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
+}
+
+func egressDataDir() string {
+	if dir := os.Getenv("ProgramData"); dir != "" {
+		return filepath.Join(dir, "egress")
+	}
+	return split.ProfileDir()
 }
 
 func setTipLocked(text string) {
@@ -397,18 +457,35 @@ func showTrayMenu(hwnd uintptr) {
 		return
 	}
 	defer procDestroyMenu.Call(menu)
+
+	addGray := func(text string) {
+		ptr, _ := syscall.UTF16PtrFromString(text)
+		procAppendMenuW.Call(menu, mfString|mfGrayed, 0, uintptr(unsafe.Pointer(ptr)))
+	}
+	addItem := func(id uintptr, label string) {
+		ptr, _ := syscall.UTF16PtrFromString(label)
+		procAppendMenuW.Call(menu, mfString, id, uintptr(unsafe.Pointer(ptr)))
+	}
+
+	if trayProxy != nil {
+		for _, line := range trayStatusLines(trayProxy) {
+			addGray(line)
+		}
+	}
 	trayMu.Lock()
 	lines := append([]string(nil), trayPing...)
 	trayMu.Unlock()
 	for _, line := range lines {
-		text, _ := syscall.UTF16PtrFromString(line)
-		procAppendMenuW.Call(menu, mfString|mfGrayed, 0, uintptr(unsafe.Pointer(text)))
+		addGray(line)
 	}
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
-	open, _ := syscall.UTF16PtrFromString("Open PAC")
-	procAppendMenuW.Call(menu, mfString, 1, uintptr(unsafe.Pointer(open)))
-	exit, _ := syscall.UTF16PtrFromString("Exit")
-	procAppendMenuW.Call(menu, mfString, 2, uintptr(unsafe.Pointer(exit)))
+	addItem(1, "Open PAC")
+	addItem(3, "Open log")
+	addItem(4, "Open data folder")
+	addItem(5, "Reload allow/block lists")
+	addItem(6, "Run diagnose")
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+	addItem(2, "Exit")
 
 	var pt winPoint
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -420,4 +497,19 @@ func openURL(url string) {
 	verb, _ := syscall.UTF16PtrFromString("open")
 	target, _ := syscall.UTF16PtrFromString(url)
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
+}
+
+// runDiagnoseWindow runs `egress diagnose` and shows it in a message box. The
+// tray is unelevated, so the elevated sections of the output are absent, which
+// is exactly what the message box is for: a first look without a console.
+func runDiagnoseWindow() {
+	out, err := exec.Command(os.Args[0], "diagnose").CombinedOutput()
+	text := string(out)
+	if err != nil && text == "" {
+		text = "diagnose failed: " + err.Error()
+	}
+	text = truncate(text, 3500)
+	body, _ := syscall.UTF16PtrFromString(text)
+	caption, _ := syscall.UTF16PtrFromString("egress diagnose")
+	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(caption)), 0x40)
 }
