@@ -5,8 +5,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,9 +20,77 @@ import (
 const splitUserTask = "egress-split-user"
 
 const (
-	proxyListenAddr = "127.0.0.1:1080"
-	pacURL          = "http://127.0.0.1:1081/proxy.pac"
+	// proxyListenAddr is the loopback CONNECT proxy the PAC names.
+	proxyListenAddr = "127.0.0.1:1081"
+	// relayListenAddr is the wstunnel forward the proxy dials for relayed
+	// destinations.
+	relayListenAddr = "127.0.0.1:1080"
 )
+
+// pacFilePath is the PAC next to the installed binary. It is shared by every
+// account and readable without elevation, so a browser keeps working when the
+// proxy is not running and a SYSTEM check can see it.
+func pacFilePath() string {
+	exe, err := installedExePath()
+	if err != nil {
+		return filepath.Join(ProxyDir(), "proxy.pac")
+	}
+	return filepath.Join(filepath.Dir(exe), "proxy.pac")
+}
+
+// pacURLForFile turns a Windows path into the file:// URL WinINet expects.
+func pacURLForFile(path string) string {
+	return "file:///" + strings.ReplaceAll(path, `\`, "/")
+}
+
+// writePAC writes the PAC beside the installed binary and lets any account
+// read it. Requires elevation, so the install does it before dropping to the
+// per-user step.
+func writePAC() (string, error) {
+	path := pacFilePath()
+	if err := os.WriteFile(path, []byte(pacScript(proxyListenAddr)), 0644); err != nil {
+		return "", err
+	}
+	out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(RX)").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("grant users read on %s: %v: %s", path, err, strings.TrimSpace(string(out)))
+	}
+	return path, nil
+}
+
+// proxyListening reports whether the local split proxy accepts connections.
+func proxyListening() bool {
+	c, err := net.DialTimeout("tcp", proxyListenAddr, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// waitForProxy blocks until the proxy binds its listen address.
+func waitForProxy(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if proxyListening() {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("split proxy did not start on %s", proxyListenAddr)
+}
+
+// checkWindowsSplit reports the split client's health for install reports and
+// verify. An empty string means "not applicable".
+func checkWindowsSplit() string {
+	if !proxyListening() {
+		return "proxy not listening on " + proxyListenAddr
+	}
+	if _, err := os.Stat(pacFilePath()); err != nil {
+		return "PAC missing at " + pacFilePath()
+	}
+	return "ok"
+}
 
 // runningAsSystem reports whether this process was started by the task
 // scheduler as SYSTEM rather than by a person in an elevated prompt.

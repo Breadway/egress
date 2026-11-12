@@ -364,9 +364,8 @@ func runInstall(plat platform, args []string) (err error) {
 
 	// Arm the update check before the steps that can fail on a platform
 	// quirk. A failure below then leaves an install that picks the fix up by
-	// itself instead of a machine that needs another download. A successful
-	// install replaces this with the daily schedule.
-	if err := installUpdateTimer(parkUpdateInterval); err != nil {
+	// itself instead of a machine that needs another download.
+	if err := installUpdateTimer(updatePollInterval); err != nil {
 		debugf("early update check not armed: %v", err)
 	}
 
@@ -412,7 +411,7 @@ func runInstall(plat platform, args []string) (err error) {
 	time.Sleep(500 * time.Millisecond)
 
 	fmt.Println()
-	if err := verifyAll(plat, tcfg); err != nil {
+	if err := verifyAll(plat, tcfg, false); err != nil {
 		// Networking goes back to its pre-install state first, so a failed
 		// install never leaves the user offline, then the install parks for
 		// the next release. The report carries what went wrong.
@@ -432,11 +431,11 @@ func runInstall(plat platform, args []string) (err error) {
 			return err
 		}
 	}
-	if err := installUpdateTimer(0); err != nil {
+	if err := installUpdateTimer(updatePollInterval); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
 	}
 
-	results := runChecks(plat, tcfg)
+	results := describeSplit(runChecks(plat, tcfg), tcfg)
 	if data, err := buildReport(tcfg, results, nil, false); err == nil {
 		if err := sendReport(data); err != nil {
 			debugf("install report unsent, spooled: %v", err)
@@ -447,10 +446,10 @@ func runInstall(plat platform, args []string) (err error) {
 	return nil
 }
 
-// parkUpdateInterval is how often a parked install looks for a fix. A failed
-// install is normally waiting on a release that is hours away, so it polls
-// well ahead of the daily schedule a healthy install uses.
-const parkUpdateInterval = 30 * time.Minute
+// updatePollInterval is how often every install looks for a release, healthy
+// or parked. The cost is one small HTTPS request, and it means a published fix
+// lands within a minute instead of waiting for a daily window.
+const updatePollInterval = time.Minute
 
 // parkInstall handles a failed install without discarding it. Networking goes
 // back to its pre-install state and the service stops, so a broken resolver is
@@ -459,12 +458,13 @@ const parkUpdateInterval = 30 * time.Minute
 // installs itself: no download, no user action. Reporting is best effort and
 // never masks the original error.
 func parkInstall(plat platform, tcfg tunnelConfig, results checkResults, cause error) {
+	results = describeSplit(results, tcfg)
 	if err := plat.Disable(); err != nil {
 		fmt.Fprintf(os.Stderr, "park: %v\n", err)
 	} else {
 		fmt.Fprintln(os.Stderr, "networking restored; the install is parked until a fixed release lands")
 	}
-	if err := installUpdateTimer(parkUpdateInterval); err != nil {
+	if err := installUpdateTimer(updatePollInterval); err != nil {
 		fmt.Fprintf(os.Stderr, "park: update check not armed, the next release needs a manual install: %v\n", err)
 	}
 	data, err := buildReport(tcfg, results, cause, true)
@@ -536,7 +536,7 @@ func cmdVerify(args []string) error {
 	if plat.TunnelConfigured() {
 		tcfg.PrivateKey = "configured"
 	}
-	return verifyAll(plat, tcfg)
+	return verifyAll(plat, tcfg, true)
 }
 
 func cmdDiagnose(args []string) error {
@@ -604,6 +604,17 @@ func cmdEnable(args []string) error {
 	}
 	if err := plat.Enable(); err != nil {
 		return err
+	}
+	// Enable only restarts the service. Split mode also needs its per-user
+	// proxy and PAC back, which disable removed, and the update check, which
+	// disable deletes.
+	if runtime.GOOS == "windows" && splitEnabled() {
+		if err := configureWindowsSplit(); err != nil {
+			return fmt.Errorf("split client setup: %w", err)
+		}
+	}
+	if err := installUpdateTimer(updatePollInterval); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
 	}
 	fmt.Println("egress enabled")
 	return nil

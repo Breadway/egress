@@ -7,7 +7,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +169,42 @@ func TestProxyConnectDirect(t *testing.T) {
 	buf := make([]byte, 5)
 	if _, err := io.ReadFull(br, buf); err != nil || string(buf) != "hello" {
 		t.Fatalf("echo: %q %v", buf, err)
+	}
+}
+
+func TestProxyForwardsPlainHTTP(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello " + r.URL.Path))
+	}))
+	defer upstream.Close()
+
+	p := newSplitProxy("net", t.TempDir(), "127.0.0.1:0", "127.0.0.1:1", "u", "p", log.New(testWriter{t}, "", 0))
+	p.probe = func(ctx context.Context, domain string, opts ProbeOptions) ProbeResult {
+		return ProbeResult{Domain: domain, State: StateAllowed}
+	}
+	proxy := httptest.NewServer(p.handler())
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	// This is the shape of Windows' connectivity probe: a plain http request
+	// sent to the proxy as an absolute URL.
+	resp, err := client.Get(upstream.URL + "/connecttest.txt")
+	if err != nil {
+		t.Fatalf("get through proxy: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: %d (plain http must be forwarded, not 404)", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "hello /connecttest.txt" {
+		t.Fatalf("body: %q", body)
 	}
 }

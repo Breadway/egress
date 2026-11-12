@@ -70,6 +70,8 @@ func (p *splitProxy) handler() http.Handler {
 			p.serveConnect(w, r)
 		case r.URL.Path == "/proxy.pac":
 			p.servePAC(w, r)
+		case r.URL.IsAbs() && r.URL.Scheme == "http":
+			p.serveHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -108,6 +110,47 @@ func (p *splitProxy) servePAC(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, pacScript(p.listenAddr))
 }
 
+// serveHTTP forwards a plain http request. A browser configured for a proxy
+// sends these as absolute URLs rather than a CONNECT tunnel, and Windows'
+// connectivity probe is one of them, so dropping them reports the machine as
+// offline even though https still works (EGRESS-99).
+func (p *splitProxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	mode := p.decide(ctx, r.URL.Hostname())
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if mode == StateBlocked {
+				return p.socksDial(ctx, p.relayAddr, p.user, p.pass, addr)
+			}
+			return p.dial(ctx, network, addr)
+		},
+	}
+	defer transport.CloseIdleConnections()
+
+	out := r.Clone(ctx)
+	out.RequestURI = ""
+	out.Header.Del("Proxy-Connection")
+	out.Header.Del("Proxy-Authorization")
+	resp, err := transport.RoundTrip(out)
+	if err != nil {
+		debugf("proxy: %s (%s): %v", r.URL.Host, mode, err)
+		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	for k, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// serveConnect tunnels https and other protocols after a CONNECT request.
 func (p *splitProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodConnect {
 		http.Error(w, "this proxy only supports CONNECT", http.StatusMethodNotAllowed)

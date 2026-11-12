@@ -50,6 +50,10 @@ func cmdUpdate(args []string) error {
 	if current == "" {
 		current = "0.0.0"
 	}
+	if applied, _ := appliedRelease(); applied == m.SHA256 {
+		fmt.Printf("up to date: build %s, this release is already applied\n", current)
+		return nil
+	}
 	cmp, err := CompareVersions(m.Version, current)
 	if err != nil {
 		return err
@@ -71,6 +75,11 @@ func cmdUpdate(args []string) error {
 	}
 	if err := applyUpdate(*base, m, pub); err != nil {
 		return err
+	}
+	// Record the release so a forced republish of the same version applies
+	// once instead of reinstalling on every poll.
+	if err := recordAppliedRelease(m.SHA256); err != nil {
+		debugf("could not record the applied release: %v", err)
 	}
 	fmt.Printf("updated to %s\n", m.Version)
 	return nil
