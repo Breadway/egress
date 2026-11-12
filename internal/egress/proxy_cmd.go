@@ -96,15 +96,25 @@ func cmdProxy(args []string) (err error) {
 }
 
 func resolveSocksAuth(path, user, pass string) (string, string) {
-	if user == "" && pass == "" {
-		user, pass = embeddedSocksUser, embeddedSocksPass
-	}
+	// Explicit flags win: `proxy --install` passes a fresh pair.
 	if user != "" && pass != "" {
 		return user, pass
 	}
+	// The file on disk is the device's own credential. It is written at
+	// install and must survive updates, whose generic builds embed only a
+	// bootstrap pair. Preferring the embedded values here would silently
+	// replace a device credential on every auto-update.
+	if u, p, ok := readAuthFile(path); ok {
+		return u, p
+	}
+	return embeddedSocksUser, embeddedSocksPass
+}
+
+// readAuthFile returns the first user:password line, if the file is readable.
+func readAuthFile(path string) (string, string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return user, pass
+		return "", "", false
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -112,10 +122,10 @@ func resolveSocksAuth(path, user, pass string) (string, string) {
 			continue
 		}
 		if u, p, ok := strings.Cut(line, ":"); ok {
-			return u, p
+			return u, p, true
 		}
 	}
-	return user, pass
+	return "", "", false
 }
 
 // startSocksRelay runs the embedded wstunnel client for the SOCKS relay. It is
