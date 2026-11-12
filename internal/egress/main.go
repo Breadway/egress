@@ -91,6 +91,10 @@ func realMain() error {
 		return cmdUpdateApply(args)
 	case "split-user":
 		return cmdSplitUser(args)
+	case "boot":
+		return cmdBoot(args)
+	case "networks":
+		return cmdNetworks(args)
 	case "diagnose":
 		return cmdDiagnose(args)
 	case "pubkey", "key":
@@ -356,6 +360,13 @@ func runInstall(plat platform, args []string) (err error) {
 
 	if err := plat.InstallService(exe, serviceArgs); err != nil {
 		return err
+	}
+	// An update reinstalls the service; keep a saved "do not start at boot"
+	// preference in force instead of silently re-enabling it.
+	if bootDisabled() {
+		if err := setBootStart(false); err != nil {
+			debugf("could not keep boot start disabled: %v", err)
+		}
 	}
 	// The new unit is on disk: from here the rollback path owns recovery.
 	pastInstallService = true

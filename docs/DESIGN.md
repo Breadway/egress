@@ -79,6 +79,16 @@ SSIDs.
   revocation takes effect within 30 seconds.
 - The supervisor starts on the WebSocket path when the stored protocol picture
   says UDP is blocked, instead of failing over first.
+- `egress boot on|off` (and the tray) stops egress starting at boot without
+  touching the current session. The update check keeps running, so fixes still
+  arrive. The preference is stored outside the service, so an update cannot
+  silently re-enable it.
+- `egress networks list|add|remove|clear` manages an SSID allowlist in
+  `networks.txt` next to the per-user proxy state. A missing or empty file
+  means any network, and an SSID that cannot be read never blocks, so a laptop
+  without a readable WLAN keeps working. On a network that is not listed the
+  proxy clears the PAC and stays direct; the tray header shows the current
+  network and whether it is allowed.
 
 Relay credentials are per device. `new-device.sh` creates a user:password pair
 on the relay and embeds it in that device's build, and `remove-device.sh`

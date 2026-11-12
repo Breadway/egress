@@ -2,7 +2,6 @@ package egress
 
 import (
 	"context"
-	"egress/internal/split"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"egress/internal/split"
 )
 
 // Set at build time for delivery clients:
@@ -37,6 +38,13 @@ func cmdProxy(args []string) (err error) {
 		return err
 	}
 	setupLogging(resolveDebug(*debug))
+
+	// SSID allowlist: an empty list means any network. When the list is set
+	// and this is not one of them, leave the machine direct instead of
+	// filtering on a network the owner did not name.
+	if !proxyNetworkAllowed() {
+		return nil
+	}
 	// A proxy started at login has no console, so a fatal error would
 	// otherwise vanish. Record it where the next report can see it.
 	defer func() {
