@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,6 +38,10 @@ type dohResolver struct {
 
 	client *http.Client
 	log    *log.Logger
+	// failures counts consecutive failed lookups across queries. The
+	// supervisor uses it to notice a wedged client that is still serving a
+	// listening socket.
+	failures atomic.Int32
 	// lookup swaps in tests: production is exchange, tests echo canned
 	// answers so TCP/UDP framing is covered without network.
 	lookup func(context.Context, []byte) ([]byte, error)
@@ -53,7 +58,16 @@ func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
 		addrs: []string{aegisIPv4},
 		log:   logger,
 	}
-	transport := &http.Transport{
+	transport := r.newTransport()
+	r.client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	r.lookup = r.exchange
+	return r
+}
+
+// newTransport builds the HTTP/2 DoH transport. A fresh one is installed by
+// Reset when pooled connections stop working.
+func (r *dohResolver) newTransport() *http.Transport {
+	return &http.Transport{
 		ForceAttemptHTTP2:     true,
 		TLSClientConfig:       &tls.Config{ServerName: dohHost, MinVersion: tls.VersionTLS12},
 		DialContext:           r.dial,
@@ -63,9 +77,6 @@ func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
 		TLSHandshakeTimeout:   8 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	r.client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	r.lookup = r.exchange
-	return r
 }
 
 func (r *dohResolver) SetGateway(gateway string) {
@@ -81,7 +92,39 @@ func (r *dohResolver) SetGateway(gateway string) {
 // change so queries do not keep using established connections bound to the
 // old interface.
 func (r *dohResolver) CloseIdle() {
-	r.client.CloseIdleConnections()
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+	if client != nil {
+		client.CloseIdleConnections()
+	}
+}
+
+// ConsecutiveFailures reports how many lookups have failed in a row since the
+// last answer. A listening port on 127.0.0.1:7103 does not prove the upstream
+// path works, so the supervisor watches this instead of the socket.
+func (r *dohResolver) ConsecutiveFailures() int {
+	return int(r.failures.Load())
+}
+
+// Reset rebuilds the HTTP client and re-runs the bootstrap. A long-lived pool
+// can fill with connections a NAT or middlebox has silently discarded, and a
+// fresh transport is the only way out short of restarting the process. The
+// seeded Aegis address survives a failed bootstrap, so Reset never leaves the
+// resolver without a target.
+func (r *dohResolver) Reset() {
+	r.mu.Lock()
+	old := r.client
+	r.client = &http.Client{Transport: r.newTransport(), Timeout: 10 * time.Second}
+	r.mu.Unlock()
+	if old != nil {
+		old.CloseIdleConnections()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.refresh(ctx); err != nil {
+		debugf("doh reset: bootstrap failed, keeping %v: %v", r.targets(), err)
+	}
 }
 
 func (r *dohResolver) targets() []string {
@@ -171,13 +214,61 @@ func (r *dohResolver) refresh(ctx context.Context) error {
 	}
 
 	r.mu.Lock()
-	r.addrs = v4
+	r.addrs = mergeAddresses(v4, aegisIPv4)
 	r.mu.Unlock()
 	debugf("bootstrap %s via gateway %q: %v", r.host, gateway, v4)
 	return nil
 }
 
+// mergeAddresses appends the seeded Aegis address to a bootstrap answer if it
+// is missing, so a filtered or stale gateway answer never removes the one
+// address known to host the listener.
+func mergeAddresses(addrs []string, seed string) []string {
+	seen := make(map[string]bool, len(addrs)+1)
+	out := make([]string, 0, len(addrs)+1)
+	for _, addr := range addrs {
+		if seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		out = append(out, addr)
+	}
+	if !seen[seed] {
+		out = append(out, seed)
+	}
+	return out
+}
+
 func (r *dohResolver) exchange(ctx context.Context, query []byte) ([]byte, error) {
+	body, err := r.exchangeOnce(ctx, query)
+	if err == nil {
+		r.failures.Store(0)
+		return body, nil
+	}
+	// A pooled connection can die underneath a long-lived process (NAT or
+	// middlebox idle timeout). The log line says "reused connection died",
+	// and retrying on the same pool keeps hitting it, so drop the pool and
+	// try one fresh connection before counting the lookup as failed. Skip
+	// the retry when the caller's deadline is already spent: the next query
+	// will use the fresh pool anyway.
+	r.CloseIdle()
+	if ctx.Err() == nil {
+		body, retryErr := r.exchangeOnce(ctx, query)
+		if retryErr == nil {
+			r.failures.Store(0)
+			return body, nil
+		}
+		err = retryErr
+	}
+	failures := r.failures.Add(1)
+	if failures >= dohResetAfterFailures {
+		debugf("doh: %d consecutive lookup failures, rebuilding the client", failures)
+		r.Reset()
+	}
+	return nil, err
+}
+
+func (r *dohResolver) exchangeOnce(ctx context.Context, query []byte) ([]byte, error) {
 	// Trace how far each lookup gets: TCP connect, TLS handshake, first
 	// response byte, or a reused pool connection. On failure the stages say
 	// whether the path is dead (no connect), the handshake stalls, or the
@@ -211,7 +302,11 @@ func (r *dohResolver) exchange(ctx context.Context, query []byte) ([]byte, error
 	req.Header.Set("Content-Type", "application/dns-message")
 	req.Header.Set("Accept", "application/dns-message")
 
-	resp, err := r.client.Do(req)
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("DoH lookup failed (%s): %v", stages.describe(), err)
 	}
