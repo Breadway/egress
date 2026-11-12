@@ -91,8 +91,10 @@ type splitReporter struct {
 	log      *log.Logger
 	disabled bool
 
-	// protocols is what this device last observed about outbound protocols.
-	protocols []splitProtocolReport
+	// protocols is what this device last observed about outbound protocols;
+	// protocolsDirty is set when they have not been shared yet.
+	protocols      []splitProtocolReport
+	protocolsDirty bool
 	// recheck probes a contested domain and returns the answer to share.
 	recheck func(context.Context, string) (string, string)
 
@@ -174,7 +176,7 @@ func (r *splitReporter) Run(ctx context.Context) {
 
 func (r *splitReporter) flush(ctx context.Context) error {
 	r.mu.Lock()
-	if len(r.queue) == 0 {
+	if len(r.queue) == 0 && !r.protocolsDirty {
 		r.mu.Unlock()
 		return nil
 	}
@@ -188,6 +190,9 @@ func (r *splitReporter) flush(ctx context.Context) error {
 		}
 	}
 	protocols := r.protocols
+	if !r.protocolsDirty {
+		protocols = nil
+	}
 	r.mu.Unlock()
 
 	payload, err := json.Marshal(splitReport{
@@ -219,6 +224,7 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	for _, d := range batch {
 		delete(r.queue, d.Domain)
 	}
+	r.protocolsDirty = false
 	r.mu.Unlock()
 	log.Printf("split: reported %d domains for %s", len(batch), network)
 	return nil
@@ -313,6 +319,7 @@ func (r *splitReporter) ReportFinal(ctx context.Context, domain, state, evidence
 func (r *splitReporter) SetProtocols(protocols []splitProtocolReport) {
 	r.mu.Lock()
 	r.protocols = protocols
+	r.protocolsDirty = true
 	r.mu.Unlock()
 }
 
