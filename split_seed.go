@@ -41,22 +41,6 @@ var seedCandidates = []string{
 	"chatgpt.com",
 }
 
-// seedSet is built once for fast membership checks.
-var seedSet = func() map[string]bool {
-	m := make(map[string]bool, len(seedCandidates))
-	for _, domain := range seedCandidates {
-		m[NormalizeDomain(domain)] = true
-	}
-	return m
-}()
-
-// isSeedCandidate reports whether a curated site is in the seed list. A weak
-// connect timeout on a curated site blocks immediately, because the seed list
-// exists for networks that blackhole exactly these names.
-func isSeedCandidate(domain string) bool {
-	return seedSet[NormalizeDomain(domain)]
-}
-
 // SeedCandidates returns a copy so callers cannot mutate the seed.
 func SeedCandidates() []string {
 	out := make([]string, len(seedCandidates))

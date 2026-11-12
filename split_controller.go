@@ -29,15 +29,19 @@ type splitController struct {
 	probing  map[string]bool
 	sem      chan struct{}
 	reporter *splitReporter
+	// blockedIPs remembers which addresses were routed for each domain, so an
+	// allowed verdict can remove exactly those routes.
+	blockedIPs map[string][]string
 }
 
 func newSplitController(network, iface string, routes *routeManager, logger *log.Logger) *splitController {
 	c := &splitController{
-		iface:   iface,
-		log:     logger,
-		routes:  routes,
-		probing: map[string]bool{},
-		sem:     make(chan struct{}, probeParallel),
+		iface:      iface,
+		log:        logger,
+		routes:     routes,
+		probing:    map[string]bool{},
+		sem:        make(chan struct{}, probeParallel),
+		blockedIPs: map[string][]string{},
 	}
 	c.load(network)
 	c.reporter = newSplitReporter(network, ProfileDir(), logger)
@@ -67,6 +71,7 @@ func (c *splitController) SetNetwork(network, iface string) {
 	c.iface = iface
 	c.load(network)
 	c.probing = map[string]bool{}
+	c.blockedIPs = map[string][]string{}
 	reporter := c.reporter
 	c.mu.Unlock()
 	reporter.SetNetwork(network)
@@ -90,12 +95,14 @@ func (c *splitController) HandleAnswer(domain string, ips []net.IP, ttl time.Dur
 	now := time.Now()
 	c.mu.Lock()
 	state := c.profile.State(domain, now)
-	c.mu.Unlock()
-
 	if state == StateBlocked {
+		c.trackIPsLocked(domain, ips)
+		c.mu.Unlock()
 		c.routes.Add(ips, ttl, now)
 		return
 	}
+	c.mu.Unlock()
+
 	if state == StateAllowed {
 		return
 	}
@@ -124,7 +131,7 @@ func (c *splitController) startProbe(domain string, minAge time.Duration) {
 
 func (c *splitController) probe(domain string) {
 	c.sem <- struct{}{}
-	res := ProbeDomain(context.Background(), domain, ProbeOptions{
+	res := ProbeConfirmed(context.Background(), domain, ProbeOptions{
 		Interface: c.iface,
 		Timeout:   probeTimeout,
 	})
@@ -137,6 +144,15 @@ func (c *splitController) probe(domain string) {
 		c.saveLocked()
 	}
 	blockedNow := c.profile.State(domain, now) == StateBlocked
+	allowedNow := c.profile.State(domain, now) == StateAllowed
+	var remove []string
+	if blockedNow {
+		c.trackIPsLocked(domain, parseProbeIPs(res.IPs))
+	}
+	if allowedNow && before == StateBlocked {
+		remove = c.blockedIPs[domain]
+		delete(c.blockedIPs, domain)
+	}
 	delete(c.probing, domain)
 	reporter := c.reporter
 	c.mu.Unlock()
@@ -145,13 +161,10 @@ func (c *splitController) probe(domain string) {
 	}
 
 	if res.State == StateBlocked || blockedNow {
-		ips := make([]net.IP, 0, len(res.IPs))
-		for _, raw := range res.IPs {
-			if ip := net.ParseIP(raw); ip != nil {
-				ips = append(ips, ip)
-			}
-		}
-		c.routes.Add(ips, 0, now)
+		c.routes.Add(parseProbeIPs(res.IPs), 0, now)
+	}
+	if len(remove) > 0 {
+		c.routes.Remove(remove)
 	}
 	debugf("split: probe %s", res.String())
 }
@@ -183,6 +196,35 @@ func (c *splitController) Run(ctx context.Context) {
 			c.Sweep()
 		}
 	}
+}
+
+func (c *splitController) trackIPsLocked(domain string, ips []net.IP) {
+	if c.blockedIPs == nil {
+		c.blockedIPs = map[string][]string{}
+	}
+	seen := map[string]bool{}
+	for _, key := range c.blockedIPs[domain] {
+		seen[key] = true
+	}
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			key := v4.String()
+			if !seen[key] {
+				seen[key] = true
+				c.blockedIPs[domain] = append(c.blockedIPs[domain], key)
+			}
+		}
+	}
+}
+
+func parseProbeIPs(raw []string) []net.IP {
+	out := make([]net.IP, 0, len(raw))
+	for _, s := range raw {
+		if ip := net.ParseIP(s); ip != nil {
+			out = append(out, ip)
+		}
+	}
+	return out
 }
 
 // mergeFeed installs domains learned by other devices as blocked entries.

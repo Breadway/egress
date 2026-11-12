@@ -158,12 +158,11 @@ func TestRecordProbeOutcome(t *testing.T) {
 	if p.State("unknown.example.org", now) != StateBlocked {
 		t.Fatal("two weak timeouts should block")
 	}
-	// A curated seed site is different: the seed list exists for networks
-	// that blackhole those names, so one timeout blocks it.
-	seedWeak := ProbeResult{Domain: "discord.com", State: StateUnknown, Evidence: EvidenceConnectStall, Weak: true}
-	recordProbeOutcome(p, "discord.com", seedWeak, now)
+	// Two samples confirmed by ProbeConfirmed block in one go.
+	confirmed := ProbeResult{Domain: "discord.com", State: StateUnknown, Evidence: EvidenceConnectStall, Weak: true, Confirmed: true}
+	recordProbeOutcome(p, "discord.com", confirmed, now)
 	if p.State("discord.com", now) != StateBlocked {
-		t.Fatal("a weak timeout on a seed site should block immediately")
+		t.Fatal("two confirmed timeouts should block")
 	}
 	definitive := ProbeResult{Domain: "steamcommunity.com", State: StateBlocked, Evidence: EvidenceTLSStall}
 	recordProbeOutcome(p, "steamcommunity.com", definitive, now)
@@ -174,6 +173,26 @@ func TestRecordProbeOutcome(t *testing.T) {
 	recordProbeOutcome(p, "steamcommunity.com", allowed, now)
 	if p.State("steamcommunity.com", now) != StateAllowed {
 		t.Fatal("a success should clear the block")
+	}
+}
+
+func TestCombineProbeSamples(t *testing.T) {
+	allowed := ProbeResult{State: StateAllowed}
+	blocked := ProbeResult{State: StateBlocked, Evidence: EvidenceTLSStall}
+	weak := ProbeResult{State: StateUnknown, Evidence: EvidenceConnectStall, Weak: true}
+	transient := ProbeResult{State: StateUnknown, Transient: true}
+
+	if got := combineProbeSamples(weak, allowed); got.State != StateAllowed {
+		t.Errorf("a working sample must win: %+v", got)
+	}
+	if got := combineProbeSamples(weak, blocked); got.State != StateBlocked {
+		t.Errorf("a definitive block must beat weak: %+v", got)
+	}
+	if got := combineProbeSamples(weak, weak); !got.Weak || got.State != StateUnknown {
+		t.Errorf("two weak samples stay weak: %+v", got)
+	}
+	if got := combineProbeSamples(transient, transient); got.State != StateUnknown || got.Weak {
+		t.Errorf("transient samples stay transient: %+v", got)
 	}
 }
 

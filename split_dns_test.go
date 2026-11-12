@@ -80,6 +80,34 @@ func TestRouteManagerAddCleanup(t *testing.T) {
 	}
 }
 
+func TestRouteManagerRemove(t *testing.T) {
+	var calls [][]string
+	rm := &routeManager{
+		dev:    "wg0",
+		log:    log.New(testWriter{t}, "", 0),
+		routes: map[string]time.Time{},
+		run: func(args ...string) error {
+			calls = append(calls, args)
+			return nil
+		},
+	}
+	now := time.Now()
+	rm.Add([]net.IP{net.IPv4(1, 2, 3, 4), net.IPv4(5, 6, 7, 8)}, 0, now)
+	rm.Remove([]string{"1.2.3.4", "9.9.9.9"})
+	if rm.Count() != 1 {
+		t.Fatalf("count after remove: %d", rm.Count())
+	}
+	found := false
+	for _, call := range calls {
+		if len(call) > 2 && call[1] == "del" && call[2] == "1.2.3.4/32" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no delete call: %v", calls)
+	}
+}
+
 func TestSplitControllerRoutesBlockedDomain(t *testing.T) {
 	var calls [][]string
 	rm := &routeManager{
