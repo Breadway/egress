@@ -26,7 +26,8 @@ type reportPayload struct {
 	Arch     string       `json:"arch"`
 	IP       string       `json:"ip"`
 	Version  string       `json:"version"`
-	Status   string       `json:"status"` // functional, partial, or failed
+	Status   string       `json:"status"`          // functional, partial, or failed
+	State    string       `json:"state,omitempty"` // installed, disabled
 	Checks   checkResults `json:"checks"`
 	Error    string       `json:"error,omitempty"`
 	Parked   bool         `json:"parked,omitempty"`

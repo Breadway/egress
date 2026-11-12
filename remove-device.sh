@@ -108,7 +108,7 @@ trap - EXIT
 relay_cred_path="$HOME/.keys/egress-socks-${label}-${ip}.cred"
 if [ -r "$relay_cred_path" ]; then
     relay_user=$(cut -d: -f1 "$relay_cred_path")
-    ssh "${ssh_opts[@]}" "$aegis_host"         "sudo -n sed -i '/^${relay_user}:/d' /etc/egress-socks/auth && sudo -n systemctl reload-or-restart egress-socks"         && printf 'relay user %s removed from %s\n' "$relay_user" "$aegis_host"         || printf 'warning: could not remove relay user %s; edit /etc/egress-socks/auth on %s\n' "$relay_user" "$aegis_host" >&2
+    ssh "${ssh_opts[@]}" "$aegis_host"         "sudo -n sed -i '/^${relay_user}:/d' /etc/egress-socks/auth && sudo -n chown bypass:egress-socks /etc/egress-socks/auth && sudo -n chmod 0640 /etc/egress-socks/auth && sudo -n systemctl reload-or-restart egress-socks"         && printf 'relay user %s removed from %s\n' "$relay_user" "$aegis_host"         || printf 'warning: could not remove relay user %s; edit /etc/egress-socks/auth on %s\n' "$relay_user" "$aegis_host" >&2
 fi
 
 if [ "$keep_files" -eq 0 ]; then

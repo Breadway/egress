@@ -414,9 +414,10 @@ type Proxy struct {
 	network    string
 	log        *log.Logger
 
-	mu      sync.Mutex
-	profile *Profile
-	path    string
+	mu        sync.Mutex
+	profile   *Profile
+	path      string
+	overrides Overrides
 
 	probe     func(context.Context, string, ProbeOptions) ProbeResult
 	dial      func(context.Context, string, string) (net.Conn, error)
@@ -436,6 +437,7 @@ func NewProxy(network, dir, listen, relay, user, pass string, logger *log.Logger
 		log:        logger,
 	}
 	p.path = ProfilePathIn(dir, network)
+	p.overrides = LoadOverrides(dir)
 	profile, err := LoadProfile(p.path, network)
 	if err != nil {
 		logger.Printf("proxy: could not read %s (%v); starting empty", p.path, err)
@@ -600,6 +602,9 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 // recording the result.
 func (p *Proxy) decide(ctx context.Context, host string) DomainState {
 	host = core.NormalizeDomain(host)
+	if state, ok := p.overrides.Forced(host); ok {
+		return state
+	}
 	now := time.Now()
 	p.mu.Lock()
 	state := p.profile.State(host, now)

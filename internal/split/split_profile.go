@@ -386,9 +386,20 @@ func mergeFeedDomains(p *Profile, domains []feedDomain, now time.Time) int {
 			continue
 		}
 		if p.State(domain, now) == StateBlocked {
+			if d.Contested {
+				if entry, ok := p.Entries[domain]; ok && !entry.Contested {
+					entry.Contested = true
+					p.Entries[domain] = entry
+				}
+			}
 			continue
 		}
 		p.AddBlocked(domain, EvidenceFeed, now)
+		if d.Contested {
+			entry := p.Entries[domain]
+			entry.Contested = true
+			p.Entries[domain] = entry
+		}
 		added++
 	}
 	return added
@@ -464,6 +475,9 @@ const (
 
 // DomainEntry is one row in a network profile.
 type DomainEntry struct {
+	// Contested marks a domain the shared table disagrees about. It stays
+	// blocked here until a verification says otherwise.
+	Contested bool        `json:"contested,omitempty"`
 	State     DomainState `json:"state"`
 	Evidence  Evidence    `json:"evidence,omitempty"`
 	Failures  int         `json:"failures,omitempty"`
@@ -496,6 +510,17 @@ func NewProfile(network string) *Profile {
 func NetworkID(network string) string {
 	sum := sha256.Sum256([]byte("egress-split-v1:" + strings.ToLower(strings.TrimSpace(network))))
 	return hex.EncodeToString(sum[:])[:32]
+}
+
+// UDPBlocked reports whether the stored protocol picture says outbound UDP is
+// blocked on this network. A shared observation from another device is enough:
+// starting on the relay path skips a UDP trial that would fail anyway.
+func UDPBlocked(network string) bool {
+	profile, err := LoadProfile(ProfilePath(network), network)
+	if err != nil {
+		return false
+	}
+	return profile.Protocols["udp"] == "blocked"
 }
 
 // NetworkKey identifies a network by SSID and gateway. Roaming between APs on

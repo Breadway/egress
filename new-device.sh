@@ -263,7 +263,7 @@ provision_relay_credentials() {
     local user pass
     user="dev-${ip}-$(openssl rand -hex 4)"
     pass=$(openssl rand -base64 18 | tr '+/' '-_' | tr -d '=')
-    printf '%s:%s\n' "$user" "$pass" | ssh "${ssh_opts[@]}" "$aegis_host"         "sudo -n tee -a /etc/egress-socks/auth >/dev/null && sudo -n systemctl reload-or-restart egress-socks"         || die "could not add relay credentials on $aegis_host"
+    printf '%s:%s\n' "$user" "$pass" | ssh "${ssh_opts[@]}" "$aegis_host"         "sudo -n tee -a /etc/egress-socks/auth >/dev/null && sudo -n chown bypass:egress-socks /etc/egress-socks/auth && sudo -n chmod 0640 /etc/egress-socks/auth && sudo -n systemctl reload-or-restart egress-socks"         || die "could not add relay credentials on $aegis_host"
     printf '%s\n' "$user:$pass" > "$relay_cred_path"
     chmod 0600 "$relay_cred_path"
     note "relay user $user added on $aegis_host"

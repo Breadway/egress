@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,6 +20,7 @@ func main() {
 	perUser := flag.Float64("limit-mbps-per-user", 0, "per-user throughput cap in Mbit/s (0 = unlimited)")
 	ownerUser := flag.String("owner-user", "", "relay user that gets the owner cap")
 	ownerMbps := flag.Float64("owner-mbps", 0, "throughput cap for the owner user in Mbit/s")
+	usageFile := flag.String("usage-file", "", "write a per-user byte snapshot here every few minutes")
 	flag.Parse()
 
 	users, err := loadAuth(*authFile)
@@ -56,6 +59,11 @@ func main() {
 		log.Printf("socksrelay: owner %s cap %.1f Mbit/s", *ownerUser, *ownerMbps)
 	}
 	r.usage = newUsage()
+	r.perUserRate = *perUser * 1e6 / 8
+	go watchAuth(*authFile, r)
+	if *usageFile != "" {
+		go writeUsageLoop(*usageFile, r)
+	}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -86,4 +94,48 @@ func loadAuth(path string) (map[string]string, error) {
 		users[user] = pass
 	}
 	return users, nil
+}
+
+// watchAuth reloads the auth file when it changes, so an admin revocation takes
+// effect without a restart. A malformed edit keeps the previous table.
+func watchAuth(path string, r *relay) {
+	var last time.Time
+	for {
+		time.Sleep(30 * time.Second)
+		info, err := os.Stat(path)
+		if err != nil || info.ModTime().Equal(last) {
+			continue
+		}
+		users, err := loadAuth(path)
+		if err != nil || len(users) == 0 {
+			log.Printf("socksrelay: auth reload skipped: %v", err)
+			continue
+		}
+		r.setUsers(users)
+		last = info.ModTime()
+		log.Printf("socksrelay: auth reloaded, %d user(s)", len(users))
+	}
+}
+
+// writeUsageLoop snapshots bytes per user so the admin page can show usage.
+func writeUsageLoop(path string, r *relay) {
+	for {
+		time.Sleep(5 * time.Minute)
+		snapshot := r.usage.snapshot()
+		payload, err := json.MarshalIndent(struct {
+			Updated string           `json:"updated"`
+			Users   map[string]int64 `json:"users"`
+		}{time.Now().UTC().Format(time.RFC3339), snapshot}, "", "  ")
+		if err != nil {
+			continue
+		}
+		tmp := path + ".tmp"
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			continue
+		}
+		if err := os.WriteFile(tmp, payload, 0644); err != nil {
+			continue
+		}
+		_ = os.Rename(tmp, path)
+	}
 }

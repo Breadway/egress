@@ -43,14 +43,16 @@ const (
 // protocol can be tested without opening real destinations; production leaves
 // them at the defaults below.
 type relay struct {
-	users   map[string]string
-	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
-	resolve func(ctx context.Context, host string) ([]net.IP, error)
-	guard   func(net.IP) bool
-	idle    time.Duration
-	limit   *limiter
-	perUser map[string]*limiter
-	usage   *usage
+	mu          sync.RWMutex
+	users       map[string]string
+	dial        func(ctx context.Context, network, addr string) (net.Conn, error)
+	resolve     func(ctx context.Context, host string) ([]net.IP, error)
+	guard       func(net.IP) bool
+	idle        time.Duration
+	limit       *limiter
+	perUser     map[string]*limiter
+	perUserRate float64 // bytes per second, 0 = unlimited
+	usage       *usage
 }
 
 func newRelay(users map[string]string, idle time.Duration) *relay {
@@ -114,7 +116,10 @@ func (r *relay) negotiate(conn net.Conn, br *bufio.Reader) ([]byte, error) {
 			haveUserPass = true
 		}
 	}
-	if !haveUserPass || len(r.users) == 0 {
+	r.mu.RLock()
+	userCount := len(r.users)
+	r.mu.RUnlock()
+	if !haveUserPass || userCount == 0 {
 		_, _ = conn.Write([]byte{socksVersion, methodReject})
 		return nil, errors.New("no acceptable auth method")
 	}
@@ -141,7 +146,9 @@ func (r *relay) authenticate(conn net.Conn, br *bufio.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(br, pass); err != nil {
 		return nil, err
 	}
+	r.mu.RLock()
 	want, ok := r.users[string(user)]
+	r.mu.RUnlock()
 	valid := ok && subtle.ConstantTimeCompare([]byte(want), pass) == 1
 	if !valid {
 		_, _ = conn.Write([]byte{authVersion, 0x01})
@@ -265,7 +272,7 @@ func (r *relay) splice(conn net.Conn, br *bufio.Reader, remote net.Conn, user st
 		fromClient = &limitedReader{r: fromClient, l: r.limit}
 		fromRemote = &limitedReader{r: fromRemote, l: r.limit}
 	}
-	if per := r.perUser[user]; per != nil {
+	if per := r.perUserFor(user); per != nil {
 		fromClient = &limitedReader{r: fromClient, l: per}
 		fromRemote = &limitedReader{r: fromRemote, l: per}
 	}
@@ -372,6 +379,17 @@ type usage struct {
 	logged map[string]int64
 }
 
+// snapshot returns a copy of the byte counters.
+func (u *usage) snapshot() map[string]int64 {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	out := make(map[string]int64, len(u.bytes))
+	for k, v := range u.bytes {
+		out[k] = v
+	}
+	return out
+}
+
 func newUsage() *usage { return &usage{bytes: map[string]int64{}, logged: map[string]int64{}} }
 
 // add records n bytes and logs the user once each time their total crosses
@@ -404,4 +422,34 @@ func (c *countedReader) Read(p []byte) (int, error) {
 		c.add(int64(n))
 	}
 	return n, err
+}
+
+// setUsers swaps the auth table after an edit on disk, so revoking a device
+// takes effect without restarting the relay. Existing connections keep their
+// per-user limiter; new ones use the new table.
+func (r *relay) setUsers(users map[string]string) {
+	r.mu.Lock()
+	r.users = users
+	next := map[string]*limiter{}
+	for user, l := range r.perUser {
+		if _, ok := users[user]; ok {
+			next[user] = l
+		}
+	}
+	for user := range users {
+		if _, ok := next[user]; ok {
+			continue
+		}
+		if r.perUserRate > 0 {
+			next[user] = newLimiter(r.perUserRate)
+		}
+	}
+	r.perUser = next
+	r.mu.Unlock()
+}
+
+func (r *relay) perUserFor(user string) *limiter {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.perUser[user]
 }
