@@ -179,6 +179,8 @@ ssh "${ssh_opts[@]}" "$aegis_host" \
 # arguments must be public fields only (username, label, binary, peer...).
 api_post() {
     local endpoint=$1; shift
+    local extra
+    extra=$(printf '%q ' "$@")
     ssh "${ssh_opts[@]}" "$aegis_host" "sudo -n bash -s" <<EOF
 pwfile=\$(mktemp /tmp/bypass-pw-XXXXXX)
 chmod 600 "\$pwfile"
@@ -188,7 +190,7 @@ $password
 BYPASS_PW_EOF
 {
 printf '%s\n' "header = \\"Authorization: Bearer $token\\""
-} | curl -s -w '\n%{http_code}' --config - -X POST "$@" --data-urlencode "password@\$pwfile" http://127.0.0.1:7220/admin/api/$endpoint
+} | curl -s -w '\n%{http_code}' --config - -X POST $extra --data-urlencode "password@\$pwfile" http://127.0.0.1:7220/admin/api/$endpoint
 EOF
 }
 

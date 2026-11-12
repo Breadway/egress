@@ -1407,7 +1407,7 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 	if len(users) == 0 {
 		b.WriteString(`<div class="table-wrap"><div class="empty"><strong>No logins.</strong></div></div>`)
 	} else {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Username</th><th>Device</th><th>OS</th><th>File</th><th>Created</th><th>Downloads</th><th>Password</th><th>Status</th><th></th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Username</th><th>Device</th><th>OS</th><th>File</th><th>Created</th><th>Downloads</th><th>Password</th><th>Status</th><th>Build</th><th></th></tr></thead><tbody>`)
 		for name, u := range users {
 			downloads := `<span class="muted">never</span>`
 			if u.Downloads > 0 {
@@ -1423,7 +1423,12 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 				// Usernames match validName, so no URL escaping is needed.
 				status += fmt.Sprintf(`<br><a href="/admin/reports?user=%s">details</a>`, esc(name))
 			}
-			fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td class="muted">%s</td><td class="muted">%s</td><td>%s</td><td>%s</td><td>%s</td><td><div class="row-actions">
+			build := `<span class="muted">no report</span>`
+			if stored != nil && stored.Report.Version != "" {
+				build = fmt.Sprintf(`%s<br><span class="muted">%s</span>`,
+					esc(stored.Report.Version), esc(displayTime(stored.Received)))
+			}
+			fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td class="muted">%s</td><td class="muted">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><div class="row-actions">
 <form method="post" action="/admin/users">
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="username" value="%s">
 <input type="hidden" name="action" value="reset">
@@ -1432,7 +1437,7 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="username" value="%s">
 <input type="hidden" name="action" value="revoke">
 <button class="btn danger small" type="submit">Revoke</button></form></div></td></tr>`,
-				esc(name), esc(u.Label), osLabel(u.OS, u.Arch), esc(u.Binary), esc(displayTime(u.Created)), downloads, password, status,
+				esc(name), esc(u.Label), osLabel(u.OS, u.Arch), esc(u.Binary), esc(displayTime(u.Created)), downloads, password, status, build,
 				s.csrfToken(r), esc(name), s.csrfToken(r), esc(name))
 		}
 		b.WriteString(`</tbody></table></div>`)
