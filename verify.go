@@ -128,6 +128,12 @@ func runChecks(p platform, tcfg tunnelConfig) checkResults {
 	} else {
 		r.Probe = "failed"
 	}
+	if tcfg.Split {
+		// Split mode deliberately leaves most traffic on the physical link,
+		// so the public exit address is not Aegis and is not checked.
+		r.Exit = "split"
+		return r
+	}
 	ip, err := checkExitIP()
 	switch {
 	case err != nil:
@@ -152,7 +158,7 @@ func (r checkResults) grade() string {
 	}
 	if (r.Tunnel == "up" || r.Tunnel == "skipped") &&
 		(r.Probe == "ok" || r.Probe == "skipped") &&
-		(r.Exit == "" || r.Exit == aegisIPv4) {
+		(r.Exit == "" || r.Exit == aegisIPv4 || r.Exit == "split") {
 		return "functional"
 	}
 	return "partial"
@@ -199,6 +205,8 @@ func verifyAll(p platform, tcfg tunnelConfig) error {
 		}
 
 		switch {
+		case tcfg.Split && r.Exit == "split":
+			fmt.Println("[ok]   split routing: only learned-blocked destinations use the tunnel")
 		case r.Exit == aegisIPv4:
 			fmt.Printf("[ok]   exit address is %s\n", r.Exit)
 		case r.Exit == "":

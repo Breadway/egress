@@ -239,6 +239,7 @@ Install flags:
 | `--ip <addr>` | tunnel address for this device (default `10.88.0.4`) |
 | `--no-tunnel` | configure DNS only |
 | `--no-fallback` | never start the WebSocket fallback |
+| `--split` | Linux: route only learned-blocked destinations through the tunnel |
 | `--debug` | trace every external command, probe and state change to stderr and the log file |
 
 `disable`, `enable`, `remove` and `uninstall` also accept `--debug`.

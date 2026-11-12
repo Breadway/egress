@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -134,9 +135,16 @@ func runInstall(plat platform, args []string) (err error) {
 	ipFlag := fs.String("ip", "", "tunnel address for this device")
 	noTunnel := fs.Bool("no-tunnel", false, "configure DNS only")
 	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
+	split := fs.Bool("split", false, "Linux: route only learned-blocked destinations through the tunnel")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *split && *noTunnel {
+		return errors.New("--split needs the tunnel; it cannot be combined with --no-tunnel")
+	}
+	if *split && runtime.GOOS != "linux" {
+		return errors.New("--split is Linux only for now; the Windows proxy path is not built yet")
 	}
 	setupLogging(resolveDebug(*debug))
 
@@ -153,7 +161,7 @@ func runInstall(plat platform, args []string) (err error) {
 		return fmt.Errorf("find the default route: %w", err)
 	}
 
-	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort}
+	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort, Split: *split}
 	if validIPv4(embeddedClientIP) {
 		tcfg.ClientIP = embeddedClientIP
 	}
@@ -176,6 +184,17 @@ func runInstall(plat platform, args []string) (err error) {
 			return err
 		}
 	}
+
+	// The marker must match the tunnel config. Track whether the config has
+	// been written: a failure before that point restores the previous mode,
+	// a failure after it leaves the marker matching the file on disk.
+	prevSplit := splitEnabled()
+	wroteConfig := false
+	defer func() {
+		if err != nil && !wroteConfig {
+			_ = setSplitEnabled(prevSplit)
+		}
+	}()
 
 	if *noTunnel {
 		debugf("dns-only install: skipping wireguard-tools")
@@ -214,6 +233,13 @@ func runInstall(plat platform, args []string) (err error) {
 		if err != nil {
 			return err
 		}
+		// The config and the mode marker must agree. Write the marker only
+		// once the config is on disk; from here on a failure leaves both in
+		// the requested mode instead of splitting them.
+		if err := setSplitEnabled(*split); err != nil {
+			return err
+		}
+		wroteConfig = true
 		if changed {
 			// New or different identity: bounce a live tunnel so it runs
 			// the just-written config. StartTunnel alone is a no-op when
@@ -237,6 +263,9 @@ func runInstall(plat platform, args []string) (err error) {
 			return err
 		}
 		fmt.Println("wireguard tunnel is up")
+		if *split {
+			fmt.Println("split mode: only learned-blocked destinations will use the tunnel")
+		}
 	}
 
 	if _, err := plat.InstallWstunnel(); err != nil {
@@ -369,8 +398,14 @@ func cmdSupervise(args []string) error {
 	}
 	wst := newWstunnelProc(wstPath, appLogger())
 
+	var split *splitController
+	if splitEnabled() && !*noTunnel {
+		split = newSplitController(NetworkKey("", gateway), iface,
+			newRouteManager(wgInterface, appLogger()), appLogger())
+	}
 	sup := newSupervisor(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
 	sup.iface, sup.gateway = iface, gateway
+	sup.split = split
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -386,7 +421,7 @@ func cmdVerify(args []string) error {
 	setupLogging(resolveDebug(*debug))
 
 	plat := newPlatform()
-	tcfg := tunnelConfig{ClientIP: defaultClientIP}
+	tcfg := tunnelConfig{ClientIP: defaultClientIP, Split: splitEnabled()}
 	if plat.TunnelConfigured() {
 		tcfg.PrivateKey = "configured"
 	}
