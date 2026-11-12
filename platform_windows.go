@@ -378,6 +378,10 @@ func (windowsPlatform) Enable() error {
 func (p windowsPlatform) Disable() error {
 	_ = p.StopService()
 	_ = runLogged("schtasks", "/change", "/tn", winTaskName, "/disable")
+	_ = runLogged("schtasks", "/delete", "/tn", "egress-update-check", "/f")
+	_ = runLogged("schtasks", "/delete", "/tn", "egress-update-apply", "/f")
+	removeProxyAutostart()
+	clearUserPAC()
 
 	_ = p.StopTunnel()
 	stopWstunnel()

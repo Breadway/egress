@@ -556,6 +556,7 @@ func (linuxPlatform) Enable() error {
 // at boot, and puts the system resolver back the way it was. Configs and logs
 // stay so Enable is cheap.
 func (p linuxPlatform) Disable() error {
+	_ = runLogged("systemctl", "disable", "--now", "egress-update.timer")
 	_ = p.StopService()
 	_ = runLogged("systemctl", "disable", "egress.service")
 
@@ -571,6 +572,9 @@ func (p linuxPlatform) Disable() error {
 // except a running binary the platform cannot unlink, which is reported.
 func (p linuxPlatform) Remove() error {
 	_ = p.Disable()
+	_ = os.Remove("/etc/systemd/system/egress-update.service")
+	_ = os.Remove("/etc/systemd/system/egress-update.timer")
+	_ = runLogged("systemctl", "daemon-reload")
 
 	_ = os.Remove(linuxUnitPath)
 	_ = runLogged("systemctl", "daemon-reload")

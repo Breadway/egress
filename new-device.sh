@@ -27,6 +27,10 @@ Usage: ./new-device.sh [options]
   --os <target>    windows (default), linux, darwin, or both (windows+linux).
   --arch <goarch>  amd64 or arm64 (default: arm64 for darwin, amd64 otherwise).
   --debug-build    Pass --debug-build to build.sh so the binary logs by default.
+  --split          Build a device that installs split mode by default.
+  --version <v>    Release version to embed (default 0.3.2, env EGRESS_VERSION).
+  --update-key <k> Update public key (default ~/.keys/egress-update-public.key).
+  --socks-auth <f> Relay credentials file (default ~/.keys/egress-socks-auth).
   --dry-run        Check Aegis and print the address that would be used, then stop.
   -h, --help
 
@@ -35,6 +39,7 @@ passwordless sudo there, wg, and go. Override the host with AEGIS_HOST.
 
 Environment:
   AEGIS_HOST   SSH host or user@host for Aegis (default: aegis)
+  EGRESS_VERSION  Release version for the build (default 0.3.2)
 EOF
 }
 
@@ -44,6 +49,10 @@ target_os="windows"
 target_arch=""
 dry_run=0
 debug_build=0
+split=0
+version="${EGRESS_VERSION:-0.3.2}"
+update_key=""
+socks_auth="$HOME/.keys/egress-socks-auth"
 aegis_host="${AEGIS_HOST:-aegis}"
 registry="$HOME/.keys/egress-peers.tsv"
 
@@ -55,6 +64,10 @@ while [ $# -gt 0 ]; do
         --arch)    target_arch="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
         --debug-build) debug_build=1; shift ;;
+        --split) split=1; shift ;;
+        --version) version="$2"; shift 2 ;;
+        --update-key) update_key="$2"; shift 2 ;;
+        --socks-auth) socks_auth="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *)         die "unknown option: $1" ;;
     esac
@@ -242,12 +255,21 @@ registry_update_binaries() {
 
 build_one() {
     # $1 = goos, $2 = goarch, $3 = out path
-    if [ "$debug_build" -eq 1 ]; then
-        debug_arg="--debug-build"
-    else
-        debug_arg=""
+    if [ -z "$update_key" ] && [ -r "$HOME/.keys/egress-update-public.key" ]; then
+        update_key=$(tr -d ' \t\r\n' < "$HOME/.keys/egress-update-public.key")
     fi
-    if ! ./build.sh --key-file "$key_path" --ip "$ip" --os "$1" --arch "$2" --out "$3" --quiet $debug_arg; then
+    socks_user=""
+    socks_pass=""
+    if [ -r "$socks_auth" ]; then
+        IFS=: read -r socks_user socks_pass < "$socks_auth" || true
+    fi
+    args=(--key-file "$key_path" --ip "$ip" --os "$1" --arch "$2" --out "$3" --quiet
+          --version "$version")
+    [ "$debug_build" -eq 1 ] && args+=(--debug-build)
+    [ -n "$update_key" ] && args+=(--update-key "$update_key")
+    [ -n "$socks_user" ] && [ -n "$socks_pass" ] && args+=(--socks-user "$socks_user" --socks-pass "$socks_pass")
+    [ "$split" -eq 1 ] && args+=(--default-split)
+    if ! ./build.sh "${args[@]}"; then
         cat >&2 <<EOF
 
 build failed, but the peer is already live on $aegis_host and recorded in

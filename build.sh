@@ -41,6 +41,9 @@ Usage: ./build.sh [options]
                        artifact; reuse an existing config with install
                        --keep-config)
   --update-key <b64>   Embed the Ed25519 update public key (44 chars)
+  --socks-user <name>  Embed the SOCKS relay username (split mode)
+  --socks-pass <pass>  Embed the SOCKS relay password (split mode)
+  --default-split      Install split mode unless --no-split is passed
   --quiet              Do not print the private key, next steps or warnings
   --debug-build        Bake in debug mode: the binary behaves as if --debug
                        were passed to every command. For diagnosing other
@@ -67,6 +70,9 @@ save_key=""
 quiet=0
 no_key=0
 update_key=""
+socks_user=""
+socks_pass=""
+default_split=0
 debug_build=0
 
 while [ $# -gt 0 ]; do
@@ -82,6 +88,9 @@ while [ $# -gt 0 ]; do
         --save-key)   save_key="$2"; shift 2 ;;
         --no-key)     no_key=1; shift ;;
         --update-key) update_key="$2"; shift 2 ;;
+        --socks-user) socks_user="$2"; shift 2 ;;
+        --socks-pass) socks_pass="$2"; shift 2 ;;
+        --default-split) default_split=1; shift ;;
         --quiet)      quiet=1; shift ;;
         --debug-build) debug_build=1; shift ;;
         -h|--help)    usage; exit 0 ;;
@@ -209,10 +218,18 @@ update_ldflag=""
 if [ -n "$update_key" ]; then
     update_ldflag=" -X main.updatePublicKey=$update_key"
 fi
+socks_ldflag=""
+if [ -n "$socks_user" ] && [ -n "$socks_pass" ]; then
+    socks_ldflag=" -X main.embeddedSocksUser=$socks_user -X main.embeddedSocksPass=$socks_pass"
+fi
+split_ldflag=""
+if [ "$default_split" -eq 1 ]; then
+    split_ldflag=" -X main.embeddedDefaultSplit=true"
+fi
 
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
     go build -tags delivery -trimpath -buildvcs=false \
-    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$version${debug_ldflag}${update_ldflag}" \
+    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$version${debug_ldflag}${update_ldflag}${socks_ldflag}${split_ldflag}" \
     -o "$out" .
 
 case "$goos" in
