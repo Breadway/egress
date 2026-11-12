@@ -35,6 +35,7 @@ Usage: ./build.sh [options]
   --os <goos>          linux or windows (default: host OS)
   --arch <goarch>      amd64 or arm64 (default: amd64)
   --out <path>         Output path (default: dist/egress-<os>-<arch>[.exe])
+  --version <semver>   Release version, for example 0.3.0 (default 0.0.0)
   --save-key <path>    Also write the private key to this file, mode 0600
   --no-key             Build without an embedded device key (generic update
                        artifact; reuse an existing config with install
@@ -61,6 +62,7 @@ ip="10.88.0.4"
 goos=""
 goarch="amd64"
 out=""
+version="0.0.0"
 save_key=""
 quiet=0
 no_key=0
@@ -76,6 +78,7 @@ while [ $# -gt 0 ]; do
         --os)         goos="$2"; shift 2 ;;
         --arch)       goarch="$2"; shift 2 ;;
         --out)        out="$2"; shift 2 ;;
+        --version)    version="$2"; shift 2 ;;
         --save-key)   save_key="$2"; shift 2 ;;
         --no-key)     no_key=1; shift ;;
         --update-key) update_key="$2"; shift 2 ;;
@@ -209,7 +212,7 @@ fi
 
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
     go build -tags delivery -trimpath -buildvcs=false \
-    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$(date +%Y%m%d)${debug_ldflag}${update_ldflag}" \
+    -ldflags "-s -w -X main.embeddedKey=$key -X main.embeddedClientIP=$ip -X main.buildVersion=$version${debug_ldflag}${update_ldflag}" \
     -o "$out" .
 
 case "$goos" in
