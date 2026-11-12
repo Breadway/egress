@@ -75,7 +75,7 @@ func TestReporterFlush(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := newSplitReporter("net|10.0.0.1", log.New(testWriter{t}, "", 0))
+	r := newSplitReporter("net|10.0.0.1", t.TempDir(), log.New(testWriter{t}, "", 0))
 	r.SetMergeFunc(func([]feedDomain) {})
 	r.reportURL = srv.URL
 	r.Report("discord.com", EvidenceTLSStall)
@@ -102,7 +102,7 @@ func TestReporterFeedFetch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := newSplitReporter("net|10.0.0.1", log.New(testWriter{t}, "", 0))
+	r := newSplitReporter("net|10.0.0.1", t.TempDir(), log.New(testWriter{t}, "", 0))
 	r.seedURL = srv.URL
 	var merged []feedDomain
 	r.SetMergeFunc(func(domains []feedDomain) { merged = domains })

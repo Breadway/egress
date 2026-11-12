@@ -61,6 +61,7 @@ type splitReporter struct {
 	mu       sync.Mutex
 	device   string
 	network  string
+	dir      string
 	queue    map[string]Evidence
 	client   *http.Client
 	log      *log.Logger
@@ -72,9 +73,13 @@ type splitReporter struct {
 	mergeFunc func([]feedDomain)
 }
 
-func newSplitReporter(network string, logger *log.Logger) *splitReporter {
+func newSplitReporter(network, dir string, logger *log.Logger) *splitReporter {
+	if dir == "" {
+		dir = ProfileDir()
+	}
 	r := &splitReporter{
-		device:    deviceID(),
+		device:    deviceIDAt(dir),
+		dir:       dir,
 		network:   network,
 		queue:     map[string]Evidence{},
 		client:    &http.Client{Timeout: splitHTTPTimeout},
@@ -82,7 +87,7 @@ func newSplitReporter(network string, logger *log.Logger) *splitReporter {
 		seedURL:   splitSeedURL,
 		reportURL: splitReportURL,
 	}
-	if _, err := os.Stat(filepath.Join(ProfileDir(), "split-no-report")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "split-no-report")); err == nil {
 		r.disabled = true
 		r.log.Printf("split: reporting disabled by split-no-report")
 	}
@@ -264,12 +269,6 @@ func plausibleDomain(domain string) bool {
 		}
 	}
 	return true
-}
-
-// deviceID is a random per-machine identifier for feed reports. It is not
-// derived from the tunnel key or hostname.
-func deviceID() string {
-	return deviceIDAt(ProfileDir())
 }
 
 func deviceIDAt(dir string) string {

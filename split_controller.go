@@ -40,7 +40,7 @@ func newSplitController(network, iface string, routes *routeManager, logger *log
 		sem:     make(chan struct{}, probeParallel),
 	}
 	c.load(network)
-	c.reporter = newSplitReporter(network, logger)
+	c.reporter = newSplitReporter(network, ProfileDir(), logger)
 	c.reporter.SetMergeFunc(c.mergeFeed)
 	return c
 }
