@@ -37,7 +37,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -430,6 +429,27 @@ td input{padding:.3rem .5rem;font-size:.83rem;border-radius:7px;width:9rem}
 .pill{display:inline-block;font-size:.74rem;font-weight:700;padding:.16rem .62rem;border-radius:999px;background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink-dim);white-space:nowrap}
 .pill.new{background:rgba(245,196,81,.13);border-color:rgba(245,196,81,.42);color:var(--warn)}
 .pill.ok{background:rgba(61,220,151,.13);border-color:rgba(61,220,151,.42);color:var(--ok)}
+.pill.bad{background:rgba(255,123,123,.13);border-color:rgba(255,123,123,.42);color:var(--bad)}
+.pill.skip{background:var(--panel-2);border-color:var(--line);color:var(--ink-faint)}
+.report-head{display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:center}
+.report-meta{color:var(--ink-dim);font-size:.88rem}
+.cell-sub{display:block;color:var(--ink-dim);font-size:.82rem;margin-top:.18rem;font-weight:400}
+a.cell-sub{text-decoration:none;color:var(--accent)}
+a.cell-sub:hover{text-decoration:underline}
+.err-snip{display:block;color:var(--bad);font-size:.82rem;margin-top:.25rem;overflow-wrap:anywhere}
+td.problem{color:var(--ink-dim);max-width:24rem;overflow-wrap:anywhere}
+pre{font-family:var(--mono);font-size:.82rem;line-height:1.5;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;margin:.6rem 0 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:26rem;overflow:auto}
+pre.err{border-color:rgba(255,123,123,.42);color:var(--bad)}
+details.card{padding:0;overflow:hidden}
+details.card>summary{cursor:pointer;padding:1rem 1.4rem;font-weight:650;color:var(--ink-dim);list-style:none}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary:before{content:"\25B8  ";color:var(--ink-faint)}
+details.card[open]>summary:before{content:"\25BE  "}
+details.card>summary:hover{color:var(--ink)}
+details.card>pre{margin:0;border:0;border-top:1px solid var(--line);border-radius:0;max-height:32rem}
+details.card[open]>summary{border-bottom:1px solid var(--line)}
+.table-wrap.compact th,.table-wrap.compact td{padding:.6rem .8rem}
+.stat.warn{border-color:rgba(255,123,123,.42)}
 .empty{padding:2.2rem 1.2rem;text-align:center;color:var(--ink-dim)}
 .empty strong{display:block;color:var(--ink);font-size:1.02rem;margin-bottom:.25rem}
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1.2rem 0}
@@ -1139,35 +1159,58 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 			pending++
 		}
 	}
-	users := s.loadUsers()
-	var attention []string
-	for name, u := range users {
-		if stored, ok := s.loadReport(u.Peer); ok &&
-			(stored.Report.Status == "failed" || stored.Report.Status == "partial") {
-			attention = append(attention, name)
+	rows := s.deviceRows()
+	var failed, parked int
+	for _, row := range rows {
+		switch row.Label {
+		case "failed":
+			failed++
+		case "parked":
+			parked++
 		}
 	}
-	sort.Strings(attention)
-	alert := ""
-	if len(attention) > 0 {
-		var items strings.Builder
-		for _, name := range attention {
-			fmt.Fprintf(&items, `<br><a href="/admin/reports?user=%s">%s</a>`, esc(name), esc(name))
-		}
-		alert = fmt.Sprintf(`<div class="alert error"><strong>%d need attention.</strong>%s</div>`,
-			len(attention), items.String())
-	}
-	usersN := len(users)
+
 	body := fmt.Sprintf(`<div class="admin-head"><h1>Admin</h1>
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="%s">
 <button class="btn ghost small" type="submit">Log out</button></form></div>
 %s
-%s
 <div class="stats">
-<a class="stat" href="/admin/applications"><span class="num">%d</span><span class="lbl">pending</span></a>
-<a class="stat" href="/admin/users"><span class="num">%d</span><span class="lbl">logins</span></a>
-</div>`, s.csrfToken(r), adminSubnav("overview"), alert, pending, usersN)
+<a class="stat" href="/admin/applications"><span class="num">%d</span><span class="lbl">pending applications</span></a>
+<a class="stat%s" href="/admin/users"><span class="num">%d</span><span class="lbl">logins</span></a>
+</div>
+%s<h2>Devices</h2>
+%s`,
+		s.csrfToken(r), adminSubnav("overview"),
+		pending,
+		statClass(failed+parked), len(rows),
+		attentionAlert(failed, parked),
+		deviceTable(rows))
 	s.renderNav(w, true, "admin", "Admin", body)
+}
+
+// statClass marks the logins card when something is wrong.
+func statClass(bad int) string {
+	if bad > 0 {
+		return " warn"
+	}
+	return ""
+}
+
+// attentionAlert names the counts so the dashboard answers "is anything wrong"
+// before any table is read.
+func attentionAlert(failed, parked int) string {
+	var parts []string
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	if parked > 0 {
+		parts = append(parts, fmt.Sprintf("%d parked", parked))
+	}
+	if len(parts) == 0 {
+		return `<div class="alert ok">Every device reported a working install.</div>`
+	}
+	return fmt.Sprintf(`<div class="alert error"><strong>%s.</strong> The table below is sorted worst first; open a login for its report.</div>`,
+		strings.Join(parts, " and "))
 }
 
 func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
@@ -1403,32 +1446,47 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 	if noticeHTML != "" {
 		fmt.Fprintf(&b, `<div class="alert ok">%s</div>`, noticeHTML)
 	}
-	users := s.loadUsers()
-	if len(users) == 0 {
+	rows := s.deviceRows()
+	if len(rows) == 0 {
 		b.WriteString(`<div class="table-wrap"><div class="empty"><strong>No logins.</strong></div></div>`)
 	} else {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Username</th><th>Device</th><th>OS</th><th>File</th><th>Created</th><th>Downloads</th><th>Password</th><th>Status</th><th>Build</th><th></th></tr></thead><tbody>`)
-		for name, u := range users {
-			downloads := `<span class="muted">never</span>`
+		b.WriteString(`<div class="table-wrap compact"><table><thead><tr><th>Login</th><th>Device</th><th>Status</th><th>Access</th><th></th></tr></thead><tbody>`)
+		for _, row := range rows {
+			u := row.User
+
+			device := esc(u.Label)
+			if extra := strings.TrimSpace(osLabel(u.OS, u.Arch) + " &middot; " + esc(u.Binary)); extra != "" {
+				device += `<span class="cell-sub">` + extra + `</span>`
+			}
+			device += fmt.Sprintf(`<span class="cell-sub">created %s</span>`, esc(displayTime(u.Created)))
+
+			status := reportPill(row.Stored)
+			if row.Stored != nil {
+				if v := row.Stored.Report.Version; v != "" {
+					status += fmt.Sprintf(`<span class="cell-sub">build %s</span>`, esc(v))
+				}
+				if p := problemText(row.Stored.Report); p != "" {
+					status += fmt.Sprintf(`<span class="err-snip">%s</span>`, esc(p))
+				}
+				status += fmt.Sprintf(`<a class="cell-sub" href="/admin/reports?user=%s">open report</a>`, esc(row.Name))
+			}
+
+			downloads := `<span class="muted">never downloaded</span>`
 			if u.Downloads > 0 {
-				downloads = fmt.Sprintf(`%d<br><span class="muted">%s</span>`, u.Downloads, esc(displayTime(u.LastDownload)))
+				downloads = fmt.Sprintf(`%d downloads<span class="cell-sub">last %s</span>`,
+					u.Downloads, esc(displayTime(u.LastDownload)))
 			}
-			password := `<span class="muted">hashed only, reset for a new one</span>`
+			password := `<span class="cell-sub">hashed only, reset for a new one</span>`
 			if u.Password != "" {
-				password = fmt.Sprintf(`<code>%s</code>`, esc(u.Password))
+				password = `<span class="cell-sub"><code>` + esc(u.Password) + `</code></span>`
 			}
-			stored, _ := s.loadReport(u.Peer)
-			status := reportPill(stored)
-			if stored != nil {
-				// Usernames match validName, so no URL escaping is needed.
-				status += fmt.Sprintf(`<br><a href="/admin/reports?user=%s">details</a>`, esc(name))
-			}
-			build := `<span class="muted">no report</span>`
-			if stored != nil && stored.Report.Version != "" {
-				build = fmt.Sprintf(`%s<br><span class="muted">%s</span>`,
-					esc(stored.Report.Version), esc(displayTime(stored.Received)))
-			}
-			fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td class="muted">%s</td><td class="muted">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><div class="row-actions">
+
+			fmt.Fprintf(&b, `<tr>
+<td><code>%s</code></td>
+<td>%s</td>
+<td>%s</td>
+<td>%s%s</td>
+<td><div class="row-actions">
 <form method="post" action="/admin/users">
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="username" value="%s">
 <input type="hidden" name="action" value="reset">
@@ -1437,13 +1495,13 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 <input type="hidden" name="csrf" value="%s"><input type="hidden" name="username" value="%s">
 <input type="hidden" name="action" value="revoke">
 <button class="btn danger small" type="submit">Revoke</button></form></div></td></tr>`,
-				esc(name), esc(u.Label), osLabel(u.OS, u.Arch), esc(u.Binary), esc(displayTime(u.Created)), downloads, password, status, build,
-				s.csrfToken(r), esc(name), s.csrfToken(r), esc(name))
+				esc(row.Name), device, status, downloads, password,
+				s.csrfToken(r), esc(row.Name), s.csrfToken(r), esc(row.Name))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
-	b.WriteString(`<p class="muted">Passwords are stored as bcrypt hashes, so they
-cannot be read back. Reset shows a new one once. Revoking removes the login,
+	b.WriteString(`<p class="muted">Worst first. Passwords are stored as bcrypt hashes, so they
+cannot be read back; reset shows a new one once. Revoking removes the login,
 installer, and WireGuard peer.</p>`)
 	s.renderNav(w, true, "admin", "Logins", b.String())
 }
