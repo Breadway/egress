@@ -319,18 +319,13 @@ func (windowsPlatform) EnsureDNS(iface, gateway string) error {
 }
 
 func (windowsPlatform) InstallService(exePath string, args []string) error {
-	commandLine := `"` + exePath + `"`
-	if len(args) > 0 {
-		commandLine += " " + strings.Join(args, " ")
+	debugf("scheduled task command: %s %s", exePath, strings.Join(args, " "))
+	script, err := windowsTaskScript(winTaskName, exePath, strings.Join(args, " "), winTriggerStartup)
+	if err != nil {
+		return err
 	}
-	debugf("scheduled task command: %s", commandLine)
-	return runLogged("schtasks", "/create",
-		"/tn", winTaskName,
-		"/tr", commandLine,
-		"/sc", "onstart",
-		"/ru", "SYSTEM",
-		"/rl", "HIGHEST",
-		"/f")
+	_, err = powershell(script)
+	return err
 }
 
 func (windowsPlatform) StartService() error {
