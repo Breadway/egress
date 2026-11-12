@@ -78,14 +78,14 @@ if ($OS -eq "windows") {
     }
 }
 if ($OS -eq "linux") {
-    $linuxAsset = "assets/wstunnel-linux-amd64"
+    $linuxAsset = "internal/egress/assets/wstunnel-linux-amd64"
     $linuxWant = "62b26d0ee0f2211cef15fa1b85173fe687bc6698121842bf324359b412afc151"
     if (-not (Test-Path $linuxAsset)) { Fail "missing $linuxAsset; Linux delivery builds embed it" }
     $hash = (Get-FileHash $linuxAsset -Algorithm SHA256).Hash.ToLower()
     if ($hash -ne $linuxWant) { Fail "$linuxAsset checksum mismatch" }
 }
 if ($OS -eq "darwin") {
-    $darwinAsset = "assets/wstunnel-darwin-$Arch"
+    $darwinAsset = "internal/egress/assets/wstunnel-darwin-$Arch"
     $darwinWant = @{
         "amd64" = "72349e8eda9b80762e809b51dbe3c81aea8094b57da6ab6bb97274f048be4adb"
         "arm64" = "3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb"
@@ -108,13 +108,13 @@ Write-Host "building:    $OS/$Arch -> $Out"
 Write-Host ""
 
 $debugLdflag = ""
-if ($UpdateKey) { $updateLdflag = " -X main.updatePublicKey=$UpdateKey" } else { $updateLdflag = "" }
-if ($SocksUser -and $SocksPass) { $socksLdflag = " -X main.embeddedSocksUser=$SocksUser -X main.embeddedSocksPass=$SocksPass" } else { $socksLdflag = "" }
-if ($DefaultSplit) { $splitLdflag = " -X main.embeddedDefaultSplit=true" } else { $splitLdflag = "" }
-if ($DebugBuild) { $debugLdflag = " -X main.defaultDebug=true" }
+if ($UpdateKey) { $updateLdflag = " -X egress/internal/egress.updatePublicKey=$UpdateKey" } else { $updateLdflag = "" }
+if ($SocksUser -and $SocksPass) { $socksLdflag = " -X egress/internal/egress.embeddedSocksUser=$SocksUser -X egress/internal/egress.embeddedSocksPass=$SocksPass" } else { $socksLdflag = "" }
+if ($DefaultSplit) { $splitLdflag = " -X egress/internal/egress.embeddedDefaultSplit=true" } else { $splitLdflag = "" }
+if ($DebugBuild) { $debugLdflag = " -X egress/internal/egress.defaultDebug=true" }
 
 & go build -tags delivery -trimpath -buildvcs=false `
-    -ldflags "-s -w -X main.embeddedKey=$Key -X main.embeddedClientIP=$IP -X main.buildVersion=$Version$debugLdflag$updateLdflag$socksLdflag$splitLdflag" `
+    -ldflags "-s -w -X egress/internal/egress.embeddedKey=$Key -X egress/internal/egress.embeddedClientIP=$IP -X egress/internal/egress.buildVersion=$Version$debugLdflag$updateLdflag$socksLdflag$splitLdflag" `
     -o $Out .
 if ($LASTEXITCODE -ne 0) { Fail "go build failed" }
 

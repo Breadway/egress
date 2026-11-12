@@ -363,20 +363,24 @@ deleting its peer on Aegis, which this tool cannot do from the client.
 
 ## Layout
 
+Everything except the entry point lives in `internal/egress`, so the repository
+root holds the build scripts, the entry point and the subprojects.
+
 | File | Role |
 |---|---|
-| `main.go` | CLI and install/verify/disable/enable/remove flows |
-| `config.go` | constants, key validation, public key, wg config rendering |
-| `doh.go` | DoH client and the local UDP/TCP DNS server |
-| `supervisor.go` | probe loop and UDP/WebSocket state machine |
-| `wstunnel.go` | locate, verify and supervise `wstunnel` (plus pinned download for dev builds without embedded assets) |
-| `report.go` | install phone-home report and spooling |
-| `verify.go` | install and verify checks |
-| `platform_linux.go` | systemd, wg-quick, systemd-resolved, diagnose |
-| `platform_windows.go` | WireGuard services, route pin, scheduled task, DNS, embedded installer, diagnose |
-| `assets_windows.go` / `assets_linux.go` / `assets_other.go` | embed the per-OS fallback (plus WireGuard MSI on Windows) |
-| `debug.go` | `--debug` tracing, log file, diagnose helpers |
-| `doh_test.go` | key vector, key/config validation, live UDP and TCP DoH tests |
+| `main.go` | entry point; calls `egress.Main()` |
+| `internal/egress/main.go` | CLI and install/verify/disable/enable/remove flows |
+| `internal/egress/config.go` | constants, key validation, public key, wg config rendering |
+| `internal/egress/doh.go` | DoH client and the local UDP/TCP DNS server |
+| `internal/egress/supervisor.go` | probe loop and UDP/WebSocket state machine |
+| `internal/egress/wstunnel.go` | locate, verify and supervise `wstunnel` (plus pinned download for dev builds without embedded assets) |
+| `internal/egress/report.go` | install phone-home report and spooling |
+| `internal/egress/verify.go` | install and verify checks |
+| `internal/egress/platform_linux.go` | systemd, wg-quick, systemd-resolved, diagnose |
+| `internal/egress/platform_windows.go` | WireGuard services, route pin, scheduled task, DNS, embedded installer, diagnose |
+| `internal/egress/assets_windows.go` / `assets_linux.go` / `assets_other.go` | embed the per-OS fallback (plus WireGuard MSI on Windows) |
+| `internal/egress/debug.go` | `--debug` tracing, log file, diagnose helpers |
+| `internal/egress/doh_test.go` | key vector, key/config validation, live UDP and TCP DoH tests |
 | `build.sh` / `build.ps1` | link a key into the binary and check it landed |
 | `new-device.sh` | pick a free peer address, generate and enroll a key, then build |
 | `remove-device.sh` | list registered peers or revoke one by label |
