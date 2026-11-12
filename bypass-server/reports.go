@@ -451,6 +451,9 @@ func deviceTable(rows []deviceRow) string {
 		if row.Stored != nil {
 			if row.Stored.Report.Version != "" {
 				build = esc(row.Stored.Report.Version)
+				if latest := latestRelease("windows", "amd64"); latest != "" && row.Stored.Report.Version != latest {
+					build += fmt.Sprintf(`<span class="cell-sub">behind %s</span>`, esc(latest))
+				}
 			}
 			when = esc(timeAgo(row.Stored.Received))
 			problem = row.problem()

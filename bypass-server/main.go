@@ -884,6 +884,22 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) renderStatusPage(w http.ResponseWriter, r *http.Request, app *application, notice, errMsg string) {
 	users := s.loadUsers()
+	var deviceHTML string
+	if u, ok := users[app.LinkedUser]; ok {
+		if stored, found := s.loadReport(u.Peer); found {
+			label, class := effectiveStatus(stored.Report)
+			latest := latestRelease(stored.Report.OS, stored.Report.Arch)
+			state := "up to date"
+			if latest != "" && stored.Report.Version != latest {
+				state = "update available: " + latest
+			}
+			deviceHTML = fmt.Sprintf(`<div class="card tight"><p style="margin:0">Device: <span class="pill %s">%s</span> build <strong>%s</strong><br>
+<span class="muted">Reported %s &middot; %s</span></p></div>`,
+				class, esc(label), esc(stored.Report.Version), esc(timeAgo(stored.Received)), esc(state))
+		} else {
+			deviceHTML = `<div class="card tight"><p class="muted" style="margin:0">No install report from this device yet.</p></div>`
+		}
+	}
 	_, userExists := users[app.LinkedUser]
 	ready := app.Reviewed && app.LinkedUser != "" && userExists
 
@@ -893,6 +909,9 @@ func (s *server) renderStatusPage(w http.ResponseWriter, r *http.Request, app *a
 		esc(app.Name) + `</strong><br><span class="muted">Submitted ` + esc(displayTime(app.Created)) +
 		` &middot; ` + osLabel(app.OS, app.Arch) + `</span></p></div>`)
 	b.WriteString(timelineHTML(app.Reviewed, ready))
+	if deviceHTML != "" {
+		b.WriteString(deviceHTML)
+	}
 	if notice != "" {
 		fmt.Fprintf(&b, `<div class="alert ok">%s</div>`, esc(notice))
 	}

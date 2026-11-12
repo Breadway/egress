@@ -90,6 +90,25 @@ SSIDs.
   proxy clears the PAC and stays direct; the tray header shows the current
   network and whether it is allowed.
 
+Relay credentials are per device, and generic release builds embed none: the
+device's auth file, written at install and preserved across updates, is the
+credential. A shared bootstrap pair would be extractable from every download,
+so the update path deliberately carries no credential. The relay also enforces
+a per-user daily quota and refuses new connections once it is spent.
+
+Updates refuse a signed manifest older than the running build unless it is
+explicitly forced, so a replayed manifest cannot pin a device to a known-bad
+release.
+
+The per-user proxy runs under a watchdog: the login autostart starts
+`proxy --watchdog`, which restarts the proxy if it exits, so a crash cannot
+leave the PAC pointing at a dead port. Tray Exit writes a stop marker so the
+watchdog does not resurrect it.
+
+The SSID allowlist is enforced by the Windows per-user proxy only. Other
+platforms record the list and print a note; the Linux supervisor does not gate
+on it yet.
+
 Relay credentials are per device. `new-device.sh` creates a user:password pair
 on the relay and embeds it in that device's build, and `remove-device.sh`
 removes the pair along with the peer, so revoking a device stops its relay

@@ -62,6 +62,9 @@ func cmdUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkManifestVersion(current, m); err != nil {
+		return err
+	}
 	if cmp <= 0 && !m.Force {
 		fmt.Printf("up to date: build %s, latest %s\n", current, m.Version)
 		return nil
@@ -86,6 +89,20 @@ func cmdUpdate(args []string) error {
 		debugf("could not record the applied release: %v", err)
 	}
 	fmt.Printf("updated to %s\n", m.Version)
+	return nil
+}
+
+// checkManifestVersion refuses a signed but older release. Without this a
+// replayed manifest can pin a device to a version with a known flaw; only an
+// explicit forced republish may move backwards.
+func checkManifestVersion(current string, m update.Manifest) error {
+	cmp, err := update.CompareVersions(m.Version, current)
+	if err != nil {
+		return err
+	}
+	if cmp < 0 && !m.Force {
+		return fmt.Errorf("refusing to downgrade from %s to %s (replayed or stale manifest)", current, m.Version)
+	}
 	return nil
 }
 

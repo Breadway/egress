@@ -496,6 +496,36 @@ func (p *Proxy) ReloadOverrides() {
 	p.mu.Unlock()
 }
 
+// TopDomains lists blocked domains, contested first, for the tray submenu.
+func (p *Proxy) TopDomains(limit int) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	type item struct {
+		name      string
+		contested bool
+	}
+	var items []item
+	for name, entry := range p.profile.Entries {
+		if entry.State == StateBlocked {
+			items = append(items, item{name, entry.Contested})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].contested != items[j].contested {
+			return items[i].contested
+		}
+		return items[i].name < items[j].name
+	})
+	out := make([]string, 0, limit)
+	for _, it := range items {
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, it.name)
+	}
+	return out
+}
+
 // Network is the local profile key, for display.
 func (p *Proxy) Network() string { return p.network }
 

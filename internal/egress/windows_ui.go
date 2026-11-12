@@ -162,7 +162,7 @@ func installProxyAutostart(authPath, relay string) error {
 		return err
 	}
 	launcher := filepath.Join(dir, "launch-tray.vbs")
-	cmdLine := fmt.Sprintf(`"%s" proxy --tray --start-relay --relay %s --socks-auth "%s"`, exe, relay, authPath)
+	cmdLine := fmt.Sprintf(`"%s" proxy --watchdog --tray --start-relay --relay %s --socks-auth "%s"`, exe, relay, authPath)
 	body := "Set sh = CreateObject(\"WScript.Shell\")\r\n" +
 		"sh.Run \"" + strings.ReplaceAll(cmdLine, `"`, `""`) + "\", 0, False\r\n"
 	if err := os.WriteFile(launcher, []byte(body), 0600); err != nil {
@@ -214,6 +214,7 @@ const (
 
 	mfString    = 0x0
 	mfGrayed    = 0x1
+	mfPopup     = 0x10
 	mfSeparator = 0x800
 	tpmRight    = 0x0002
 )
@@ -336,6 +337,7 @@ func runTray(ctx context.Context, p *split.Proxy) error {
 				procPostMessageW.Call(hwnd, wmCommand, 2, 0)
 				return
 			case <-refresh.C:
+				resumeIfExpired()
 				refreshPings()
 				procPostMessageW.Call(hwnd, wmUpdate, 0, 0)
 			}
@@ -373,6 +375,8 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 		case 1:
 			openURL(trayPacURL)
 		case 2:
+			// Stop the watchdog too, or it restarts the proxy immediately.
+			_ = os.WriteFile(filepath.Join(split.ProfileDir(), "proxy-stop"), []byte("1\n"), 0600)
 			procPostQuitMessage.Call(0)
 		case 3:
 			openPath(filepath.Join(egressDataDir(), "egress.log"))
@@ -393,6 +397,21 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			runElevated("boot on")
 		case 8:
 			runElevated("boot off")
+		case 9:
+			resumeFiltering()
+		case 10:
+			pauseFiltering(15 * time.Minute)
+		case 11:
+			go runUpdateCheck()
+		default:
+			if id := wparam & 0xffff; id >= 100 {
+				if spec, ok := trayDomainMenu[id]; ok {
+					domain, action, _ := strings.Cut(spec, "|")
+					if err := split.AppendOverride(split.ProfileDir(), domain, action == "allow"); err == nil && trayProxy != nil {
+						trayProxy.ReloadOverrides()
+					}
+				}
+			}
 		}
 		return 0
 	}
@@ -523,6 +542,17 @@ func showTrayMenu(hwnd uintptr) {
 	addItem(7, "Start at boot")
 	addItem(8, "Do not start at boot")
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+	if trayProxy != nil {
+		if until, paused := pausedUntil(); paused {
+			addGray("Filtering paused until " + until.Local().Format("15:04"))
+			addItem(9, "Resume filtering")
+		} else {
+			addItem(10, "Pause filtering for 15 minutes")
+		}
+		addDomainMenu(menu, trayProxy)
+	}
+	addItem(11, "Check for updates")
+	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	addItem(2, "Exit")
 
 	var pt winPoint
@@ -535,6 +565,91 @@ func openURL(url string) {
 	verb, _ := syscall.UTF16PtrFromString("open")
 	target, _ := syscall.UTF16PtrFromString(url)
 	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
+}
+
+// pausePath records a temporary pause so the tray and the proxy agree on it.
+func pausePath() string { return filepath.Join(split.ProfileDir(), "paused-until") }
+
+func pausedUntil() (time.Time, bool) {
+	data, err := os.ReadFile(pausePath())
+	if err != nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+	if err != nil || time.Now().After(t) {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+func pauseFiltering(d time.Duration) {
+	_ = os.MkdirAll(split.ProfileDir(), 0700)
+	_ = os.WriteFile(pausePath(), []byte(time.Now().Add(d).UTC().Format(time.RFC3339)+"\n"), 0600)
+	clearUserPAC()
+}
+
+func resumeFiltering() {
+	_ = os.Remove(pausePath())
+	_ = setUserPAC(pacURLForFile(pacFilePath()))
+}
+
+// resumeIfExpired is called from the refresh tick so a fifteen minute pause
+// does not need a reboot to end.
+func resumeIfExpired() {
+	if _, paused := pausedUntil(); paused {
+		return
+	}
+	if _, err := os.Stat(pausePath()); err == nil {
+		_ = os.Remove(pausePath())
+		_ = setUserPAC(pacURLForFile(pacFilePath()))
+	}
+}
+
+// runUpdateCheck runs `egress update --check` and shows the result.
+func runUpdateCheck() {
+	out, err := exec.Command(os.Args[0], "update", "--check").CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if text == "" && err != nil {
+		text = err.Error()
+	}
+	body, _ := syscall.UTF16PtrFromString(truncate(text, 1500))
+	caption, _ := syscall.UTF16PtrFromString("egress update")
+	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(caption)), 0x40)
+}
+
+// trayDomainMenu maps dynamic menu ids back to domains.
+var trayDomainMenu = map[uintptr]string{}
+
+// addDomainMenu builds a submenu of the worst blocked domains; each opens two
+// actions that write the override files. The popup handles are owned by their
+// parent menu after MF_POPUP, so they are not destroyed here.
+func addDomainMenu(menu uintptr, p *split.Proxy) {
+	domains := p.TopDomains(5)
+	if len(domains) == 0 {
+		return
+	}
+	parent, _, _ := procCreatePopupMenu.Call()
+	if parent == 0 {
+		return
+	}
+	id := uintptr(100)
+	for _, domain := range domains {
+		sub, _, _ := procCreatePopupMenu.Call()
+		if sub == 0 {
+			continue
+		}
+		allow, _ := syscall.UTF16PtrFromString("Allow (direct)")
+		block, _ := syscall.UTF16PtrFromString("Keep blocked")
+		procAppendMenuW.Call(sub, mfString, id, uintptr(unsafe.Pointer(allow)))
+		procAppendMenuW.Call(sub, mfString, id+1, uintptr(unsafe.Pointer(block)))
+		trayDomainMenu[id] = domain + "|allow"
+		trayDomainMenu[id+1] = domain + "|block"
+		label, _ := syscall.UTF16PtrFromString(truncate(domain, 40))
+		procAppendMenuW.Call(parent, mfString|mfPopup, sub, uintptr(unsafe.Pointer(label)))
+		id += 2
+	}
+	label, _ := syscall.UTF16PtrFromString("Blocked domains")
+	procAppendMenuW.Call(menu, mfString|mfPopup, parent, uintptr(unsafe.Pointer(label)))
 }
 
 // runElevated re-runs this binary with the given arguments through the UAC

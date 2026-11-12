@@ -276,3 +276,63 @@ func TestInstalledExePathOnLinux(t *testing.T) {
 		t.Fatalf("path=%q err=%v", path, err)
 	}
 }
+
+func TestCheckManifestVersionRefusesDowngrade(t *testing.T) {
+	older := update.Manifest{Version: "0.4.1"}
+	if err := checkManifestVersion("0.4.9", older); err == nil {
+		t.Fatal("a replayed older manifest was accepted")
+	}
+	older.Force = true
+	if err := checkManifestVersion("0.4.9", older); err != nil {
+		t.Fatalf("forced republish refused: %v", err)
+	}
+	same := update.Manifest{Version: "0.4.9"}
+	if err := checkManifestVersion("0.4.9", same); err != nil {
+		t.Fatalf("same version refused: %v", err)
+	}
+	newer := update.Manifest{Version: "0.5.0"}
+	if err := checkManifestVersion("0.4.9", newer); err != nil {
+		t.Fatalf("newer version refused: %v", err)
+	}
+}
+
+// TestManifestFetchAndVerify runs the publisher half end to end: sign a
+// manifest, serve it, fetch and verify it, then prove a tampered copy is
+// rejected. It covers the contract the update path depends on without
+// touching the filesystem or the service manager.
+func TestManifestFetchAndVerify(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := update.Manifest{
+		Schema: 1, Version: "9.9.9", OS: runtime.GOOS, Arch: runtime.GOARCH,
+		SHA256: strings.Repeat("ab", 32), Size: 12, Released: "2026-01-01T00:00:00Z",
+	}
+	if err := update.Sign(&m, priv); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(m)
+	}))
+	defer srv.Close()
+
+	got, err := fetchUpdateManifest(context.Background(), srv.URL, pub)
+	if err != nil {
+		t.Fatalf("fetch/verify: %v", err)
+	}
+	if got.Version != m.Version {
+		t.Fatalf("version: %q", got.Version)
+	}
+
+	// Tamper with the signed payload: verification must fail.
+	tampered := m
+	tampered.Version = "9.9.10"
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(tampered)
+	}))
+	defer bad.Close()
+	if _, err := fetchUpdateManifest(context.Background(), bad.URL, pub); err == nil {
+		t.Fatal("tampered manifest accepted")
+	}
+}

@@ -132,3 +132,32 @@ func ProfileSummary(dir string) []string {
 		"blocked domains: " + strconv.Itoa(blocked) + ", contested: " + strconv.Itoa(contested),
 	}
 }
+
+// AppendOverride adds one domain to the allow or block file, creating it if
+// needed. The tray uses it so a wrong decision is one click, not an edit.
+func AppendOverride(dir, domain string, allow bool) error {
+	domain = core.NormalizeDomain(domain)
+	if domain == "" {
+		return os.ErrInvalid
+	}
+	name := "split-block.txt"
+	if allow {
+		name = "split-allow.txt"
+	}
+	path := filepath.Join(dir, name)
+	set := map[string]bool{}
+	readDomainFile(path, set)
+	if set[domain] {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(domain + "\n")
+	return err
+}

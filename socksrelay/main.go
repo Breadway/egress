@@ -21,6 +21,7 @@ func main() {
 	ownerUser := flag.String("owner-user", "", "relay user that gets the owner cap")
 	ownerMbps := flag.Float64("owner-mbps", 0, "throughput cap for the owner user in Mbit/s")
 	usageFile := flag.String("usage-file", "", "write a per-user byte snapshot here every few minutes")
+	dailyQuotaMB := flag.Float64("daily-quota-mb", 0, "per-user daily byte quota in MB (0 = unlimited)")
 	flag.Parse()
 
 	users, err := loadAuth(*authFile)
@@ -59,6 +60,10 @@ func main() {
 		log.Printf("socksrelay: owner %s cap %.1f Mbit/s", *ownerUser, *ownerMbps)
 	}
 	r.usage = newUsage()
+	r.quotaBytes = int64(*dailyQuotaMB * 1024 * 1024)
+	if r.quotaBytes > 0 {
+		log.Printf("socksrelay: per-user daily quota %.0f MB", *dailyQuotaMB)
+	}
 	r.perUserRate = *perUser * 1e6 / 8
 	go watchAuth(*authFile, r)
 	if *usageFile != "" {
