@@ -468,6 +468,10 @@ func cmdSupervise(args []string) error {
 	}
 
 	resolver := doh.New(gateway, appLogger())
+	// The resolver serves the readiness marker's lifetime: install proves the
+	// process answering on the DNS port is the one it started.
+	resolver.Ready = writeReadyMarker
+	resolver.NotReady = removeReadyMarker
 
 	wstPath := ""
 	if !*noTunnel && !*noFallback {

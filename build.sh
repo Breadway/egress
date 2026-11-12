@@ -216,7 +216,7 @@ if [ "$debug_build" -eq 1 ]; then
 fi
 update_ldflag=""
 if [ -n "$update_key" ]; then
-    update_ldflag=" -X egress/internal/egress.updatePublicKey=$update_key"
+    update_ldflag=" -X egress/internal/update.PublicKey=$update_key"
 fi
 socks_ldflag=""
 if [ -n "$socks_user" ] && [ -n "$socks_pass" ]; then
