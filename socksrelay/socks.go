@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,6 +47,7 @@ type relay struct {
 	resolve func(ctx context.Context, host string) ([]net.IP, error)
 	guard   func(net.IP) bool
 	idle    time.Duration
+	limit   *limiter
 }
 
 func newRelay(users map[string]string, idle time.Duration) *relay {
@@ -90,7 +92,7 @@ func (r *relay) handle(conn net.Conn) {
 	// The handshake is done; drop the idle deadline so a long download is
 	// not cut off.
 	_ = conn.SetDeadline(time.Time{})
-	splice(conn, br, remote)
+	splice(conn, br, remote, r.limit)
 }
 
 func (r *relay) negotiate(conn net.Conn, br *bufio.Reader) error {
@@ -250,16 +252,22 @@ func writeReply(conn net.Conn, code byte) error {
 // splice copies both directions until either side closes, then half-closes the
 // other. br may already hold buffered client bytes, so it is used instead of
 // the raw connection for the client-to-remote direction.
-func splice(conn net.Conn, br *bufio.Reader, remote net.Conn) {
+func splice(conn net.Conn, br *bufio.Reader, remote net.Conn, limit *limiter) {
+	fromClient := io.Reader(br)
+	fromRemote := io.Reader(remote)
+	if limit != nil {
+		fromClient = &limitedReader{r: fromClient, l: limit}
+		fromRemote = &limitedReader{r: fromRemote, l: limit}
+	}
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(remote, br)
+		_, _ = io.Copy(remote, fromClient)
 		if tcp, ok := remote.(*net.TCPConn); ok {
 			_ = tcp.CloseWrite()
 		}
 		close(done)
 	}()
-	_, _ = io.Copy(conn, remote)
+	_, _ = io.Copy(conn, fromRemote)
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.CloseWrite()
 	}
@@ -288,4 +296,56 @@ func blockedDestination(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// limiter is a token bucket shared by every connection, so the relay's total
+// throughput is capped rather than each client's. The relay borrows the
+// operator's uplink; the cap is what leaves room for Aegis's own services.
+// A nil limiter means no limit.
+type limiter struct {
+	mu     sync.Mutex
+	rate   float64 // bytes per second
+	tokens float64
+	last   time.Time
+}
+
+func newLimiter(bytesPerSecond float64) *limiter {
+	if bytesPerSecond <= 0 {
+		return nil
+	}
+	return &limiter{rate: bytesPerSecond, tokens: bytesPerSecond / 4, last: time.Now()}
+}
+
+// reserve blocks until n bytes may be spent.
+func (l *limiter) reserve(n int) {
+	if l == nil || n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	now := time.Now()
+	l.tokens += now.Sub(l.last).Seconds() * l.rate
+	if l.tokens > l.rate {
+		l.tokens = l.rate
+	}
+	l.last = now
+	l.tokens -= float64(n)
+	var wait time.Duration
+	if l.tokens < 0 {
+		wait = time.Duration(-l.tokens / l.rate * float64(time.Second))
+	}
+	l.mu.Unlock()
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+type limitedReader struct {
+	r io.Reader
+	l *limiter
+}
+
+func (r *limitedReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.l.reserve(n)
+	return n, err
 }

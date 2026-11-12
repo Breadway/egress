@@ -4,7 +4,9 @@ A single binary that gives a Linux or Windows machine:
 
 - DNS over HTTPS through `https://dns.breadway.dev/dns-query`, served locally on
   `127.0.0.1:7103`
-- a full-tunnel WireGuard exit through Aegis (`152.69.174.7`)
+- split routing: only destinations proven blocked take the tunnel through
+  Aegis (`152.69.174.7`); everything else stays on the local link, so a client
+  cannot spend the relay's bandwidth on ordinary browsing
 - an automatic WebSocket fallback on `wss://dns.breadway.dev/wg-tunnel` when UDP
   is blocked or throttled
 
@@ -239,7 +241,7 @@ Install flags:
 | `--ip <addr>` | tunnel address for this device (default `10.88.0.4`) |
 | `--no-tunnel` | configure DNS only |
 | `--no-fallback` | never start the WebSocket fallback |
-| `--split` | Linux: route only learned-blocked destinations through the tunnel |
+| `--split` | accepted for older scripts; split mode is the only mode |
 | `--debug` | trace every external command, probe and state change to stderr and the log file |
 
 `disable`, `enable`, `remove` and `uninstall` also accept `--debug`.

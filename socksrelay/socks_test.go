@@ -142,3 +142,15 @@ func readN(t *testing.T, r io.Reader, n int) []byte {
 	}
 	return buf
 }
+
+func TestLimiterPaces(t *testing.T) {
+	l := newLimiter(1000) // 1 KB/s, burst 250 B
+	start := time.Now()
+	l.reserve(1250) // burst plus one second of tokens
+	if d := time.Since(start); d < 700*time.Millisecond {
+		t.Fatalf("reserve returned after %v; the bucket did not pace", d)
+	}
+	if newLimiter(0) != nil {
+		t.Error("zero rate should disable the limiter")
+	}
+}
