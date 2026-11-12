@@ -105,6 +105,23 @@ func (m *routeManager) Cleanup(now time.Time) {
 	m.order = kept
 }
 
+// Remove deletes specific host routes, used when a domain becomes allowed
+// again.
+func (m *routeManager) Remove(keys []string) {
+	if m == nil || len(keys) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, key := range keys {
+		if _, ok := m.routes[key]; !ok {
+			continue
+		}
+		_ = m.run("route", "del", key+"/32", "dev", m.dev)
+		delete(m.routes, key)
+	}
+}
+
 // Clear removes every route this manager added, for a network change.
 func (m *routeManager) Clear() {
 	if m == nil {

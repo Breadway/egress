@@ -48,10 +48,56 @@ type ProbeResult struct {
 	// Weak marks a connect timeout. It is a hint, not proof: a host in a
 	// rotating DNS pool can have one dead address while others work, so a
 	// single weak result must not be enough to block.
-	Weak      bool
+	Weak bool
+	// Confirmed marks two independent weak samples, which is enough to block.
+	Confirmed bool
 	Transient bool
 	Latency   time.Duration
 	Err       error
+}
+
+// ProbeConfirmed probes once, and when the result is a weak connect timeout it
+// takes a second independent sample with a fresh DNS answer. A rotating pool
+// often answers with a working address the second time; a filtered network
+// times out both times.
+func ProbeConfirmed(ctx context.Context, domain string, opts ProbeOptions) ProbeResult {
+	first := ProbeDomain(ctx, domain, opts)
+	if !first.Weak {
+		return first
+	}
+	select {
+	case <-time.After(500 * time.Millisecond):
+	case <-ctx.Done():
+		return first
+	}
+	second := ProbeDomain(ctx, domain, opts)
+	combined := combineProbeSamples(first, second)
+	combined.Confirmed = true
+	return combined
+}
+
+// combineProbeSamples prefers a working sample, then a definitive block, then
+// a weak timeout.
+func combineProbeSamples(samples ...ProbeResult) ProbeResult {
+	for _, r := range samples {
+		if r.State == StateAllowed {
+			return r
+		}
+	}
+	for _, r := range samples {
+		if r.State == StateBlocked {
+			return r
+		}
+	}
+	for _, r := range samples {
+		if r.Weak {
+			return r
+		}
+	}
+	if len(samples) > 0 {
+		return samples[len(samples)-1]
+	}
+	return ProbeResult{Transient: true}
 }
 
 func (r ProbeResult) String() string {
@@ -298,12 +344,8 @@ func recordProbeOutcome(p *Profile, domain string, res ProbeResult, now time.Tim
 		return true
 	case StateUnknown:
 		if res.Weak {
-			if isSeedCandidate(domain) {
-				// A curated site that times out is the school blackhole,
-				// not a dead address in a pool.
-				p.RecordProbe(domain, res.Evidence, true, now)
-				p.RecordProbe(domain, res.Evidence, true, now)
-			} else {
+			p.RecordProbe(domain, res.Evidence, true, now)
+			if res.Confirmed {
 				p.RecordProbe(domain, res.Evidence, true, now)
 			}
 			return true

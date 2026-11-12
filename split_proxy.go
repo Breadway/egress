@@ -176,7 +176,7 @@ func (p *splitProxy) decide(ctx context.Context, host string) DomainState {
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	res := p.probe(probeCtx, host, ProbeOptions{Timeout: probeTimeout})
+	res := p.probeWithConfirm(probeCtx, host)
 	cancel()
 
 	p.mu.Lock()
@@ -191,6 +191,24 @@ func (p *splitProxy) decide(ctx context.Context, host string) DomainState {
 		return StateBlocked
 	}
 	return StateAllowed
+}
+
+// probeWithConfirm takes a second sample after a weak connect timeout, using
+// the injectable probe so tests can stay offline.
+func (p *splitProxy) probeWithConfirm(ctx context.Context, host string) ProbeResult {
+	first := p.probe(ctx, host, ProbeOptions{Timeout: probeTimeout})
+	if !first.Weak {
+		return first
+	}
+	select {
+	case <-time.After(500 * time.Millisecond):
+	case <-ctx.Done():
+		return first
+	}
+	second := p.probe(ctx, host, ProbeOptions{Timeout: probeTimeout})
+	combined := combineProbeSamples(first, second)
+	combined.Confirmed = true
+	return combined
 }
 
 func (p *splitProxy) stats() (direct, relayed int64) {
