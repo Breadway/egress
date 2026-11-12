@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,8 +20,11 @@ import (
 const (
 	probeTimeout   = 5 * time.Second
 	probeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
-	maxProbeIPs    = 3
+	maxProbeIPs    = 4
 )
+
+// errIgnoredName marks a special-use name that is never probed or routed.
+var errIgnoredName = errors.New("ignored special-use name")
 
 // ProbeOptions controls one direct probe. TunnelStatus is only called when the
 // direct answer is a 403 or 451, to tell a site policy from a network block; it
@@ -35,12 +39,16 @@ type ProbeOptions struct {
 
 // ProbeResult is the definitive classification of one direct probe.
 type ProbeResult struct {
-	Domain    string
-	IPs       []string
-	IP        string
-	Status    int
-	Evidence  Evidence
-	State     DomainState
+	Domain   string
+	IPs      []string
+	IP       string
+	Status   int
+	Evidence Evidence
+	State    DomainState
+	// Weak marks a connect timeout. It is a hint, not proof: a host in a
+	// rotating DNS pool can have one dead address while others work, so a
+	// single weak result must not be enough to block.
+	Weak      bool
 	Transient bool
 	Latency   time.Duration
 	Err       error
@@ -76,6 +84,11 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 		res.Err = errors.New("empty domain")
 		return res
 	}
+	if probeIgnoredName(res.Domain) {
+		res.Transient = true
+		res.Err = errIgnoredName
+		return res
+	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = probeTimeout
@@ -87,7 +100,7 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 	resolve := opts.Resolve
 	if resolve == nil {
 		resolve = func(ctx context.Context, name string) ([]net.IP, error) {
-			return net.DefaultResolver.LookupIP(ctx, "ip4", name)
+			return net.DefaultResolver.LookupIP(ctx, "ip", name)
 		}
 	}
 
@@ -99,6 +112,11 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 		res.Err = fmt.Errorf("resolve: %w", err)
 		return res
 	}
+	// IPv4 first, then IPv6. A working AAAA answer is enough to prove the
+	// name is reachable even when one A record is dead.
+	sort.SliceStable(ips, func(i, j int) bool {
+		return ips[i].To4() != nil && ips[j].To4() == nil
+	})
 	if len(ips) > maxProbeIPs {
 		ips = ips[:maxProbeIPs]
 	}
@@ -106,7 +124,7 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 		res.IPs = append(res.IPs, ip.String())
 	}
 
-	var blocked *ProbeResult
+	var blocked, weak *ProbeResult
 	for _, ip := range ips {
 		one := probeIP(ctx, res.Domain, ip.String(), timeout, ua, opts)
 		if one.State == StateAllowed {
@@ -116,12 +134,19 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 			b := one
 			blocked = &b
 		}
+		if one.Weak && weak == nil {
+			w := one
+			weak = &w
+		}
 		if res.Err == nil {
 			res.Err = one.Err
 		}
 	}
 	if blocked != nil {
 		return *blocked
+	}
+	if weak != nil {
+		return *weak
 	}
 	res.Transient = true
 	if res.Err == nil {
@@ -140,7 +165,8 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 		res.Latency = time.Since(start)
 		res.Err = err
 		res.State, res.Evidence = classifyDialError(err)
-		res.Transient = res.State != StateBlocked
+		res.Weak = res.Evidence == EvidenceConnectStall
+		res.Transient = res.State == StateUnknown && !res.Weak
 		return res
 	}
 	defer raw.Close()
@@ -234,9 +260,56 @@ func classifyDialError(err error) (DomainState, Evidence) {
 		return StateUnknown, EvidenceNone
 	}
 	if isTimeout(err) {
-		return StateBlocked, EvidenceConnectStall
+		// A connect timeout is weak evidence: a dead address in a rotating
+		// pool looks the same as a filter. The profile needs two of these
+		// before it blocks.
+		return StateUnknown, EvidenceConnectStall
 	}
 	return StateUnknown, EvidenceNone
+}
+
+// probeIgnoredName reports special-use and non-routable names that must never
+// be probed or routed. A DNS-only name such as ipv4only.arpa has no HTTPS
+// service, and probing it would mark it blocked forever.
+func probeIgnoredName(domain string) bool {
+	domain = NormalizeDomain(domain)
+	if domain == "" || !strings.Contains(domain, ".") {
+		return true
+	}
+	for _, suffix := range []string{".arpa", ".local", ".localhost", ".invalid", ".test", ".onion", ".home", ".lan"} {
+		if strings.HasSuffix(domain, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordProbeOutcome applies a probe to the profile. A definitive block counts
+// as a full failure streak; a weak connect timeout counts as one failure, so
+// two independent timeouts are needed. It returns whether the profile changed.
+func recordProbeOutcome(p *Profile, domain string, res ProbeResult, now time.Time) bool {
+	switch res.State {
+	case StateBlocked:
+		p.RecordProbe(domain, res.Evidence, true, now)
+		p.RecordProbe(domain, res.Evidence, true, now)
+		return true
+	case StateAllowed:
+		p.RecordProbe(domain, EvidenceNone, false, now)
+		return true
+	case StateUnknown:
+		if res.Weak {
+			if isSeedCandidate(domain) {
+				// A curated site that times out is the school blackhole,
+				// not a dead address in a pool.
+				p.RecordProbe(domain, res.Evidence, true, now)
+				p.RecordProbe(domain, res.Evidence, true, now)
+			} else {
+				p.RecordProbe(domain, res.Evidence, true, now)
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // classifyTLSError turns a handshake error into a verdict. A certificate

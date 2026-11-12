@@ -245,7 +245,7 @@ func mergeFeedDomains(p *Profile, domains []feedDomain, now time.Time) int {
 	added := 0
 	for _, d := range domains {
 		domain := NormalizeDomain(d.Domain)
-		if !plausibleDomain(domain) {
+		if !plausibleDomain(domain) || probeIgnoredName(domain) {
 			continue
 		}
 		if p.State(domain, now) == StateBlocked {

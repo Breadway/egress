@@ -100,7 +100,7 @@ func TestClassifyProbeErrors(t *testing.T) {
 		want DomainState
 		ev   Evidence
 	}{
-		{"timeout", os.ErrDeadlineExceeded, StateBlocked, EvidenceConnectStall},
+		{"timeout", os.ErrDeadlineExceeded, StateUnknown, EvidenceConnectStall},
 		{"refused", syscall.ECONNREFUSED, StateUnknown, EvidenceNone},
 		{"other", errors.New("boom"), StateUnknown, EvidenceNone},
 	}
@@ -126,6 +126,54 @@ func TestClassifyProbeErrors(t *testing.T) {
 		if got != tc.want || ev != tc.ev {
 			t.Errorf("tls %s: got (%s,%s), want (%s,%s)", tc.name, got, ev, tc.want, tc.ev)
 		}
+	}
+}
+
+func TestProbeIgnoredName(t *testing.T) {
+	ignored := []string{"ipv4only.arpa", "router.local", "printer", "example.test", "x.onion", "nas.lan", ""}
+	for _, name := range ignored {
+		if !probeIgnoredName(name) {
+			t.Errorf("%q should be ignored", name)
+		}
+	}
+	allowed := []string{"discord.com", "store.steampowered.com", "example.com"}
+	for _, name := range allowed {
+		if probeIgnoredName(name) {
+			t.Errorf("%q should be probed", name)
+		}
+	}
+}
+
+func TestRecordProbeOutcome(t *testing.T) {
+	now := time.Now()
+	p := NewProfile("net")
+	weak := ProbeResult{Domain: "unknown.example.org", State: StateUnknown, Evidence: EvidenceConnectStall, Weak: true}
+	if !recordProbeOutcome(p, "unknown.example.org", weak, now) {
+		t.Fatal("weak result should record a failure")
+	}
+	if p.State("unknown.example.org", now) == StateBlocked {
+		t.Fatal("one weak timeout must not block an unknown name")
+	}
+	recordProbeOutcome(p, "unknown.example.org", weak, now)
+	if p.State("unknown.example.org", now) != StateBlocked {
+		t.Fatal("two weak timeouts should block")
+	}
+	// A curated seed site is different: the seed list exists for networks
+	// that blackhole those names, so one timeout blocks it.
+	seedWeak := ProbeResult{Domain: "discord.com", State: StateUnknown, Evidence: EvidenceConnectStall, Weak: true}
+	recordProbeOutcome(p, "discord.com", seedWeak, now)
+	if p.State("discord.com", now) != StateBlocked {
+		t.Fatal("a weak timeout on a seed site should block immediately")
+	}
+	definitive := ProbeResult{Domain: "steamcommunity.com", State: StateBlocked, Evidence: EvidenceTLSStall}
+	recordProbeOutcome(p, "steamcommunity.com", definitive, now)
+	if p.State("steamcommunity.com", now) != StateBlocked {
+		t.Fatal("a definitive block should apply immediately")
+	}
+	allowed := ProbeResult{Domain: "steamcommunity.com", State: StateAllowed}
+	recordProbeOutcome(p, "steamcommunity.com", allowed, now)
+	if p.State("steamcommunity.com", now) != StateAllowed {
+		t.Fatal("a success should clear the block")
 	}
 }
 

@@ -84,7 +84,7 @@ func (c *splitController) HandleAnswer(domain string, ips []net.IP, ttl time.Dur
 		return
 	}
 	domain = NormalizeDomain(domain)
-	if domain == "" {
+	if domain == "" || probeIgnoredName(domain) {
 		return
 	}
 	now := time.Now()
@@ -103,6 +103,9 @@ func (c *splitController) HandleAnswer(domain string, ips []net.IP, ttl time.Dur
 }
 
 func (c *splitController) startProbe(domain string, minAge time.Duration) {
+	if probeIgnoredName(domain) {
+		return
+	}
 	now := time.Now()
 	c.mu.Lock()
 	if c.probing[domain] {
@@ -130,18 +133,10 @@ func (c *splitController) probe(domain string) {
 	now := time.Now()
 	c.mu.Lock()
 	before := c.profile.State(domain, now)
-	switch res.State {
-	case StateBlocked:
-		// The classifier only reports blocked for a definite stall or a
-		// certificate substitution, and for 403 direct with 200 through the
-		// tunnel. Record it as a full streak.
-		c.profile.RecordProbe(domain, res.Evidence, true, now)
-		c.profile.RecordProbe(domain, res.Evidence, true, now)
-		c.saveLocked()
-	case StateAllowed:
-		c.profile.RecordProbe(domain, EvidenceNone, false, now)
+	if recordProbeOutcome(c.profile, domain, res, now) {
 		c.saveLocked()
 	}
+	blockedNow := c.profile.State(domain, now) == StateBlocked
 	delete(c.probing, domain)
 	reporter := c.reporter
 	c.mu.Unlock()
@@ -149,7 +144,7 @@ func (c *splitController) probe(domain string) {
 		reporter.Report(domain, res.Evidence)
 	}
 
-	if res.State == StateBlocked {
+	if res.State == StateBlocked || blockedNow {
 		ips := make([]net.IP, 0, len(res.IPs))
 		for _, raw := range res.IPs {
 			if ip := net.ParseIP(raw); ip != nil {
