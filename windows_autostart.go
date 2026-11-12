@@ -90,11 +90,24 @@ func regDeleteValue(subkey, name string) error {
 	return nil
 }
 
-// clearUserPAC removes the PAC URL and disables the proxy for direct browsing.
+// clearUserPAC removes every per-user proxy setting that can keep a browser
+// pointed at something that is no longer running: the PAC URL, automatic
+// detection, a manual proxy, and the bypass list.
 func clearUserPAC() {
 	const key = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 	_ = regDeleteValue(key, "AutoConfigURL")
+	_ = regDeleteValue(key, "AutoDetect")
+	_ = regDeleteValue(key, "ProxyServer")
+	_ = regDeleteValue(key, "ProxyOverride")
 	_ = regSetDWORD(key, "ProxyEnable", 0)
+}
+
+// stopUserProxy ends any per-user proxy or tray this account started, so a
+// teardown cannot leave a listener holding the ports a reinstall needs.
+func stopUserProxy() {
+	_, _ = powershell(`Get-CimInstance Win32_Process -Filter "Name='egress.exe'" -ErrorAction SilentlyContinue | ` +
+		`Where-Object { $_.CommandLine -like '* proxy *' } | ` +
+		`ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`)
 }
 
 // removeProxyAutostart drops the per-user Run entry and its launcher.
