@@ -21,7 +21,7 @@ import (
 var (
 	embeddedKey          string
 	embeddedClientIP     string
-	embeddedDefaultSplit bool
+	embeddedDefaultSplit string
 	buildVersion         string
 )
 
@@ -163,7 +163,7 @@ func runInstall(plat platform, args []string) (err error) {
 	if *keepConfig && *noTunnel && runtime.GOOS != "windows" {
 		return errors.New("--keep-config needs the tunnel config; it cannot be combined with --no-tunnel")
 	}
-	if embeddedDefaultSplit && !*noSplit {
+	if embeddedDefaultSplit == "true" && !*noSplit {
 		*split = true
 	}
 	if *split && runtime.GOOS == "windows" {
