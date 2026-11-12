@@ -56,6 +56,8 @@ type feedResponse struct {
 	NetworkID string         `json:"network_id"`
 	Domains   []feedDomain   `json:"domains"`
 	Protocols []feedProtocol `json:"protocols,omitempty"`
+	// Refresh lists due sites this client has been leased to re-verify.
+	Refresh []feedDomain `json:"refresh,omitempty"`
 }
 
 type splitDomainReport struct {
@@ -95,8 +97,8 @@ type splitReporter struct {
 	// protocolsDirty is set when they have not been shared yet.
 	protocols      []splitProtocolReport
 	protocolsDirty bool
-	// recheck probes a contested domain and returns the answer to share.
-	recheck func(context.Context, string) (string, string)
+	// refreshFunc receives due-site jobs leased by the server.
+	refreshFunc func([]feedDomain)
 
 	// test hooks
 	seedURL   string
@@ -260,6 +262,7 @@ func (r *splitReporter) fetchFeed(ctx context.Context) {
 	}
 	log.Printf("split: feed has %d domains and %d protocol notes", len(feed.Domains), len(feed.Protocols))
 	r.merge(feed.Domains, feed.Protocols)
+	r.refreshDue(feed.Refresh)
 }
 
 // merge writes feed entries into the profile as blocked. It is called from the
@@ -284,7 +287,32 @@ func (r *splitReporter) SetMergeFunc(fn func([]feedDomain, []feedProtocol)) {
 // ReportFinal shares the answer to a re-check or verification the server asked
 // for while resolving a conflict. It is sent immediately: the whole point is
 // to settle the domain without waiting for the batch timer.
+// ReportFinal shares the answer to a re-check or verification the server
+// asked for while resolving a conflict.
 func (r *splitReporter) ReportFinal(ctx context.Context, domain, state, evidence string) {
+	r.ReportObservation(ctx, domain, state, evidence, true)
+}
+
+// refreshDue hands leased refresh jobs to the caller. The work itself belongs
+// to the controller, which owns probing.
+func (r *splitReporter) refreshDue(due []feedDomain) {
+	r.mu.Lock()
+	cb := r.refreshFunc
+	r.mu.Unlock()
+	if cb != nil && len(due) > 0 {
+		cb(due)
+	}
+}
+
+func (r *splitReporter) SetRefreshFunc(fn func([]feedDomain)) {
+	r.mu.Lock()
+	r.refreshFunc = fn
+	r.mu.Unlock()
+}
+
+// ReportObservation shares one observation. final marks it as the answer to a
+// conflict re-check rather than a routine verification.
+func (r *splitReporter) ReportObservation(ctx context.Context, domain, state, evidence string, final bool) {
 	if r.disabled {
 		return
 	}
@@ -295,7 +323,7 @@ func (r *splitReporter) ReportFinal(ctx context.Context, domain, state, evidence
 	payload, err := json.Marshal(splitReport{
 		Device:    device,
 		NetworkID: NetworkID(network),
-		Domains:   []splitDomainReport{{Domain: domain, State: state, Evidence: evidence, Final: true}},
+		Domains:   []splitDomainReport{{Domain: domain, State: state, Evidence: evidence, Final: final}},
 	})
 	if err != nil {
 		return

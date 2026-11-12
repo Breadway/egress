@@ -13,6 +13,10 @@ would either tunnel everything or silently tunnel nothing.
 
 Bandwidth is bounded in three places, all on Aegis:
 
+Aegis's measured uplink is about 67 Mbit/s. The caps are set under it: 30 Mbit
+for the WireGuard tunnel, 20 Mbit aggregate for the relay, so roughly a quarter
+of the link stays free for everything else.
+
 - `socksrelay --limit-mbps` caps the aggregate relay throughput, shared by
   every connection.
 - `socksrelay --limit-mbps-per-user` caps each relay user separately, so one
@@ -46,6 +50,12 @@ Conflicts resolve by verification, and block wins:
    device is then asked to verify.
 4. Any blocked answer among the finals keeps the domain blocked; the entry is
    only downgraded when every final says allowed.
+
+Blocked sites are re-verified weekly, per site. The timer starts when the entry
+is added and resets on any observation, so a routine probe, a conflict answer
+and a fresh sighting all count as verification. The server leases due jobs to
+one client at a time (15 minute lease, at most ten per sync), so any client can
+do the work without two of them checking the same site.
 
 Entries not seen for 30 days are dropped. Only evidence strings and hashed
 network ids are stored; no device identifiers, browsing history, or plaintext

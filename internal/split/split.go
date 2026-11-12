@@ -50,6 +50,7 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	c.load(network)
 	c.reporter = newSplitReporter(network, ProfileDir(), logger)
 	c.reporter.SetMergeFunc(c.mergeFeed)
+	c.reporter.SetRefreshFunc(c.refreshSites)
 	go c.refreshProtocols()
 	return c
 }
@@ -310,6 +311,37 @@ func (c *Controller) resolveConflicts(domains []feedDomain) {
 				evidence = string(EvidenceFeed)
 			}
 			c.reporter.ReportFinal(ctx, domain, answer, evidence)
+		}(d.Domain)
+	}
+}
+
+// refreshSites re-verifies blocked sites the server has leased to this device.
+// Any observation resets the weekly timer, so the work is a plain probe plus a
+// report; it does not need to be the same client that added the entry.
+func (c *Controller) refreshSites(due []feedDomain) {
+	for _, d := range due {
+		go func(domain string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			res := ProbeConfirmed(ctx, domain, ProbeOptions{Interface: c.iface, Timeout: ProbeTimeout})
+			state := "allowed"
+			if res.State == StateBlocked {
+				state = "blocked"
+			}
+			evidence := string(res.Evidence)
+			if evidence == "" {
+				evidence = string(EvidenceFeed)
+			}
+			c.reporter.ReportObservation(ctx, domain, state, evidence, false)
+			// A refresh that comes back allowed is real evidence: record it
+			// locally so this device stops routing the domain.
+			now := time.Now()
+			c.mu.Lock()
+			if recordProbeOutcome(c.profile, domain, res, now) {
+				c.saveLocked()
+			}
+			c.mu.Unlock()
+			log.Printf("split: refreshed %s -> %s", domain, state)
 		}(d.Domain)
 	}
 }
