@@ -120,22 +120,26 @@ func watchAuth(path string, r *relay) {
 // writeUsageLoop snapshots bytes per user so the admin page can show usage.
 func writeUsageLoop(path string, r *relay) {
 	for {
+		writeUsageOnce(path, r)
 		time.Sleep(5 * time.Minute)
-		snapshot := r.usage.snapshot()
-		payload, err := json.MarshalIndent(struct {
-			Updated string           `json:"updated"`
-			Users   map[string]int64 `json:"users"`
-		}{time.Now().UTC().Format(time.RFC3339), snapshot}, "", "  ")
-		if err != nil {
-			continue
-		}
-		tmp := path + ".tmp"
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			continue
-		}
-		if err := os.WriteFile(tmp, payload, 0644); err != nil {
-			continue
-		}
-		_ = os.Rename(tmp, path)
 	}
+}
+
+func writeUsageOnce(path string, r *relay) {
+	snapshot := r.usage.snapshot()
+	payload, err := json.MarshalIndent(struct {
+		Updated string           `json:"updated"`
+		Users   map[string]int64 `json:"users"`
+	}{time.Now().UTC().Format(time.RFC3339), snapshot}, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
 }

@@ -12,6 +12,8 @@ Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 ProtectSystem=strict
+# Usage snapshots for the admin page.
+ReadWritePaths=/var/lib/egress-socks
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
