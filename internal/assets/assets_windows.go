@@ -1,6 +1,6 @@
 //go:build windows && delivery
 
-package egress
+package assets
 
 import _ "embed"
 
@@ -9,7 +9,7 @@ import _ "embed"
 // downloader before it can establish the WebSocket fallback.
 
 //go:embed assets/wstunnel-windows-amd64.exe
-var embeddedWstunnel []byte
+var Wstunnel []byte
 
 //go:embed assets/wireguard-amd64-1.1.1.msi
-var embeddedWireGuardMSI []byte
+var WireGuardMSI []byte

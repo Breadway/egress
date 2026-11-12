@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/assets"
 	"errors"
 	"fmt"
 	"io"
@@ -93,7 +94,7 @@ func (windowsPlatform) InstallTools() error {
 	if wireguardExe() != "" {
 		return nil
 	}
-	if err := extractEmbedded(filepath.Join(winProgramData, wireGuardMSI), embeddedWireGuardMSI, wireGuardMSISHA256); err != nil {
+	if err := extractEmbedded(filepath.Join(winProgramData, wireGuardMSI), assets.WireGuardMSI, wireGuardMSISHA256); err != nil {
 		return fmt.Errorf("extract bundled WireGuard installer: %w", err)
 	}
 	msi := filepath.Join(winProgramData, wireGuardMSI)
@@ -511,7 +512,7 @@ func (windowsPlatform) WstunnelPath() (string, error) { return findWstunnel() }
 // GitHub before the tunnel has come up.
 func (windowsPlatform) InstallWstunnel() (string, error) {
 	dest := filepath.Join(winProgramData, wstunnelExeName())
-	if err := extractEmbedded(dest, embeddedWstunnel, wstunnelWindowsSHA256); err != nil {
+	if err := extractEmbedded(dest, assets.Wstunnel, wstunnelWindowsSHA256); err != nil {
 		return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 	}
 	return dest, nil

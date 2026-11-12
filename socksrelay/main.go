@@ -16,6 +16,8 @@ func main() {
 	idle := flag.Duration("idle", 5*time.Minute, "handshake deadline")
 	limitMbps := flag.Float64("limit-mbps", 0, "aggregate relay throughput cap in Mbit/s (0 = unlimited)")
 	perUser := flag.Float64("limit-mbps-per-user", 0, "per-user throughput cap in Mbit/s (0 = unlimited)")
+	ownerUser := flag.String("owner-user", "", "relay user that gets the owner cap")
+	ownerMbps := flag.Float64("owner-mbps", 0, "throughput cap for the owner user in Mbit/s")
 	flag.Parse()
 
 	users, err := loadAuth(*authFile)
@@ -37,12 +39,21 @@ func main() {
 	if r.limit != nil {
 		log.Printf("socksrelay: aggregate cap %.1f Mbit/s", *limitMbps)
 	}
-	if *perUser > 0 {
-		r.perUser = map[string]*limiter{}
-		for user := range users {
-			r.perUser[user] = newLimiter(*perUser * 1e6 / 8)
+	r.perUser = map[string]*limiter{}
+	for user := range users {
+		rate := *perUser
+		if user == *ownerUser && *ownerMbps > 0 {
+			rate = *ownerMbps
 		}
+		if rate > 0 {
+			r.perUser[user] = newLimiter(rate * 1e6 / 8)
+		}
+	}
+	if *perUser > 0 {
 		log.Printf("socksrelay: per-user cap %.1f Mbit/s", *perUser)
+	}
+	if *ownerUser != "" && *ownerMbps > 0 {
+		log.Printf("socksrelay: owner %s cap %.1f Mbit/s", *ownerUser, *ownerMbps)
 	}
 	r.usage = newUsage()
 	for {

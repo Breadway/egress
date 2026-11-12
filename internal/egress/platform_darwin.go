@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/assets"
 	"errors"
 	"fmt"
 	"io"
@@ -402,9 +403,9 @@ func (darwinPlatform) WstunnelPath() (string, error) { return findWstunnel() }
 // InstallWstunnel extracts the embedded fallback client. A dev build without
 // embedded assets still falls back to the pinned download.
 func (darwinPlatform) InstallWstunnel() (string, error) {
-	if len(embeddedWstunnel) > 0 {
+	if len(assets.Wstunnel) > 0 {
 		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, embeddedWstunnel, wstunnelDarwinSHA()); err != nil {
+		if err := extractEmbedded(dest, assets.Wstunnel, wstunnelDarwinSHA()); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {

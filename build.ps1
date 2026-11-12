@@ -78,14 +78,14 @@ if ($OS -eq "windows") {
     }
 }
 if ($OS -eq "linux") {
-    $linuxAsset = "internal/egress/assets/wstunnel-linux-amd64"
+    $linuxAsset = "internal/assets/assets/wstunnel-linux-amd64"
     $linuxWant = "62b26d0ee0f2211cef15fa1b85173fe687bc6698121842bf324359b412afc151"
     if (-not (Test-Path $linuxAsset)) { Fail "missing $linuxAsset; Linux delivery builds embed it" }
     $hash = (Get-FileHash $linuxAsset -Algorithm SHA256).Hash.ToLower()
     if ($hash -ne $linuxWant) { Fail "$linuxAsset checksum mismatch" }
 }
 if ($OS -eq "darwin") {
-    $darwinAsset = "internal/egress/assets/wstunnel-darwin-$Arch"
+    $darwinAsset = "internal/assets/assets/wstunnel-darwin-$Arch"
     $darwinWant = @{
         "amd64" = "72349e8eda9b80762e809b51dbe3c81aea8094b57da6ab6bb97274f048be4adb"
         "arm64" = "3c814a9b16481b6b17b9ea02b679b8b21454788da6c61366c4d26fca823c9feb"
