@@ -177,15 +177,23 @@ func (s *server) loadFeed(id string) networkFeed {
 	// Drop stale entries: a block that nobody has seen for a month is a
 	// different network or a different censorship regime.
 	cutoff := time.Now().UTC().Add(-splitEntryTTL).Format(time.RFC3339)
+	pruned := false
 	for domain, entry := range feed.Domains {
 		if entry.LastSeen < cutoff {
 			delete(feed.Domains, domain)
+			pruned = true
 		}
 	}
 	for proto, entry := range feed.Protocols {
 		if entry.LastSeen < cutoff {
 			delete(feed.Protocols, proto)
+			pruned = true
 		}
+	}
+	if pruned {
+		// Persist the pruning: otherwise expired entries return on the next
+		// load and the file grows without bound.
+		_ = s.saveFeed(feed)
 	}
 	return feed
 }

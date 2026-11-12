@@ -22,6 +22,16 @@ jobs:
         run: GOOS=darwin go vet ./...
       - name: test
         run: go test -count=1 ./...
+      - name: task script syntax
+        # The generated scheduled-task scripts are build strings; parse them
+        # with PowerShell when the runner has it, so a syntax mistake fails
+        # here instead of on a Windows install.
+        run: |
+          if ! command -v pwsh >/dev/null 2>&1; then
+            echo "pwsh unavailable on this runner; skipping"
+            exit 0
+          fi
+          go test -run TestWindowsTaskScriptParses -count=1 -v ./internal/egress
       - name: clean-tree build
         # A fresh clone has no gitignored vendor assets; the default build
         # must compile and test without them (delivery tag embeds them).

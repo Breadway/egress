@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"egress/internal/split"
 )
@@ -31,6 +33,7 @@ func cmdProxy(args []string) (err error) {
 	userFlag := fs.String("socks-user", "", "relay username (overrides the auth file)")
 	passFlag := fs.String("socks-pass", "", "relay password (overrides the auth file)")
 	tray := fs.Bool("tray", false, "show the Windows tray icon")
+	watchdog := fs.Bool("watchdog", false, "restart the proxy if it exits (used by the login autostart)")
 	startRelay := fs.Bool("start-relay", false, "start wstunnel for the Aegis SOCKS relay")
 	install := fs.Bool("install", false, "write the per-user autostart entry (Windows)")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
@@ -38,6 +41,9 @@ func cmdProxy(args []string) (err error) {
 		return err
 	}
 	setupLogging(resolveDebug(*debug))
+	if *watchdog {
+		return runProxyWatchdog(*listen)
+	}
 
 	// SSID allowlist: an empty list means any network. When the list is set
 	// and this is not one of them, leave the machine direct instead of
@@ -134,6 +140,58 @@ func readAuthFile(path string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+// runProxyWatchdog keeps the per-user proxy alive. Without it a crash leaves
+// the PAC pointing at a dead port until the next login, which looks like "the
+// internet is broken" while the tray is gone.
+func runProxyWatchdog(listen string) error {
+	stop := filepath.Join(split.ProxyDir(), "proxy-stop")
+	_ = os.Remove(stop)
+	for {
+		// Do not race an existing proxy for the port.
+		for portOpen(listen) {
+			time.Sleep(2 * time.Second)
+			if fileExists(stop) {
+				return nil
+			}
+		}
+		args := withoutFlag(os.Args[1:], "--watchdog")
+		cmd := exec.Command(os.Args[0], args...)
+		cmd.SysProcAttr = hiddenWindow()
+		_ = cmd.Start()
+		err := cmd.Wait()
+		if fileExists(stop) {
+			return nil
+		}
+		appLogger().Printf("proxy: exited (%v); restarting in 2s", err)
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func withoutFlag(args []string, drop string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == drop {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func portOpen(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 // startSocksRelay runs the embedded wstunnel client for the SOCKS relay. It is

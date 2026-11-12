@@ -154,3 +154,27 @@ func TestLimiterPaces(t *testing.T) {
 		t.Error("zero rate should disable the limiter")
 	}
 }
+
+func TestDailyQuotaRefusesAndResets(t *testing.T) {
+	u := newUsage()
+	r := &relay{usage: u, quotaBytes: 1000}
+	u.add("dev", 600)
+	if !r.withinQuota("dev") {
+		t.Fatal("under quota refused")
+	}
+	u.add("dev", 500)
+	if r.withinQuota("dev") {
+		t.Fatal("over quota accepted")
+	}
+	if r.withinQuota("other") != true {
+		t.Fatal("quota applies to the wrong user")
+	}
+	// A date change clears the counters.
+	u.mu.Lock()
+	u.day = "1970-01-01"
+	u.mu.Unlock()
+	u.add("dev", 1)
+	if !r.withinQuota("dev") {
+		t.Fatal("quota did not reset on a new day")
+	}
+}

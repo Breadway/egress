@@ -53,6 +53,7 @@ type relay struct {
 	perUser     map[string]*limiter
 	perUserRate float64 // bytes per second, 0 = unlimited
 	usage       *usage
+	quotaBytes  int64 // per-user daily byte quota, 0 = unlimited
 }
 
 func newRelay(users map[string]string, idle time.Duration) *relay {
@@ -84,6 +85,11 @@ func (r *relay) handle(conn net.Conn) {
 	target, reply, err := r.readRequest(br)
 	if err != nil || reply != repSuccess {
 		writeReply(conn, reply)
+		return
+	}
+	if !r.withinQuota(string(user)) {
+		log.Printf("socksrelay: %s is over its daily quota; connection refused", string(user))
+		writeReply(conn, repGeneralFailure)
 		return
 	}
 	remote, err := r.connect(target)
@@ -377,9 +383,29 @@ type usage struct {
 	mu     sync.Mutex
 	bytes  map[string]int64
 	logged map[string]int64
+	day    string
+}
+
+// rollDayLocked clears the counters when the UTC date changes, so the daily
+// quota resets without a restart.
+func (u *usage) rollDayLocked() {
+	today := time.Now().UTC().Format("2006-01-02")
+	if u.day == today {
+		return
+	}
+	u.day = today
+	u.bytes = map[string]int64{}
+	u.logged = map[string]int64{}
 }
 
 // snapshot returns a copy of the byte counters.
+// total returns the bytes relayed for one user.
+func (u *usage) total(user string) int64 {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.bytes[user]
+}
+
 func (u *usage) snapshot() map[string]int64 {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -399,6 +425,7 @@ func (u *usage) add(user string, n int64) {
 		return
 	}
 	u.mu.Lock()
+	u.rollDayLocked()
 	u.bytes[user] += n
 	total := u.bytes[user]
 	last := u.logged[user]
@@ -452,4 +479,18 @@ func (r *relay) perUserFor(user string) *limiter {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.perUser[user]
+}
+
+// withinQuota reports whether the user may start another connection today. The
+// quota is a hard stop, not a throttle: a device that has spent its allowance
+// waits for the next UTC day, and the operator sees it in the admin page.
+func (r *relay) withinQuota(user string) bool {
+	if r.quotaBytes <= 0 || r.usage == nil {
+		return true
+	}
+	return r.usage.total(user) < r.quotaBytes
+}
+
+func appLoggerQuota(user []byte) {
+	log.Printf("socksrelay: %s is over its daily quota; connection refused", user)
 }
