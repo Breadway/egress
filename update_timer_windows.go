@@ -2,15 +2,22 @@
 
 package main
 
-// installUpdateTimer creates a daily SYSTEM task that checks for and applies a
-// signed release. The task is registered through windowsTaskScript so it still
-// runs on battery, and does not inherit the schtasks power defaults.
-func installUpdateTimer() error {
+import "time"
+
+// installUpdateTimer registers the signed update check as a SYSTEM task. A
+// zero interval means the daily healthy-install schedule; a positive interval
+// makes it poll that often, which a parked install uses to pick up a fix
+// without a manual download.
+func installUpdateTimer(interval time.Duration) error {
 	exe, err := installedExePath()
 	if err != nil {
 		return err
 	}
-	script, err := windowsTaskScript("egress-update-check", exe, "update --apply", winTriggerDaily)
+	trigger := winTriggerDaily
+	if interval > 0 {
+		trigger = winTriggerRepeat(int(interval.Minutes()))
+	}
+	script, err := windowsTaskScript("egress-update-check", exe, "update --apply", trigger, false)
 	if err != nil {
 		return err
 	}

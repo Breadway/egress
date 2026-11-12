@@ -275,12 +275,14 @@ func runInstall(plat platform, args []string) (err error) {
 	_ = plat.StopService()
 
 	// From here on, every failure must leave DNS working. Once the new unit
-	// is installed the rollback path owns recovery; before that, put the
-	// previous service back so an early exit cannot strand the resolver on
-	// a dead listener.
+	// is installed the park path owns recovery; before that, put the previous
+	// service back so an early exit cannot strand the resolver on a dead
+	// listener. A parked install must not be restarted here, because parking
+	// has already restored the machine to its pre-install state.
 	pastInstallService := false
+	parked := false
 	defer func() {
-		if err != nil && !pastInstallService {
+		if err != nil && !pastInstallService && !parked {
 			debugf("install failed before the new service; restarting the previous service")
 			_ = plat.StartService()
 		}
@@ -327,7 +329,8 @@ func runInstall(plat platform, args []string) (err error) {
 		// underneath a passing start leaves the old identity live, and the
 		// Aegis peer alone cannot tell the two apart.
 		if err := checkTunnelIdentity(plat, tcfg); err != nil {
-			rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+			parked = true
+			parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
 			return err
 		}
 		fmt.Println("wireguard tunnel is up")
@@ -357,6 +360,14 @@ func runInstall(plat platform, args []string) (err error) {
 	// user ran this command from.
 	fmt.Printf("installed to %s; the boot service will run it from there\n", exe)
 
+	// Arm the update check before the steps that can fail on a platform
+	// quirk. A failure below then leaves an install that picks the fix up by
+	// itself instead of a machine that needs another download. A successful
+	// install replaces this with the daily schedule.
+	if err := installUpdateTimer(parkUpdateInterval); err != nil {
+		debugf("early update check not armed: %v", err)
+	}
+
 	serviceArgs := []string{"supervise"}
 	if *noTunnel {
 		serviceArgs = append(serviceArgs, "--no-tunnel")
@@ -382,49 +393,49 @@ func runInstall(plat platform, args []string) (err error) {
 	}
 
 	if err := waitForPort(dohListenAddr, 25*time.Second); err != nil {
-		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), fmt.Errorf("%w (run `egress diagnose`)", err))
+		parkInstall(plat, tcfg, runChecks(plat, tcfg), fmt.Errorf("%w (run `egress diagnose`)", err))
 		return fmt.Errorf("%w (run `egress diagnose`)", err)
 	}
 	// The port answering does not prove it is us: a foreign resolver already
 	// on 7103 satisfies every probe while our service crash-loops. Require
 	// the service active with a fresh marker from this start.
 	if err := checkSupervisorLive(plat, readyMarkerMaxAge); err != nil {
-		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+		parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
 		return fmt.Errorf("supervisor is not healthy: %w (run `egress diagnose`)", err)
 	}
 	if err := plat.ApplyDNS(iface, gateway); err != nil {
-		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+		parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
 		return err
 	}
 	time.Sleep(500 * time.Millisecond)
 
 	fmt.Println()
 	if err := verifyAll(plat, tcfg); err != nil {
-		// The machine goes back to its pre-install networking first, so a
-		// failed install never leaves the user offline. The report carries
-		// what went wrong.
-		rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
-		fmt.Fprintln(os.Stderr, "the setup is running but verification failed; run `egress diagnose`")
-		fmt.Fprintln(os.Stderr, "networking was rolled back; the failure was reported home")
+		// Networking goes back to its pre-install state first, so a failed
+		// install never leaves the user offline, then the install parks for
+		// the next release. The report carries what went wrong.
+		parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
+		fmt.Fprintln(os.Stderr, "verification failed; run `egress diagnose`")
+		fmt.Fprintln(os.Stderr, "networking is back to normal; the install stays and will update itself")
 		return err
 	}
 
 	if *split && runtime.GOOS == "windows" {
 		if err := configureWindowsSplit(); err != nil {
 			fmt.Fprintf(os.Stderr, "split client setup failed: %v\n", err)
-			rollbackInstall(plat, tcfg, runChecks(plat, tcfg), err)
+			parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
 			return err
 		}
 		if err := setSplitEnabled(true); err != nil {
 			return err
 		}
 	}
-	if err := installUpdateTimer(); err != nil {
+	if err := installUpdateTimer(0); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
 	}
 
 	results := runChecks(plat, tcfg)
-	if data, err := buildReport(tcfg, results, nil); err == nil {
+	if data, err := buildReport(tcfg, results, nil, false); err == nil {
 		if err := sendReport(data); err != nil {
 			debugf("install report unsent, spooled: %v", err)
 			spoolReport(data)
@@ -434,15 +445,27 @@ func runInstall(plat platform, args []string) (err error) {
 	return nil
 }
 
-// rollbackInstall restores pre-install networking, then reports the failure
-// home. Reporting is best effort and never masks the original error.
-func rollbackInstall(plat platform, tcfg tunnelConfig, results checkResults, cause error) {
+// parkUpdateInterval is how often a parked install looks for a fix. A failed
+// install is normally waiting on a release that is hours away, so it polls
+// well ahead of the daily schedule a healthy install uses.
+const parkUpdateInterval = 30 * time.Minute
+
+// parkInstall handles a failed install without discarding it. Networking goes
+// back to its pre-install state and the service stops, so a broken resolver is
+// never the system resolver, but the binary and configs stay and the update
+// check is armed at parkUpdateInterval. The next published release therefore
+// installs itself: no download, no user action. Reporting is best effort and
+// never masks the original error.
+func parkInstall(plat platform, tcfg tunnelConfig, results checkResults, cause error) {
 	if err := plat.Disable(); err != nil {
-		fmt.Fprintf(os.Stderr, "rollback: %v\n", err)
+		fmt.Fprintf(os.Stderr, "park: %v\n", err)
 	} else {
-		fmt.Fprintln(os.Stderr, "rolled back to pre-install networking")
+		fmt.Fprintln(os.Stderr, "networking restored; the install is parked until a fixed release lands")
 	}
-	data, err := buildReport(tcfg, results, cause)
+	if err := installUpdateTimer(parkUpdateInterval); err != nil {
+		fmt.Fprintf(os.Stderr, "park: update check not armed, the next release needs a manual install: %v\n", err)
+	}
+	data, err := buildReport(tcfg, results, cause, true)
 	if err != nil {
 		return
 	}

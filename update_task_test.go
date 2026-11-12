@@ -6,7 +6,7 @@ import (
 )
 
 func TestWindowsTaskScriptPowerSettings(t *testing.T) {
-	script, err := windowsTaskScript("egress", `C:\ProgramData\egress\egress.exe`, "supervise --debug", winTriggerStartup)
+	script, err := windowsTaskScript("egress", `C:\ProgramData\egress\egress.exe`, "supervise --debug", winTriggerStartup, true)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
@@ -31,8 +31,18 @@ func TestWindowsTaskScriptPowerSettings(t *testing.T) {
 	}
 }
 
+func TestWindowsTaskScriptOneShotHasNoRestart(t *testing.T) {
+	script, err := windowsTaskScript("egress-update-apply", `C:\x.exe`, "update-apply", winTriggerLogon, false)
+	if err != nil {
+		t.Fatalf("script: %v", err)
+	}
+	if strings.Contains(script, "RestartCount") {
+		t.Errorf("one-shot task restarts on failure:\n%s", script)
+	}
+}
+
 func TestWindowsTaskScriptQuoting(t *testing.T) {
-	script, err := windowsTaskScript("t", `C:\it's\exe.exe`, `update --staged "C:\a b\egress.exe"`, winTriggerLogon)
+	script, err := windowsTaskScript("t", `C:\it's\exe.exe`, `update --staged "C:\a b\egress.exe"`, winTriggerLogon, false)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
@@ -44,16 +54,28 @@ func TestWindowsTaskScriptQuoting(t *testing.T) {
 	}
 }
 
-func TestWindowsTaskScriptDailyAndUnknown(t *testing.T) {
-	script, err := windowsTaskScript("egress-update-check", `C:\x.exe`, "update --apply", winTriggerDaily)
+func TestWindowsTaskScriptDailyAndRepeat(t *testing.T) {
+	script, err := windowsTaskScript("egress-update-check", `C:\x.exe`, "update --apply", winTriggerDaily, false)
 	if err != nil {
 		t.Fatalf("script: %v", err)
 	}
 	if !strings.Contains(script, "New-ScheduledTaskTrigger -Daily -At 3am") {
 		t.Errorf("daily trigger missing:\n%s", script)
 	}
-	if _, err := windowsTaskScript("t", "x", "", "weekly"); err == nil {
-		t.Error("unknown trigger accepted")
+
+	repeat := winTriggerRepeat(30)
+	for _, want := range []string{
+		"-Once -At (Get-Date).AddMinutes(1)",
+		"-RepetitionInterval (New-TimeSpan -Minutes 30)",
+		"-RepetitionDuration (New-TimeSpan -Days 3650)",
+	} {
+		if !strings.Contains(repeat, want) {
+			t.Errorf("repeat trigger missing %q: %s", want, repeat)
+		}
+	}
+
+	if _, err := windowsTaskScript("t", "x", "", "", false); err == nil {
+		t.Error("empty trigger accepted")
 	}
 }
 

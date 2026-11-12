@@ -26,6 +26,7 @@ type deviceReport struct {
 	Status   string            `json:"status"`
 	Checks   map[string]string `json:"checks"`
 	Error    string            `json:"error"`
+	Parked   bool              `json:"parked,omitempty"`
 	Diagnose string            `json:"diagnose"`
 	Log      string            `json:"log"`
 	TS       string            `json:"ts"`

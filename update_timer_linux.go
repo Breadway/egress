@@ -3,21 +3,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
-
-const updateTimerUnit = `[Unit]
-Description=Daily egress signed update check
-
-[Timer]
-OnCalendar=daily
-RandomizedDelaySec=6h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-`
 
 const updateServiceUnit = `[Unit]
 Description=egress signed update check
@@ -29,13 +19,32 @@ Type=oneshot
 ExecStart=/usr/local/bin/egress update --apply
 `
 
-// installUpdateTimer enables a daily signed update check. Failure is reported
-// by the caller as a warning, never as an install failure.
-func installUpdateTimer() error {
+// updateTimerUnit renders the timer. A zero interval keeps the daily schedule
+// a healthy install uses; a positive interval polls that often, which a parked
+// install uses to pick up a fix without waiting for the daily window.
+func updateTimerUnit(interval time.Duration) string {
+	schedule := "OnCalendar=daily\nRandomizedDelaySec=6h\n"
+	if interval > 0 {
+		schedule = fmt.Sprintf("OnBootSec=5min\nOnUnitActiveSec=%dm\n", int(interval.Minutes()))
+	}
+	return `[Unit]
+Description=Daily egress signed update check
+
+[Timer]
+` + schedule + `Persistent=true
+
+[Install]
+WantedBy=timers.target
+`
+}
+
+// installUpdateTimer enables the signed update check. Failure is reported by
+// the caller as a warning, never as an install failure.
+func installUpdateTimer(interval time.Duration) error {
 	if err := os.WriteFile("/etc/systemd/system/egress-update.service", []byte(updateServiceUnit), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile("/etc/systemd/system/egress-update.timer", []byte(updateTimerUnit), 0644); err != nil {
+	if err := os.WriteFile("/etc/systemd/system/egress-update.timer", []byte(updateTimerUnit(interval)), 0644); err != nil {
 		return err
 	}
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {

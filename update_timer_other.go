@@ -2,4 +2,6 @@
 
 package main
 
-func installUpdateTimer() error { return nil }
+import "time"
+
+func installUpdateTimer(time.Duration) error { return nil }
