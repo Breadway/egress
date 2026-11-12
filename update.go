@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -200,4 +202,107 @@ func copyExecutable(src, dst string) error {
 		return err
 	}
 	return os.Rename(tmp, dst)
+}
+
+// parseWGConfigFile pulls the private key and client address out of an
+// existing WireGuard config. Used by install --keep-config so an update can
+// reuse the device identity instead of prompting for it.
+func parseWGConfigFile(path string) (key, ip string, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(name) {
+		case "PrivateKey":
+			key = strings.TrimSpace(value)
+		case "Address":
+			addr := strings.TrimSpace(value)
+			if i := strings.Index(addr, ","); i >= 0 {
+				addr = addr[:i]
+			}
+			if i := strings.Index(addr, "/"); i >= 0 {
+				addr = addr[:i]
+			}
+			ip = strings.TrimSpace(addr)
+		}
+	}
+	if key == "" {
+		return "", "", errors.New("no PrivateKey in " + path)
+	}
+	if ip == "" {
+		return "", "", errors.New("no Address in " + path)
+	}
+	return key, ip, nil
+}
+
+// existingTunnelConfig finds the installed config on this platform.
+func existingTunnelConfig() (string, string, error) {
+	var path string
+	switch runtime.GOOS {
+	case "linux":
+		path = "/etc/wireguard/wg0.conf"
+	case "windows":
+		path = `C:\ProgramData\egress\wg0.conf`
+	default:
+		return "", "", fmt.Errorf("--keep-config is not supported on %s yet", runtime.GOOS)
+	}
+	return parseWGConfigFile(path)
+}
+
+// updateState records which signed release this install has applied. Without
+// it, a republished build with the same version and a force flag would be
+// reinstalled on every check.
+type updateState struct {
+	ManifestSHA string `json:"manifest_sha"`
+}
+
+func updateStatePath() string {
+	switch runtime.GOOS {
+	case "windows":
+		return `C:\ProgramData\egress\update-state.json`
+	case "linux":
+		return "/var/lib/egress/update-state.json"
+	default:
+		if dir, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(dir, "egress", "update-state.json")
+		}
+		return "update-state.json"
+	}
+}
+
+func appliedRelease() (string, error) {
+	var st updateState
+	data, err := os.ReadFile(updateStatePath())
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return "", err
+	}
+	return st.ManifestSHA, nil
+}
+
+func recordAppliedRelease(sha string) error {
+	path := updateStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(updateState{ManifestSHA: sha})
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

@@ -385,7 +385,7 @@ deleting its peer on Aegis, which this tool cannot do from the client.
 | `deploy/bypass-provisioner.service` | systemd unit for the provisioner |
 | `bypass-server/` | enrollment applications + password-gated downloads (Aegis, Caddy) |
 | `dnscloak/` | answer Microsoft names with the relay IP (Aegis, doh-proxy to dnsproxy) |
-| `DESIGN.md` | architecture and protocol details |
+| `docs/DESIGN.md` | architecture and protocol details |
 
 `go test ./...` runs the local tests, including live requests to the DoH
 endpoint. `go test -short ./...` skips the live checks.
