@@ -526,6 +526,21 @@ func (p *Proxy) TopDomains(limit int) []string {
 	return out
 }
 
+// noteRelayFallback records that a blocked domain worked directly, so a dead
+// relay does not keep costing the user that site.
+func (p *Proxy) noteRelayFallback(host string) {
+	host = core.NormalizeDomain(host)
+	now := time.Now()
+	p.mu.Lock()
+	if _, ok := p.profile.Entries[host]; ok {
+		p.profile.AddAllowed(host, EvidenceFeed, now)
+		if err := p.profile.Save(p.path); err != nil {
+			p.log.Printf("proxy: save profile: %v", err)
+		}
+	}
+	p.mu.Unlock()
+}
+
 // Network is the local profile key, for display.
 func (p *Proxy) Network() string { return p.network }
 
@@ -590,7 +605,10 @@ func (p *Proxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if mode == StateBlocked {
-				return p.socksDial(ctx, p.relayAddr, p.user, p.pass, addr)
+				if conn, err := p.socksDial(ctx, p.relayAddr, p.user, p.pass, addr); err == nil {
+					return conn, nil
+				}
+				p.log.Printf("proxy: relay failed for %s; trying direct", addr)
 			}
 			return p.dial(ctx, network, addr)
 		},
@@ -635,7 +653,18 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	var upstream net.Conn
 	if mode == StateBlocked {
 		upstream, err = p.socksDial(ctx, p.relayAddr, p.user, p.pass, r.Host)
-		p.relayed.Add(1)
+		if err != nil {
+			// A dead relay must not take a working site down. Try the direct
+			// path and remember that the block did not hold this time.
+			p.log.Printf("proxy: relay failed for %s (%v); trying direct", r.Host, err)
+			upstream, err = p.dial(ctx, "tcp", r.Host)
+			if err == nil {
+				p.direct.Add(1)
+				p.noteRelayFallback(r.Host)
+			}
+		} else {
+			p.relayed.Add(1)
+		}
 	} else {
 		upstream, err = p.dial(ctx, "tcp", r.Host)
 		p.direct.Add(1)

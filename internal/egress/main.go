@@ -210,6 +210,24 @@ func runInstall(plat platform, args []string) (err error) {
 		}
 	}
 	tcfg.Split = true
+	pastInstallService := false
+	parked := false
+	// Failures before the service is installed used to return silently, which
+	// is how an ACL refusal reached the user as "some sites do not work" with
+	// no report. Report them; later failures are reported by parkInstall.
+	defer func() {
+		if err == nil || pastInstallService || parked {
+			return
+		}
+		data, berr := health.BuildReport(tcfg, health.Results{}, err, false)
+		if berr != nil {
+			return
+		}
+		if serr := health.SendReport(data); serr != nil {
+			health.SpoolReport(data)
+		}
+	}()
+
 	// Split Windows installs and generic updates have no private key in this
 	// invocation. Recover the public half from the build or the identity file
 	// so install reports still identify the device.
@@ -268,8 +286,6 @@ func runInstall(plat platform, args []string) (err error) {
 	// service back so an early exit cannot strand the resolver on a dead
 	// listener. A parked install must not be restarted here, because parking
 	// has already restored the machine to its pre-install state.
-	pastInstallService := false
-	parked := false
 	defer func() {
 		if err != nil && !pastInstallService && !parked {
 			debugf("install failed before the new service; restarting the previous service")

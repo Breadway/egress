@@ -607,6 +607,25 @@ func (p *Profile) AddBlocked(domain string, evidence Evidence, now time.Time) {
 	p.Updated = now
 }
 
+// AddAllowed records a domain as reachable without a full probe. It is used
+// when the relay fails but the direct path works, so a dead relay cannot keep
+// costing a site.
+func (p *Profile) AddAllowed(domain string, evidence Evidence, now time.Time) {
+	domain = core.NormalizeDomain(domain)
+	if domain == "" {
+		return
+	}
+	entry := p.Entries[domain]
+	entry.State = StateAllowed
+	entry.Evidence = evidence
+	entry.Failures = 0
+	if entry.LearnedAt.IsZero() {
+		entry.LearnedAt = now
+	}
+	p.Entries[domain] = entry
+	p.Updated = now
+}
+
 // BlockedDomains returns the domains currently routed into the tunnel.
 func (p *Profile) BlockedDomains(now time.Time) []string {
 	var out []string

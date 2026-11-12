@@ -205,21 +205,32 @@ func (windowsPlatform) SecureInstallDir() error {
 	if err := logx.RunLogged("icacls", installDirACLArgs(winProgramData)...); err != nil {
 		return err
 	}
-	// The installing user can carry an explicit full-control ACE from
-	// creating the directory, which /inheritance:r does not touch. Remove that
-	// identity by SID; the Administrators group still covers an elevated admin.
-	if sid := currentUserSID(); sid != "" {
-		_ = logx.RunLogged("icacls", winProgramData, "/remove:g", "*"+sid)
-	}
-	// Verify rather than assume: if any principal outside SYSTEM and
-	// Administrators can still write, the install directory is a privilege
-	// escalation into the boot task and must fail closed.
-	out, err := powershell(`$bad = Get-Acl '` + winProgramData + `' | ForEach-Object { $_.Access } | Where-Object {
-  $_.AccessControlType -eq 'Allow' -and
-  ($_.FileSystemRights.ToString() -match 'FullControl|Modify|Write|TakeOwnership|ChangePermissions') -and
-  ($_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544'))
+	// /inheritance:r keeps explicit ACEs, and both the installing account and
+	// any account that touched the directory can carry one. Remove every
+	// non-administrator ACE that grants write, then verify. The boot task runs
+	// the binary as SYSTEM, so this is a privilege boundary.
+	script := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$dir = '%s'
+$allowed = @('S-1-5-18', 'S-1-5-32-544')
+$write = 'FullControl|Modify|Write|TakeOwnership|ChangePermissions'
+for ($pass = 0; $pass -lt 5; $pass++) {
+  $bad = Get-Acl $dir | ForEach-Object { $_.Access } | Where-Object {
+    $_.AccessControlType -eq 'Allow' -and
+    ($_.FileSystemRights.ToString() -match $write) -and
+    ($_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin $allowed)
+  }
+  if (-not $bad) { break }
+  foreach ($ace in $bad) {
+    icacls $dir /remove:g "$($ace.IdentityReference.Value)" | Out-Null
+  }
 }
-if ($bad) { $bad | ForEach-Object { $_.IdentityReference.Value + ':' + $_.FileSystemRights }; exit 2 } else { 'ok' }`)
+$bad = Get-Acl $dir | ForEach-Object { $_.Access } | Where-Object {
+  $_.AccessControlType -eq 'Allow' -and
+  ($_.FileSystemRights.ToString() -match $write) -and
+  ($_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin $allowed)
+}
+if ($bad) { $bad | ForEach-Object { $_.IdentityReference.Value + ':' + $_.FileSystemRights }; exit 2 } else { 'ok' }`, winProgramData)
+	out, err := powershell(script)
 	if err != nil {
 		return fmt.Errorf("install directory is writable by a non-administrator: %v (%s)", err, logx.Truncate(out, 300))
 	}
@@ -645,20 +656,4 @@ func Diagnose(w io.Writer) error {
 	section(w, "log tail")
 	logx.Tail(w, logPath(), 60)
 	return nil
-}
-
-// currentUserSID returns the installing account's SID. whoami prints one CSV
-// row: "DOMAIN\user","S-1-5-21-...".
-func currentUserSID() string {
-	out, err := exec.Command("whoami", "/user", "/fo", "csv", "/nh").Output()
-	if err != nil {
-		return ""
-	}
-	for _, field := range strings.Split(string(out), ",") {
-		field = strings.Trim(strings.TrimSpace(field), `"`)
-		if strings.HasPrefix(field, "S-1-5-21-") || strings.HasPrefix(field, "S-1-12-") {
-			return field
-		}
-	}
-	return ""
 }
