@@ -17,6 +17,9 @@ Aegis's measured uplink is about 67 Mbit/s. The caps are set under it: 30 Mbit
 for the WireGuard tunnel, 20 Mbit aggregate for the relay, so roughly a quarter
 of the link stays free for everything else.
 
+The owner's own allocation is not part of that tuning: 20 Mbit on the tunnel
+and 20 Mbit on the relay.
+
 - `socksrelay --limit-mbps` caps the aggregate relay throughput, shared by
   every connection.
 - `socksrelay --limit-mbps-per-user` caps each relay user separately, so one
