@@ -103,6 +103,19 @@ type checkResults struct {
 	// Supervisor holds the error when the boot service is not our live
 	// supervisor, even if something else answers on the DNS port.
 	Supervisor string `json:"supervisor,omitempty"`
+	// Split reports the Windows split client: "ok", an error, or empty when
+	// the platform has no split client to check.
+	Split string `json:"split,omitempty"`
+}
+
+// describeSplit adds the Windows split client's state to a result set. It is
+// deliberately not part of runChecks: install verifies before split setup has
+// run, so a split probe there would fail every fresh install.
+func describeSplit(r checkResults, tcfg tunnelConfig) checkResults {
+	if tcfg.Split {
+		r.Split = checkWindowsSplit()
+	}
+	return r
 }
 
 func runChecks(p platform, tcfg tunnelConfig) checkResults {
@@ -156,6 +169,9 @@ func (r checkResults) grade() string {
 	if r.DNS != "" || r.Supervisor != "" {
 		return "failed"
 	}
+	if r.Split != "" && r.Split != "ok" {
+		return "failed"
+	}
 	if (r.Tunnel == "up" || r.Tunnel == "skipped") &&
 		(r.Probe == "ok" || r.Probe == "skipped") &&
 		(r.Exit == "" || r.Exit == aegisIPv4 || r.Exit == "split") {
@@ -171,8 +187,11 @@ func (r checkResults) failed() bool {
 	return r.grade() != "functional"
 }
 
-func verifyAll(p platform, tcfg tunnelConfig) error {
+func verifyAll(p platform, tcfg tunnelConfig, checkSplit bool) error {
 	r := runChecks(p, tcfg)
+	if checkSplit {
+		r = describeSplit(r, tcfg)
+	}
 	failed := false
 
 	if r.DNS != "" {
@@ -187,6 +206,15 @@ func verifyAll(p platform, tcfg tunnelConfig) error {
 		failed = true
 	} else {
 		fmt.Println("[ok]   supervisor is ours and running")
+	}
+
+	if checkSplit && r.Split != "" {
+		if r.Split == "ok" {
+			fmt.Println("[ok]   split client: proxy and PAC in place")
+		} else {
+			fmt.Printf("[FAIL] split client: %s\n", r.Split)
+			failed = true
+		}
 	}
 
 	if tcfg.PrivateKey != "" {

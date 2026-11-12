@@ -19,9 +19,9 @@ Type=oneshot
 ExecStart=/usr/local/bin/egress update --apply
 `
 
-// updateTimerUnit renders the timer. A zero interval keeps the daily schedule
-// a healthy install uses; a positive interval polls that often, which a parked
-// install uses to pick up a fix without waiting for the daily window.
+// updateTimerUnit renders the timer. A positive interval polls that often,
+// which is what installs use so a published release lands within a minute; a
+// zero interval keeps the older daily schedule.
 func updateTimerUnit(interval time.Duration) string {
 	schedule := "OnCalendar=daily\nRandomizedDelaySec=6h\n"
 	if interval > 0 {

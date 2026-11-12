@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // configureWindowsSplit turns a Windows install into split mode: the
@@ -25,6 +26,11 @@ func configureWindowsSplit() error {
 		return errors.New("no SOCKS relay credentials in this build; rebuild with --socks-user and --socks-pass")
 	}
 	if err := writeSocksAuth(authPath, user, pass); err != nil {
+		return err
+	}
+	// The PAC is written and made readable here, where the install is
+	// elevated. The per-user step only points the browser at it.
+	if _, err := writePAC(); err != nil {
 		return err
 	}
 	// The install directory is SYSTEM/Administrators only, and the tray runs
@@ -54,18 +60,24 @@ func configureWindowsSplit() error {
 }
 
 // applyUserSplit writes the per-user proxy settings and starts the tray. It
-// must run in the target user's session: PAC and the Run key live in HKCU.
+// must run in the target user's session: the Run key lives in HKCU.
 func applyUserSplit(exe, authPath string) error {
-	if err := installProxyAutostart(authPath, proxyListenAddr); err != nil {
+	if err := installProxyAutostart(authPath, relayListenAddr); err != nil {
 		return err
 	}
-	if err := setUserPAC(pacURL); err != nil {
-		return err
+	// Start the proxy and prove it answers before pointing the browser at it.
+	// A PAC that names a dead port is worse than no PAC (EGRESS-98).
+	if !proxyListening() {
+		cmd := exec.Command(exe, "proxy", "--tray", "--start-relay", "--socks-auth", authPath)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		if err := waitForProxy(15 * time.Second); err != nil {
+			return err
+		}
 	}
-	// Start it now without flashing a console window.
-	cmd := exec.Command(exe, "proxy", "--tray", "--start-relay", "--socks-auth", authPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	return cmd.Start()
+	return setUserPAC(pacURLForFile(pacFilePath()))
 }
 
 // grantUserExecute lets any interactive account read and run one file. The

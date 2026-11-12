@@ -5,9 +5,9 @@ package main
 import "time"
 
 // installUpdateTimer registers the signed update check as a SYSTEM task. A
-// zero interval means the daily healthy-install schedule; a positive interval
-// makes it poll that often, which a parked install uses to pick up a fix
-// without a manual download.
+// positive interval makes it poll that often; installs use one minute, so a
+// published release lands without waiting for the device owner. A zero
+// interval keeps the older daily schedule.
 func installUpdateTimer(interval time.Duration) error {
 	exe, err := installedExePath()
 	if err != nil {
