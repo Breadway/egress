@@ -48,12 +48,18 @@ var (
 
 	splitDomainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 	splitEvidence = map[string]bool{
+		// blocked
 		"connect-stall":     true,
 		"tls-stall":         true,
 		"cert-substitution": true,
 		"ip-rejected":       true,
 		"seed":              true,
 		"feed":              true,
+		// allowed: the answer to a re-check or verification
+		"connect-ok": true,
+		"tls-ok":     true,
+		"lookup-ok":  true,
+		"ping-ok":    true,
 	}
 )
 
