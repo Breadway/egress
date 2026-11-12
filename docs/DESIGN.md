@@ -6,6 +6,26 @@ routing through Aegis for destinations proven blocked, and an automatic
 WebSocket fallback when UDP is blocked. Routing everything through the tunnel
 was removed: it turns a friend's browsing into the relay's bandwidth bill.
 
+Split routing exists on Linux (host routes into wg0), Windows (a per-user
+CONNECT proxy and PAC) and macOS (BSD host routes into the tunnel interface).
+A build that cannot split is not shipped, because a client with no split path
+would either tunnel everything or silently tunnel nothing.
+
+Bandwidth is bounded in three places, all on Aegis:
+
+- `socksrelay --limit-mbps` caps the aggregate relay throughput, shared by
+  every connection.
+- `socksrelay --limit-mbps-per-user` caps each relay user separately, so one
+  leaked build cannot spend the whole cap.
+- `deploy/wg-shape.service` shapes the Linux tunnel: 20 Mbit total on wg0 and
+  2 Mbit per tunnel address, so no device can take the whole tunnel. It only
+  touches traffic inside wg0.
+
+Relay credentials are per device. `new-device.sh` creates a user:password pair
+on the relay and embeds it in that device's build, and `remove-device.sh`
+removes the pair along with the peer, so revoking a device stops its relay
+access immediately.
+
 No external downloads at install time. The DoH client, the local DNS server, the
 fallback supervisor and the key handling are all in the binary. Delivery builds
 also embed the pinned `wstunnel` 11.1.0 client for their OS, and Windows builds

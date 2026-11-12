@@ -197,6 +197,7 @@ pub=$(printf '%s' "$key" | wg pubkey)
 
 mkdir -p "$HOME/.keys"
 key_path="$HOME/.keys/egress-${safe_label}-${ip}.key"
+relay_cred_path="$HOME/.keys/egress-socks-${safe_label}-${ip}.cred"
 [ ! -e "$key_path" ] || die "refusing to overwrite $key_path; delete it first if you mean a new key"
 printf '%s\n' "$key" > "$key_path"
 unset key
@@ -241,6 +242,8 @@ registry_add_pending() {
 
 registry_add_pending || die "peer is live but the registry is unwritable; remove it on $aegis_host manually"
 
+provision_relay_credentials
+
 # Fill in the built binaries on the provisional row. A second process adding
 # the same label would have died at the top guard, so label+pub match at
 # most this row.
@@ -253,22 +256,31 @@ registry_update_binaries() {
     mv "$tmp" "$registry" || { rm -f "$tmp"; return 1; }
 }
 
+# provision_relay_credentials creates a user:password pair for this device and
+# appends it to the relay's auth file. Credentials are per device so revoking
+# one device stops its relay access without touching anyone else's.
+provision_relay_credentials() {
+    local user pass
+    user="dev-${ip}-$(openssl rand -hex 4)"
+    pass=$(openssl rand -base64 18 | tr '+/' '-_' | tr -d '=')
+    printf '%s:%s\n' "$user" "$pass" | ssh "${ssh_opts[@]}" "$aegis_host"         "sudo -n tee -a /etc/egress-socks/auth >/dev/null && sudo -n systemctl reload-or-restart egress-socks"         || die "could not add relay credentials on $aegis_host"
+    printf '%s\n' "$user:$pass" > "$relay_cred_path"
+    chmod 0600 "$relay_cred_path"
+    note "relay user $user added on $aegis_host"
+}
+
 build_one() {
     # $1 = goos, $2 = goarch, $3 = out path
     if [ -z "$update_key" ] && [ -r "$HOME/.keys/egress-update-public.key" ]; then
         update_key=$(tr -d ' \t\r\n' < "$HOME/.keys/egress-update-public.key")
     fi
-    socks_user=""
-    socks_pass=""
-    if [ -r "$socks_auth" ]; then
-        IFS=: read -r socks_user socks_pass < "$socks_auth" || true
-    fi
+    local socks_user socks_pass
+    IFS=: read -r socks_user socks_pass < "$relay_cred_path" || die "could not read $relay_cred_path"
     args=(--key-file "$key_path" --ip "$ip" --os "$1" --arch "$2" --out "$3" --quiet
+          --socks-user "$socks_user" --socks-pass "$socks_pass"
           --version "$version")
     [ "$debug_build" -eq 1 ] && args+=(--debug-build)
     [ -n "$update_key" ] && args+=(--update-key "$update_key")
-    [ -n "$socks_user" ] && [ -n "$socks_pass" ] && args+=(--socks-user "$socks_user" --socks-pass "$socks_pass")
-    [ "$split" -eq 1 ] && args+=(--default-split)
     if ! ./build.sh "${args[@]}"; then
         cat >&2 <<EOF
 

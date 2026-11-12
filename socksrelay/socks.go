@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -48,6 +49,8 @@ type relay struct {
 	guard   func(net.IP) bool
 	idle    time.Duration
 	limit   *limiter
+	perUser map[string]*limiter
+	usage   *usage
 }
 
 func newRelay(users map[string]string, idle time.Duration) *relay {
@@ -72,7 +75,8 @@ func (r *relay) handle(conn net.Conn) {
 		_ = conn.SetDeadline(time.Now().Add(r.idle))
 	}
 	br := bufio.NewReader(conn)
-	if err := r.negotiate(conn, br); err != nil {
+	user, err := r.negotiate(conn, br)
+	if err != nil {
 		return
 	}
 	target, reply, err := r.readRequest(br)
@@ -92,17 +96,17 @@ func (r *relay) handle(conn net.Conn) {
 	// The handshake is done; drop the idle deadline so a long download is
 	// not cut off.
 	_ = conn.SetDeadline(time.Time{})
-	splice(conn, br, remote, r.limit)
+	r.splice(conn, br, remote, string(user))
 }
 
-func (r *relay) negotiate(conn net.Conn, br *bufio.Reader) error {
+func (r *relay) negotiate(conn net.Conn, br *bufio.Reader) ([]byte, error) {
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(br, header); err != nil || header[0] != socksVersion {
-		return errors.New("bad greeting")
+		return nil, errors.New("bad greeting")
 	}
 	methods := make([]byte, int(header[1]))
 	if _, err := io.ReadFull(br, methods); err != nil {
-		return err
+		return nil, err
 	}
 	haveUserPass := false
 	for _, m := range methods {
@@ -112,39 +116,41 @@ func (r *relay) negotiate(conn net.Conn, br *bufio.Reader) error {
 	}
 	if !haveUserPass || len(r.users) == 0 {
 		_, _ = conn.Write([]byte{socksVersion, methodReject})
-		return errors.New("no acceptable auth method")
+		return nil, errors.New("no acceptable auth method")
 	}
 	if _, err := conn.Write([]byte{socksVersion, methodUserPass}); err != nil {
-		return err
+		return nil, err
 	}
 	return r.authenticate(conn, br)
 }
 
-func (r *relay) authenticate(conn net.Conn, br *bufio.Reader) error {
+func (r *relay) authenticate(conn net.Conn, br *bufio.Reader) ([]byte, error) {
 	var head [2]byte
 	if _, err := io.ReadFull(br, head[:]); err != nil || head[0] != authVersion {
-		return errors.New("bad auth header")
+		return nil, errors.New("bad auth header")
 	}
 	user := make([]byte, int(head[1]))
 	if _, err := io.ReadFull(br, user); err != nil {
-		return err
+		return nil, err
 	}
 	var plen [1]byte
 	if _, err := io.ReadFull(br, plen[:]); err != nil {
-		return err
+		return nil, err
 	}
 	pass := make([]byte, int(plen[0]))
 	if _, err := io.ReadFull(br, pass); err != nil {
-		return err
+		return nil, err
 	}
 	want, ok := r.users[string(user)]
 	valid := ok && subtle.ConstantTimeCompare([]byte(want), pass) == 1
 	if !valid {
 		_, _ = conn.Write([]byte{authVersion, 0x01})
-		return errors.New("auth failed")
+		return nil, errors.New("auth failed")
 	}
-	_, err := conn.Write([]byte{authVersion, 0x00})
-	return err
+	if _, err := conn.Write([]byte{authVersion, 0x00}); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 // readRequest parses a CONNECT request. On protocol errors it returns the
@@ -252,12 +258,20 @@ func writeReply(conn net.Conn, code byte) error {
 // splice copies both directions until either side closes, then half-closes the
 // other. br may already hold buffered client bytes, so it is used instead of
 // the raw connection for the client-to-remote direction.
-func splice(conn net.Conn, br *bufio.Reader, remote net.Conn, limit *limiter) {
+func (r *relay) splice(conn net.Conn, br *bufio.Reader, remote net.Conn, user string) {
 	fromClient := io.Reader(br)
 	fromRemote := io.Reader(remote)
-	if limit != nil {
-		fromClient = &limitedReader{r: fromClient, l: limit}
-		fromRemote = &limitedReader{r: fromRemote, l: limit}
+	if r.limit != nil {
+		fromClient = &limitedReader{r: fromClient, l: r.limit}
+		fromRemote = &limitedReader{r: fromRemote, l: r.limit}
+	}
+	if per := r.perUser[user]; per != nil {
+		fromClient = &limitedReader{r: fromClient, l: per}
+		fromRemote = &limitedReader{r: fromRemote, l: per}
+	}
+	if r.usage != nil {
+		fromClient = &countedReader{r: fromClient, add: func(n int64) { r.usage.add(user, n) }}
+		fromRemote = &countedReader{r: fromRemote, add: func(n int64) { r.usage.add(user, n) }}
 	}
 	done := make(chan struct{})
 	go func() {
@@ -347,5 +361,47 @@ type limitedReader struct {
 func (r *limitedReader) Read(p []byte) (int, error) {
 	n, err := r.r.Read(p)
 	r.l.reserve(n)
+	return n, err
+}
+
+// usage counts bytes per relay user so an operator can see who is spending
+// the link. It is process-lifetime only; the log line is the record.
+type usage struct {
+	mu     sync.Mutex
+	bytes  map[string]int64
+	logged map[string]int64
+}
+
+func newUsage() *usage { return &usage{bytes: map[string]int64{}, logged: map[string]int64{}} }
+
+// add records n bytes and logs the user once each time their total crosses
+// another 100 MB, so the log shows growth without a line per request.
+func (u *usage) add(user string, n int64) {
+	if u == nil || n <= 0 {
+		return
+	}
+	u.mu.Lock()
+	u.bytes[user] += n
+	total := u.bytes[user]
+	last := u.logged[user]
+	if total-last >= 100<<20 {
+		u.logged[user] = total
+		u.mu.Unlock()
+		log.Printf("socksrelay: %s has relayed %d MB", user, total>>20)
+		return
+	}
+	u.mu.Unlock()
+}
+
+type countedReader struct {
+	r   io.Reader
+	add func(int64)
+}
+
+func (c *countedReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.add(int64(n))
+	}
 	return n, err
 }
