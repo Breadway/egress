@@ -432,14 +432,14 @@ func TestReporterFlush(t *testing.T) {
 	defer srv.Close()
 
 	r := newSplitReporter("net|10.0.0.1", t.TempDir(), log.New(testWriter{t}, "", 0))
-	r.SetMergeFunc(func([]feedDomain) {})
+	r.SetMergeFunc(func([]feedDomain, []feedProtocol) {})
 	r.reportURL = srv.URL
 	r.Report("discord.com", EvidenceTLSStall)
 	r.Report("poki.com", EvidenceIPRejected)
 	if err := r.flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got.Device == "" || got.Network != "net|10.0.0.1" || len(got.Domains) != 2 {
+	if got.Device == "" || got.NetworkID != NetworkID("net|10.0.0.1") || len(got.Domains) != 2 {
 		t.Fatalf("payload: %+v", got)
 	}
 	if r.pending() != 0 {
@@ -449,7 +449,7 @@ func TestReporterFlush(t *testing.T) {
 
 func TestReporterFeedFetch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("network") != "net|10.0.0.1" {
+		if r.URL.Query().Get("n") != NetworkID("net|10.0.0.1") {
 			t.Errorf("network query: %q", r.URL.RawQuery)
 		}
 		_ = json.NewEncoder(w).Encode(feedResponse{Version: 1, Domains: []feedDomain{
@@ -461,7 +461,7 @@ func TestReporterFeedFetch(t *testing.T) {
 	r := newSplitReporter("net|10.0.0.1", t.TempDir(), log.New(testWriter{t}, "", 0))
 	r.seedURL = srv.URL
 	var merged []feedDomain
-	r.SetMergeFunc(func(domains []feedDomain) { merged = domains })
+	r.SetMergeFunc(func(domains []feedDomain, _ []feedProtocol) { merged = domains })
 	r.fetchFeed(context.Background())
 	if len(merged) != 1 || merged[0].Domain != "discord.com" {
 		t.Fatalf("merged: %+v", merged)
@@ -659,5 +659,39 @@ func TestProxyForwardsPlainHTTP(t *testing.T) {
 	}
 	if string(body) != "hello /connecttest.txt" {
 		t.Fatalf("body: %q", body)
+	}
+}
+
+func TestNetworkIDIsHashedAndStable(t *testing.T) {
+	id := NetworkID("HomeNet|192.168.1.1")
+	if len(id) != 32 {
+		t.Fatalf("id %q", id)
+	}
+	if id != NetworkID("homenet|192.168.1.1") {
+		t.Error("id is case-sensitive")
+	}
+	if id == NetworkID("OtherNet|192.168.1.1") {
+		t.Error("different networks share an id")
+	}
+	if id == "HomeNet|192.168.1.1" {
+		t.Error("id is not hashed")
+	}
+}
+
+func TestMergeProtocolsKeepsLocalObservation(t *testing.T) {
+	p := NewProfile("net")
+	p.Protocols["udp"] = "ok" // measured locally
+	changed := mergeProtocols(p, []feedProtocol{
+		{Protocol: "udp", State: "blocked"}, // shared, must not override
+		{Protocol: "tcp", State: "ok"},      // new, fills in
+	})
+	if p.Protocols["udp"] != "ok" {
+		t.Errorf("local udp observation was overwritten: %q", p.Protocols["udp"])
+	}
+	if p.Protocols["tcp"] != "ok" {
+		t.Errorf("shared tcp observation not merged: %q", p.Protocols["tcp"])
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1", changed)
 	}
 }

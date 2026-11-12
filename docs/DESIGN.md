@@ -21,6 +21,36 @@ Bandwidth is bounded in three places, all on Aegis:
   2 Mbit per tunnel address, so no device can take the whole tunnel. It only
   touches traffic inside wg0.
 
+## Shared block table
+
+Devices on the same network share what they learn. The network is identified by
+a hash of the SSID (peppered, truncated to 32 hex characters), so the server
+stores no plaintext network name. The hash is obfuscation, not secrecy: an SSID
+has a small search space.
+
+The table carries two kinds of observation:
+
+- **Domains**: `blocked` or `allowed`, with the probe evidence. Blocked entries
+  are merged into a joining device's profile so it does not rediscover a
+  filtered domain by probing.
+- **Protocols**: outbound `udp`, `tcp`, `dns`, `icmp`, and `quic` reachability,
+  so a device joining a UDP-filtered network can start on the WebSocket path
+  instead of failing over first. A local measurement always beats a shared one.
+
+Conflicts resolve by verification, and block wins:
+
+1. A device reports the domain blocked.
+2. A second device reports it allowed. The entry becomes contested and the
+   server asks the allowing device to re-check.
+3. The allowing device probes again and posts a final observation. The blocked
+   device is then asked to verify.
+4. Any blocked answer among the finals keeps the domain blocked; the entry is
+   only downgraded when every final says allowed.
+
+Entries not seen for 30 days are dropped. Only evidence strings and hashed
+network ids are stored; no device identifiers, browsing history, or plaintext
+SSIDs.
+
 Relay credentials are per device. `new-device.sh` creates a user:password pair
 on the relay and embeds it in that device's build, and `remove-device.sh`
 removes the pair along with the peer, so revoking a device stops its relay
