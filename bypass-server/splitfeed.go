@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +39,15 @@ const splitNetworkPepper = "egress-split-v1:"
 const (
 	splitFeedVersion = 2
 	splitEntryTTL    = 30 * 24 * time.Hour
+	// splitRefreshEvery is the per-site re-verification period. The timer
+	// starts when the entry is added and resets when any client observes the
+	// domain again, by any means.
+	splitRefreshEvery = 7 * 24 * time.Hour
+	// splitClaimLease bounds how long one client may hold a refresh job
+	// before another may take it.
+	splitClaimLease = 15 * time.Minute
+	// splitRefreshBatch caps how many jobs one seed response hands out.
+	splitRefreshBatch = 10
 )
 
 var (
@@ -104,6 +114,12 @@ type feedEntry struct {
 	RecheckAsked    bool     `json:"recheck_asked,omitempty"`
 	VerifyAsked     bool     `json:"verify_asked,omitempty"`
 	Finals          []string `json:"finals,omitempty"`
+	// RefreshDue is when the block should next be re-verified by any client.
+	// It starts when the entry is added and resets on any observation, which
+	// keeps a stale entry from living forever.
+	RefreshDue   string `json:"refresh_due,omitempty"`
+	RefreshClaim string `json:"refresh_claim,omitempty"`
+	ClaimUntil   string `json:"claim_until,omitempty"`
 }
 
 // protocolEntry is the merged reachability of one outbound protocol.
@@ -310,6 +326,10 @@ func mergeDomainObservation(entry feedEntry, state, evidence string, final bool,
 	if entry.State == "" {
 		entry.State = state
 	}
+	// Any observation is a verification: restart the weekly refresh timer.
+	entry.RefreshDue = addDuration(now, splitRefreshEvery)
+	entry.RefreshClaim = ""
+	entry.ClaimUntil = ""
 	switch state {
 	case "blocked":
 		entry.State = "blocked"
@@ -375,6 +395,10 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 	id := networkID(raw)
 	s.feedMu.Lock()
 	feed := s.loadFeed(id)
+	claimed := claimRefresh(&feed, time.Now())
+	if len(claimed) > 0 {
+		_ = s.saveFeed(feed)
+	}
 	s.feedMu.Unlock()
 
 	type seedDomain struct {
@@ -395,6 +419,7 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 		NetworkID string         `json:"network_id"`
 		Domains   []seedDomain   `json:"domains"`
 		Protocols []seedProtocol `json:"protocols,omitempty"`
+		Refresh   []seedDomain   `json:"refresh,omitempty"`
 	}{Version: splitFeedVersion, NetworkID: id}
 
 	names := make([]string, 0, len(feed.Domains))
@@ -411,6 +436,14 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 			Domain: domain, Evidence: entry.Evidence, Count: entry.Count,
 			Contested: entry.Contested, Recheck: entry.RecheckAsked, Verify: entry.VerifyAsked,
 		})
+	}
+	for _, domain := range claimed {
+		entry := feed.Domains[domain]
+		out.Refresh = append(out.Refresh, seedDomain{Domain: domain, Evidence: entry.Evidence, Count: entry.Count})
+	}
+	for _, domain := range claimed {
+		entry := feed.Domains[domain]
+		out.Refresh = append(out.Refresh, seedDomain{Domain: domain, Evidence: entry.Evidence, Count: entry.Count})
 	}
 	protos := make([]string, 0, len(feed.Protocols))
 	for proto := range feed.Protocols {
@@ -497,4 +530,58 @@ func (s *server) adminSplit(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(`</tbody></table>`)
 	}
 	s.renderNav(w, true, "admin", "Split feed", b.String())
+}
+
+// randomClaim makes an unguessable lease id so only the client that received
+// the job can be assumed to be working on it.
+func randomClaim() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "claim"
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func addDuration(stamp string, d time.Duration) string {
+	t, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return time.Now().UTC().Add(d).Format(time.RFC3339)
+	}
+	return t.Add(d).Format(time.RFC3339)
+}
+
+// claimRefresh hands out due refresh jobs. Any client may take one; the lease
+// stops two clients verifying the same site at once, and an unanswered lease
+// expires so the work does not stall.
+func claimRefresh(feed *networkFeed, now time.Time) []string {
+	if len(feed.Domains) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(feed.Domains))
+	for domain := range feed.Domains {
+		names = append(names, domain)
+	}
+	sort.Strings(names)
+	nowStamp := now.UTC().Format(time.RFC3339)
+	var claimed []string
+	for _, domain := range names {
+		if len(claimed) >= splitRefreshBatch {
+			break
+		}
+		entry := feed.Domains[domain]
+		if entry.State != "blocked" {
+			continue
+		}
+		if entry.RefreshDue != "" && entry.RefreshDue > nowStamp {
+			continue
+		}
+		if entry.ClaimUntil != "" && entry.ClaimUntil > nowStamp {
+			continue
+		}
+		entry.RefreshClaim = randomClaim()
+		entry.ClaimUntil = now.Add(splitClaimLease).UTC().Format(time.RFC3339)
+		feed.Domains[domain] = entry
+		claimed = append(claimed, domain)
+	}
+	return claimed
 }
