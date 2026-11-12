@@ -45,6 +45,9 @@ type dohResolver struct {
 	// lookup swaps in tests: production is exchange, tests echo canned
 	// answers so TCP/UDP framing is covered without network.
 	lookup func(context.Context, []byte) ([]byte, error)
+	// observer, when set, sees every forwarded answer. Split mode uses it to
+	// learn blocked domains and route their addresses.
+	observer func(domain string, ips []net.IP, ttl time.Duration)
 }
 
 func newDoHResolver(gateway string, logger *log.Logger) *dohResolver {
@@ -105,6 +108,34 @@ func (r *dohResolver) CloseIdle() {
 // path works, so the supervisor watches this instead of the socket.
 func (r *dohResolver) ConsecutiveFailures() int {
 	return int(r.failures.Load())
+}
+
+// SetObserver installs a callback for every forwarded answer. Split mode sets
+// this to learn blocked destinations.
+func (r *dohResolver) SetObserver(fn func(domain string, ips []net.IP, ttl time.Duration)) {
+	r.mu.Lock()
+	r.observer = fn
+	r.mu.Unlock()
+}
+
+// observe parses one query/answer pair and hands the A records to the observer.
+// Parsing a 100-byte message is cheap next to the HTTPS round trip.
+func (r *dohResolver) observe(query, resp []byte) {
+	r.mu.RLock()
+	fn := r.observer
+	r.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	domain := dnsQueryName(query)
+	if domain == "" {
+		return
+	}
+	ips, ttl := dnsAnswerIPv4(resp)
+	if len(ips) == 0 {
+		return
+	}
+	fn(domain, ips, ttl)
 }
 
 // Reset rebuilds the HTTP client and re-runs the bootstrap. A long-lived pool
@@ -494,6 +525,7 @@ func (r *dohResolver) serveUDP(conn net.PacketConn) {
 				r.log.Printf("DoH lookup failed: %v", err)
 				return
 			}
+			r.observe(query, resp)
 			// A non-EDNS client with a 512-byte buffer cannot use an
 			// oversized datagram: recvfrom truncates it and the client
 			// retries instead of falling back to TCP. Cut to the
@@ -541,6 +573,7 @@ func (r *dohResolver) handleTCP(conn net.Conn) {
 			r.log.Printf("DoH lookup failed: %v", err)
 			return
 		}
+		r.observe(query, resp)
 		if len(resp) > 65535 {
 			return
 		}

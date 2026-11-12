@@ -23,6 +23,7 @@ const (
 	aegisTunnelIP  = "10.88.0.1"
 	aegisPublicKey = "MsU+DNi9YLMpLfsHifP2+nMLAiblNs0uvPsQs/U2ZUA="
 	wgInterface    = "wg0"
+	tunnelSubnet   = "10.88.0.0/24"
 
 	wstunnelPrefix  = "wg-tunnel"
 	relayHost       = "127.0.0.1"
@@ -59,6 +60,9 @@ type tunnelConfig struct {
 	PrivateKey string
 	ClientIP   string
 	Endpoint   string
+	// Split keeps the default route off the tunnel. Only host routes added by
+	// the split controller send destinations into wg0. Linux only.
+	Split bool
 }
 
 func (c tunnelConfig) DirectEndpoint() string { return aegisIPv4 + ":" + aegisWGPort }
@@ -118,12 +122,24 @@ func renderWGConfig(c tunnelConfig) string {
 		// 128.0.0.0/1, so without the pin the first handshake is routed into
 		// the tunnel and never arrives.
 		b.WriteString("Table = off\n")
-		b.WriteString("PostUp = ip route replace 0.0.0.0/1 dev %i; ip route replace 128.0.0.0/1 dev %i; " +
-			"gw=$(ip route show default | awk '/default/ {print $3; exit}'); " +
-			"dev=$(ip route show default | awk '/default/ {print $5; exit}'); " +
-			"ip route replace " + aegisIPv4 + " via \"$gw\" dev \"$dev\"\n")
-		b.WriteString("PostDown = ip route del 0.0.0.0/1 dev %i || true; ip route del 128.0.0.0/1 dev %i || true; " +
-			"ip route del " + aegisIPv4 + " || true\n")
+		if c.Split {
+			// Split mode: only the tunnel subnet is routed at bring-up.
+			// Learned-blocked destinations get /32 routes from the supervisor,
+			// so the default route stays on the physical link.
+			b.WriteString("PostUp = ip route replace " + tunnelSubnet + " dev %i; " +
+				"gw=$(ip route show default | awk '/default/ {print $3; exit}'); " +
+				"dev=$(ip route show default | awk '/default/ {print $5; exit}'); " +
+				"ip route replace " + aegisIPv4 + " via \"$gw\" dev \"$dev\"\n")
+			b.WriteString("PostDown = ip route del " + tunnelSubnet + " dev %i || true; " +
+				"ip route del " + aegisIPv4 + " || true\n")
+		} else {
+			b.WriteString("PostUp = ip route replace 0.0.0.0/1 dev %i; ip route replace 128.0.0.0/1 dev %i; " +
+				"gw=$(ip route show default | awk '/default/ {print $3; exit}'); " +
+				"dev=$(ip route show default | awk '/default/ {print $5; exit}'); " +
+				"ip route replace " + aegisIPv4 + " via \"$gw\" dev \"$dev\"\n")
+			b.WriteString("PostDown = ip route del 0.0.0.0/1 dev %i || true; ip route del 128.0.0.0/1 dev %i || true; " +
+				"ip route del " + aegisIPv4 + " || true\n")
+		}
 	}
 	// Windows and Darwin need no interface section extras: Windows swaps whole
 	// tunnel services per endpoint, and wg-quick on Darwin adds the endpoint

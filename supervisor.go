@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"time"
 )
 
@@ -51,6 +52,10 @@ type supervisor struct {
 	// is a whole-stack failure, not a DNS-only one.
 	dnsWedgeSince   time.Time
 	lastDNSRecovery time.Time
+
+	// split, when set, learns blocked domains from DNS and routes only those
+	// destinations into the tunnel.
+	split *splitController
 }
 
 func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
@@ -67,6 +72,15 @@ func newSupervisor(plat platform, resolver *dohResolver, wst *wstunnelProc, logg
 func (s *supervisor) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- s.resolver.serve(ctx) }()
+	if s.split != nil {
+		network := NetworkKey("", s.gateway)
+		s.split.SetNetwork(network, s.iface)
+		s.resolver.SetObserver(func(domain string, ips []net.IP, ttl time.Duration) {
+			s.split.HandleAnswer(domain, ips, ttl)
+		})
+		go s.split.Run(ctx)
+		s.log.Printf("split mode: learned-blocked destinations only (%s)", network)
+	}
 	if s.manageTunnel {
 		go func() { errCh <- s.loop(ctx) }()
 	} else {
@@ -158,6 +172,9 @@ func (s *supervisor) loop(ctx context.Context) error {
 					failures = 0
 					s.dnsWedgeSince = time.Time{}
 					s.lastDNSRecovery = time.Time{}
+					if s.split != nil {
+						s.split.SetNetwork(NetworkKey("", s.gateway), s.iface)
+					}
 					if state == pathWebSocket {
 						lastTrial = time.Time{}
 					}
