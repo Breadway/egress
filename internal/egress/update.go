@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"egress/internal/split"
 	"egress/internal/update"
 	"encoding/hex"
 	"encoding/json"
@@ -167,7 +168,7 @@ func applyUpdate(base string, m update.Manifest, pub ed25519.PublicKey) error {
 		return fmt.Errorf("back up current binary: %w", err)
 	}
 	installArgs := []string{"install", "--keep-config"}
-	if splitEnabled() {
+	if split.Enabled() {
 		installArgs = append(installArgs, "--split")
 	}
 	cmd := exec.Command(tmpPath, installArgs...)

@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"egress/internal/doh"
+	"egress/internal/split"
 	"fmt"
 	"log"
 	"net"
@@ -56,7 +57,7 @@ type supervisor struct {
 
 	// split, when set, learns blocked domains from DNS and routes only those
 	// destinations into the tunnel.
-	split *splitController
+	split *split.Controller
 }
 
 func newSupervisor(plat platform, resolver *doh.Resolver, wst *wstunnelProc, logger *log.Logger, manageTunnel, manageFallback bool) *supervisor {
@@ -74,7 +75,7 @@ func (s *supervisor) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- s.resolver.Serve(ctx) }()
 	if s.split != nil {
-		network := NetworkKey("", s.gateway)
+		network := split.NetworkKey("", s.gateway)
 		s.split.SetNetwork(network, s.iface)
 		s.resolver.SetObserver(func(domain string, ips []net.IP, ttl time.Duration) {
 			s.split.HandleAnswer(domain, ips, ttl)
@@ -174,7 +175,7 @@ func (s *supervisor) loop(ctx context.Context) error {
 					s.dnsWedgeSince = time.Time{}
 					s.lastDNSRecovery = time.Time{}
 					if s.split != nil {
-						s.split.SetNetwork(NetworkKey("", s.gateway), s.iface)
+						s.split.SetNetwork(split.NetworkKey("", s.gateway), s.iface)
 					}
 					if state == pathWebSocket {
 						lastTrial = time.Time{}

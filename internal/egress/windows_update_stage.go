@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/split"
 	"egress/internal/update"
 	"errors"
 	"fmt"
@@ -29,7 +30,7 @@ func stageWindowsUpdate(m update.Manifest, stagedSource string) error {
 		return fmt.Errorf("stage binary: %w", err)
 	}
 	splitArg := ""
-	if splitEnabled() {
+	if split.Enabled() {
 		splitArg = " --split"
 	}
 	// Run the staged binary directly rather than through a .cmd shim:

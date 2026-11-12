@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/split"
 	"errors"
 	"fmt"
 	"os"
@@ -25,7 +26,7 @@ func cmdProxy(args []string) (err error) {
 	fs := newFlagSet("proxy")
 	listen := fs.String("listen", "127.0.0.1:1081", "local CONNECT proxy and PAC address")
 	relay := fs.String("relay", "127.0.0.1:1080", "local wstunnel forward to the Aegis SOCKS relay")
-	authPath := fs.String("socks-auth", filepath.Join(ProxyDir(), "socks-auth"), "file with user:password for the relay")
+	authPath := fs.String("socks-auth", filepath.Join(split.ProfileDir(), "socks-auth"), "file with user:password for the relay")
 	userFlag := fs.String("socks-user", "", "relay username (overrides the auth file)")
 	passFlag := fs.String("socks-pass", "", "relay password (overrides the auth file)")
 	tray := fs.Bool("tray", false, "show the Windows tray icon")
@@ -66,7 +67,7 @@ func cmdProxy(args []string) (err error) {
 	if err != nil {
 		appLogger().Printf("proxy: no default route yet (%v)", err)
 	}
-	p := newSplitProxy(NetworkKey("", gateway), ProxyDir(), *listen, *relay, user, pass, appLogger())
+	p := split.NewProxy(split.NetworkKey("", gateway), split.ProfileDir(), *listen, *relay, user, pass, appLogger())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

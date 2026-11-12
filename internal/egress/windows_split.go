@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/split"
 	"errors"
 	"fmt"
 	"net"
@@ -22,7 +23,7 @@ func configureWindowsSplit() error {
 	if err != nil {
 		return err
 	}
-	authPath := filepath.Join(ProxyDir(), "socks-auth")
+	authPath := filepath.Join(split.ProfileDir(), "socks-auth")
 	user, pass := resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
 	if user == "" || pass == "" {
 		return errors.New("no SOCKS relay credentials in this build; rebuild with --socks-user and --socks-pass")
@@ -114,7 +115,7 @@ const (
 func pacFilePath() string {
 	exe, err := installedExePath()
 	if err != nil {
-		return filepath.Join(ProxyDir(), "proxy.pac")
+		return filepath.Join(split.ProfileDir(), "proxy.pac")
 	}
 	return filepath.Join(filepath.Dir(exe), "proxy.pac")
 }
@@ -129,7 +130,7 @@ func pacURLForFile(path string) string {
 // per-user step.
 func writePAC() (string, error) {
 	path := pacFilePath()
-	if err := os.WriteFile(path, []byte(pacScript(proxyListenAddr)), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(split.PacScript(proxyListenAddr)), 0644); err != nil {
 		return "", err
 	}
 	out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(RX)").CombinedOutput()

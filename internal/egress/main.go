@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"egress/internal/doh"
+	"egress/internal/split"
 	"errors"
 	"flag"
 	"fmt"
@@ -478,14 +479,14 @@ func cmdSupervise(args []string) error {
 	}
 	wst := newWstunnelProc(wstPath, appLogger())
 
-	var split *splitController
+	var splitter *split.Controller
 	if !*noTunnel {
-		split = newSplitController(NetworkKey("", gateway), iface,
-			newRouteManager(wgInterface, appLogger()), appLogger())
+		splitter = split.NewController(split.NetworkKey("", gateway), iface,
+			split.NewRouteManager(wgInterface, appLogger()), appLogger())
 	}
 	sup := newSupervisor(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
 	sup.iface, sup.gateway = iface, gateway
-	sup.split = split
+	sup.split = splitter
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

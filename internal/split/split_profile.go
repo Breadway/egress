@@ -1,9 +1,10 @@
-package egress
+package split
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"egress/internal/core"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -109,7 +110,7 @@ func (r *splitReporter) Report(domain string, evidence Evidence) {
 	if r.disabled {
 		return
 	}
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" {
 		return
 	}
@@ -173,13 +174,13 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.client.Do(req)
 	if err != nil {
-		debugf("split: report failed, keeping %d queued: %v", len(batch), err)
+		log.Printf("split: report failed, keeping %d queued: %v", len(batch), err)
 		return err
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		debugf("split: report rejected: %s", resp.Status)
+		log.Printf("split: report rejected: %s", resp.Status)
 		return errors.New(resp.Status)
 	}
 	r.mu.Lock()
@@ -187,7 +188,7 @@ func (r *splitReporter) flush(ctx context.Context) error {
 		delete(r.queue, d.Domain)
 	}
 	r.mu.Unlock()
-	debugf("split: reported %d domains for %s", len(batch), network)
+	log.Printf("split: reported %d domains for %s", len(batch), network)
 	return nil
 }
 
@@ -206,20 +207,20 @@ func (r *splitReporter) fetchFeed(ctx context.Context) {
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		debugf("split: feed fetch failed: %v", err)
+		log.Printf("split: feed fetch failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		debugf("split: feed status %s", resp.Status)
+		log.Printf("split: feed status %s", resp.Status)
 		return
 	}
 	var feed feedResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&feed); err != nil {
-		debugf("split: feed decode: %v", err)
+		log.Printf("split: feed decode: %v", err)
 		return
 	}
-	debugf("split: feed has %d domains for %s", len(feed.Domains), network)
+	log.Printf("split: feed has %d domains for %s", len(feed.Domains), network)
 	r.merge(feed.Domains)
 }
 
@@ -246,7 +247,7 @@ func (r *splitReporter) SetMergeFunc(fn func([]feedDomain)) {
 func mergeFeedDomains(p *Profile, domains []feedDomain, now time.Time) int {
 	added := 0
 	for _, d := range domains {
-		domain := NormalizeDomain(d.Domain)
+		domain := core.NormalizeDomain(d.Domain)
 		if !plausibleDomain(domain) || probeIgnoredName(domain) {
 			continue
 		}
@@ -366,7 +367,7 @@ func NetworkKey(ssid, gateway string) string {
 
 // State returns the current state, expiring stale allowed verdicts.
 func (p *Profile) State(domain string, now time.Time) DomainState {
-	entry, ok := p.Entries[NormalizeDomain(domain)]
+	entry, ok := p.Entries[core.NormalizeDomain(domain)]
 	if !ok {
 		return StateUnknown
 	}
@@ -379,7 +380,7 @@ func (p *Profile) State(domain string, now time.Time) DomainState {
 // RecordProbe applies a definitive probe result. Transient failures must not be
 // recorded: the caller only calls this when the classifier is sure.
 func (p *Profile) RecordProbe(domain string, evidence Evidence, blocked bool, now time.Time) {
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" {
 		return
 	}
@@ -416,7 +417,7 @@ func (p *Profile) RecordProbe(domain string, evidence Evidence, blocked bool, no
 // entries. It still counts as a full failure streak so a single later success
 // can clear it.
 func (p *Profile) AddBlocked(domain string, evidence Evidence, now time.Time) {
-	domain = NormalizeDomain(domain)
+	domain = core.NormalizeDomain(domain)
 	if domain == "" || len(p.Entries) >= maxProfileEntries {
 		return
 	}
