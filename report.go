@@ -58,8 +58,8 @@ func collectLogTail() string {
 }
 
 func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error) ([]byte, error) {
-	pub := ""
-	if tcfg.PrivateKey != "" {
+	pub := tcfg.ReportPubkey
+	if pub == "" && tcfg.PrivateKey != "" {
 		if derived, err := publicKey(tcfg.PrivateKey); err == nil {
 			pub = derived
 		}
