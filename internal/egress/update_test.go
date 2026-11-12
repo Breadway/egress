@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"egress/internal/update"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,10 +16,10 @@ import (
 	"testing"
 )
 
-func testManifest(t *testing.T, priv ed25519.PrivateKey) UpdateManifest {
+func testManifest(t *testing.T, priv ed25519.PrivateKey) update.Manifest {
 	t.Helper()
-	m := UpdateManifest{
-		Schema:   updateSchema,
+	m := update.Manifest{
+		Schema:   1,
 		Version:  "0.3.0",
 		OS:       runtime.GOOS,
 		Arch:     runtime.GOARCH,
@@ -26,7 +27,7 @@ func testManifest(t *testing.T, priv ed25519.PrivateKey) UpdateManifest {
 		Size:     1024,
 		Released: "2026-11-12T00:00:00Z",
 	}
-	if err := SignUpdateManifest(&m, priv); err != nil {
+	if err := update.Sign(&m, priv); err != nil {
 		t.Fatal(err)
 	}
 	return m
@@ -38,29 +39,29 @@ func TestManifestSignVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := testManifest(t, priv)
-	if err := VerifyUpdateManifest(&m, pub, runtime.GOOS, runtime.GOARCH); err != nil {
+	if err := update.Verify(&m, pub, runtime.GOOS, runtime.GOARCH); err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 
 	tampered := m
 	tampered.Version = "9.9.9"
-	if err := VerifyUpdateManifest(&tampered, pub, runtime.GOOS, runtime.GOARCH); err == nil {
+	if err := update.Verify(&tampered, pub, runtime.GOOS, runtime.GOARCH); err == nil {
 		t.Fatal("tampered version accepted")
 	}
 
 	wrongTarget := m
-	if err := VerifyUpdateManifest(&wrongTarget, pub, "plan9", runtime.GOARCH); err == nil {
+	if err := update.Verify(&wrongTarget, pub, "plan9", runtime.GOARCH); err == nil {
 		t.Fatal("manifest for another OS accepted")
 	}
 
 	badHash := m
 	badHash.SHA256 = "not-a-hash"
-	if err := VerifyUpdateManifest(&badHash, pub, runtime.GOOS, runtime.GOARCH); err == nil {
+	if err := update.Verify(&badHash, pub, runtime.GOOS, runtime.GOARCH); err == nil {
 		t.Fatal("bad hash accepted")
 	}
 
 	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
-	if err := VerifyUpdateManifest(&m, otherPub, runtime.GOOS, runtime.GOARCH); err == nil {
+	if err := update.Verify(&m, otherPub, runtime.GOOS, runtime.GOARCH); err == nil {
 		t.Fatal("manifest accepted under the wrong key")
 	}
 }
@@ -76,13 +77,13 @@ func TestCompareVersions(t *testing.T) {
 		{"v1.0.0", "1.0.0", 0},
 	}
 	for _, tc := range cases {
-		got, err := CompareVersions(tc.a, tc.b)
+		got, err := update.CompareVersions(tc.a, tc.b)
 		if err != nil || got != tc.want {
 			t.Errorf("%s vs %s: got %d (%v), want %d", tc.a, tc.b, got, err, tc.want)
 		}
 	}
 	for _, bad := range []string{"", "x.y.z", "1.2.3.4"} {
-		if _, err := CompareVersions(bad, "1.0.0"); err == nil {
+		if _, err := update.CompareVersions(bad, "1.0.0"); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}
 	}
@@ -114,7 +115,7 @@ func TestFetchUpdateManifest(t *testing.T) {
 	}
 
 	// A server that swaps the payload must be rejected.
-	bad, _ := json.Marshal(UpdateManifest{Schema: updateSchema, Version: "9.9.9", OS: runtime.GOOS, Arch: runtime.GOARCH, SHA256: m.SHA256, Size: 1})
+	bad, _ := json.Marshal(update.Manifest{Schema: 1, Version: "9.9.9", OS: runtime.GOOS, Arch: runtime.GOARCH, SHA256: m.SHA256, Size: 1})
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(bad) }))
 	defer srv2.Close()
 	if _, err := fetchUpdateManifest(context.Background(), srv2.URL, pub); err == nil {

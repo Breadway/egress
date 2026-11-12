@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/update"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +15,7 @@ import (
 // stageWindowsUpdate copies the verified release under ProgramData and asks the
 // task scheduler to apply it. Windows locks a running executable, so the
 // replacement has to happen after this process exits.
-func stageWindowsUpdate(m UpdateManifest, stagedSource string) error {
+func stageWindowsUpdate(m update.Manifest, stagedSource string) error {
 	programData := os.Getenv("ProgramData")
 	if programData == "" {
 		return errors.New("ProgramData is not set")

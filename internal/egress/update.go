@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"egress/internal/update"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,7 +41,7 @@ func cmdUpdate(args []string) error {
 		*check = true
 	}
 
-	pub, err := updatePublicKeyBytes()
+	pub, err := update.PublicKeyBytes()
 	if err != nil {
 		return err
 	}
@@ -56,7 +57,7 @@ func cmdUpdate(args []string) error {
 		fmt.Printf("up to date: build %s, this release is already applied\n", current)
 		return nil
 	}
-	cmp, err := CompareVersions(m.Version, current)
+	cmp, err := update.CompareVersions(m.Version, current)
 	if err != nil {
 		return err
 	}
@@ -87,8 +88,8 @@ func cmdUpdate(args []string) error {
 	return nil
 }
 
-func fetchUpdateManifest(ctx context.Context, base string, pub ed25519.PublicKey) (UpdateManifest, error) {
-	var m UpdateManifest
+func fetchUpdateManifest(ctx context.Context, base string, pub ed25519.PublicKey) (update.Manifest, error) {
+	var m update.Manifest
 	url := strings.TrimRight(base, "/") + "/manifest?os=" + runtime.GOOS + "&arch=" + runtime.GOARCH
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -106,13 +107,13 @@ func fetchUpdateManifest(ctx context.Context, base string, pub ed25519.PublicKey
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&m); err != nil {
 		return m, fmt.Errorf("decode manifest: %w", err)
 	}
-	if err := VerifyUpdateManifest(&m, pub, runtime.GOOS, runtime.GOARCH); err != nil {
+	if err := update.Verify(&m, pub, runtime.GOOS, runtime.GOARCH); err != nil {
 		return m, err
 	}
 	return m, nil
 }
 
-func applyUpdate(base string, m UpdateManifest, pub ed25519.PublicKey) error {
+func applyUpdate(base string, m update.Manifest, pub ed25519.PublicKey) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
