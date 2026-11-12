@@ -1,4 +1,4 @@
-package egress
+package wstunnel
 
 import (
 	"log"
@@ -11,7 +11,7 @@ import (
 // the supervised alive flag is already cleared, so the next Ensure cannot
 // mistake a dead child for a live relay.
 func TestWstunnelStopSettlesState(t *testing.T) {
-	w := newWstunnelProc("", log.New(os.Stderr, "test: ", 0))
+	w := NewProc("", log.New(os.Stderr, "test: ", 0))
 	cmd := exec.Command("sleep", "30")
 	if err := cmd.Start(); err != nil {
 		t.Skipf("sleep not available: %v", err)

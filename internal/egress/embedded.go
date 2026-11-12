@@ -1,50 +1,12 @@
 package egress
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
+	"egress/internal/core"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
-	"time"
+
+	"egress/internal/wstunnel"
 )
-
-// extractEmbedded atomically writes an embedded dependency only after checking
-// its pinned digest. Existing correct copies are reused.
-func extractEmbedded(dest string, data []byte, want string) error {
-	if len(data) == 0 {
-		return fmt.Errorf("this build does not contain the required embedded dependency for %s", filepath.Base(dest))
-	}
-	if existing, err := os.ReadFile(dest); err == nil && digestMatches(existing, want) {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
-		return err
-	}
-	if !digestMatches(data, want) {
-		return fmt.Errorf("embedded dependency checksum mismatch for %s", filepath.Base(dest))
-	}
-	tmp := dest + ".new"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	var renameErr error
-	for attempt := 0; attempt < 20; attempt++ {
-		if renameErr = os.Rename(tmp, dest); renameErr == nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	_ = os.Remove(tmp)
-	return renameErr
-}
-
-func digestMatches(data []byte, want string) bool {
-	got := sha256.Sum256(data)
-	return strings.EqualFold(hex.EncodeToString(got[:]), want)
-}
 
 // wstunnelIsOurs reports whether path holds a copy this tool could have
 // installed: the embedded digest for this build, or the pinned download
@@ -55,10 +17,10 @@ func wstunnelIsOurs(path, embeddedSHA string) bool {
 	if err != nil {
 		return false
 	}
-	if embeddedSHA != "" && digestMatches(data, embeddedSHA) {
+	if embeddedSHA != "" && core.DigestMatches(data, embeddedSHA) {
 		return true
 	}
-	if sum, ok := wstunnelSums[runtime.GOOS+"/"+runtime.GOARCH]; ok && digestMatches(data, sum) {
+	if sum := wstunnel.Sum(runtime.GOOS, runtime.GOARCH); sum != "" && core.DigestMatches(data, sum) {
 		return true
 	}
 	return false

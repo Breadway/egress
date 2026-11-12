@@ -1,9 +1,12 @@
 //go:build windows
 
-package egress
+package platform
 
 import (
 	"egress/internal/assets"
+	"egress/internal/core"
+	"egress/internal/logx"
+	"egress/internal/wstunnel"
 	"errors"
 	"fmt"
 	"io"
@@ -31,9 +34,7 @@ const (
 
 type windowsPlatform struct{}
 
-func newPlatform() platform { return windowsPlatform{} }
-
-func installDir() string { return winProgramData }
+func New() Interface { return windowsPlatform{} }
 
 // spoolDir holds the pending install report. TempDir is per-user on
 // Windows: the elevated installer and the SYSTEM supervisor would use
@@ -46,7 +47,7 @@ func logPath() string { return filepath.Join(winProgramData, "egress.log") }
 
 func (windowsPlatform) RequirePrivilege() error {
 	// "net session" only succeeds with an elevated token.
-	if _, err := execLogged("net", "session"); err != nil {
+	if _, err := logx.ExecLogged("net", "session"); err != nil {
 		return errors.New("must run as Administrator")
 	}
 	return nil
@@ -94,7 +95,7 @@ func (windowsPlatform) InstallTools() error {
 	if wireguardExe() != "" {
 		return nil
 	}
-	if err := extractEmbedded(filepath.Join(winProgramData, wireGuardMSI), assets.WireGuardMSI, wireGuardMSISHA256); err != nil {
+	if err := core.ExtractEmbedded(filepath.Join(winProgramData, wireGuardMSI), assets.WireGuardMSI, wireGuardMSISHA256); err != nil {
 		return fmt.Errorf("extract bundled WireGuard installer: %w", err)
 	}
 	msi := filepath.Join(winProgramData, wireGuardMSI)
@@ -113,7 +114,7 @@ func (windowsPlatform) InstallTools() error {
 // installMSI runs the bundled installer silently. 3010 and 1641 mean success
 // with a reboot pending or started, which is not a failure here.
 func installMSI(path string) error {
-	out, err := execLogged("msiexec.exe", "/i", path, "/qn", "/norestart")
+	out, err := logx.ExecLogged("msiexec.exe", "/i", path, "/qn", "/norestart")
 	if err == nil {
 		return nil
 	}
@@ -123,7 +124,7 @@ func installMSI(path string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("msiexec: %v (%s)", err, truncate(string(out), 400))
+	return fmt.Errorf("msiexec: %v (%s)", err, logx.Truncate(string(out), 400))
 }
 
 // verifyWireGuardSignature uses Windows' Authenticode policy in addition to
@@ -139,7 +140,7 @@ func verifyWireGuardSignature(path string) error {
 	return nil
 }
 
-func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
+func (p windowsPlatform) WriteTunnelConfig(c core.TunnelConfig) (bool, error) {
 	if err := os.MkdirAll(winProgramData, 0700); err != nil {
 		return false, err
 	}
@@ -154,17 +155,17 @@ func (p windowsPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
 
 	wgConf := filepath.Join(winProgramData, "wg0.conf")
 	wsConf := filepath.Join(winProgramData, "wg0ws.conf")
-	if err := backupForeignConfig(wgConf, filepath.Join(winConfigBakDir, "wg0.conf")); err != nil {
+	if err := BackupForeignConfig(wgConf, filepath.Join(winConfigBakDir, "wg0.conf")); err != nil {
 		return false, err
 	}
-	if err := backupForeignConfig(wsConf, filepath.Join(winConfigBakDir, "wg0ws.conf")); err != nil {
+	if err := BackupForeignConfig(wsConf, filepath.Join(winConfigBakDir, "wg0ws.conf")); err != nil {
 		return false, err
 	}
-	changedDirect, err := writeFileChanged(wgConf, []byte(renderWGConfig(direct)))
+	changedDirect, err := WriteFileChanged(wgConf, []byte(core.RenderWGConfig(direct)))
 	if err != nil {
 		return false, err
 	}
-	changedRelay, err := writeFileChanged(wsConf, []byte(renderWGConfig(relay)))
+	changedRelay, err := WriteFileChanged(wsConf, []byte(core.RenderWGConfig(relay)))
 	if err != nil {
 		return false, err
 	}
@@ -201,14 +202,14 @@ func installDirACLArgs(dir string) []string {
 // SecureInstallDir applies installDirACLArgs. Unlike most install steps this
 // one fails closed: a permissive directory must never pass silently.
 func (windowsPlatform) SecureInstallDir() error {
-	if err := runLogged("icacls", installDirACLArgs(winProgramData)...); err != nil {
+	if err := logx.RunLogged("icacls", installDirACLArgs(winProgramData)...); err != nil {
 		return err
 	}
 	// The installing user can carry an explicit full-control ACE from
 	// creating the directory, which /inheritance:r does not touch. Remove that
 	// identity by SID; the Administrators group still covers an elevated admin.
 	if sid := currentUserSID(); sid != "" {
-		_ = runLogged("icacls", winProgramData, "/remove:g", "*"+sid)
+		_ = logx.RunLogged("icacls", winProgramData, "/remove:g", "*"+sid)
 	}
 	// Verify rather than assume: if any principal outside SYSTEM and
 	// Administrators can still write, the install directory is a privilege
@@ -220,7 +221,7 @@ func (windowsPlatform) SecureInstallDir() error {
 }
 if ($bad) { $bad | ForEach-Object { $_.IdentityReference.Value + ':' + $_.FileSystemRights }; exit 2 } else { 'ok' }`)
 	if err != nil {
-		return fmt.Errorf("install directory is writable by a non-administrator: %v (%s)", err, truncate(out, 300))
+		return fmt.Errorf("install directory is writable by a non-administrator: %v (%s)", err, logx.Truncate(out, 300))
 	}
 	return nil
 }
@@ -268,7 +269,7 @@ func (p windowsPlatform) swapTo(name string) error {
 		}
 	}
 	conf := filepath.Join(winProgramData, name+".conf")
-	if err := runLogged(exe, "/installtunnelservice", conf); err != nil {
+	if err := logx.RunLogged(exe, "/installtunnelservice", conf); err != nil {
 		return err
 	}
 	return nil
@@ -278,9 +279,9 @@ func (p windowsPlatform) swapTo(name string) error {
 // physical gateway while the relay is in use. Without that pin, wstunnel's own
 // connection to Aegis would be routed into the tunnel it is carrying.
 func (p windowsPlatform) EnsureEndpoint(endpoint string) error {
-	if strings.HasPrefix(endpoint, relayHost+":") {
+	if strings.HasPrefix(endpoint, core.RelayHost+":") {
 		if tunnelServiceUp("wg0ws") {
-			debugf("endpoint already the relay")
+			logx.Debugf("endpoint already the relay")
 			return nil
 		}
 		if _, gateway, err := p.DefaultRoute(); err == nil && gateway != "" {
@@ -288,7 +289,7 @@ func (p windowsPlatform) EnsureEndpoint(endpoint string) error {
 				return err
 			}
 		}
-		debugf("switching tunnel service to the relay")
+		logx.Debugf("switching tunnel service to the relay")
 		return p.swapTo("wg0ws")
 	}
 
@@ -296,7 +297,7 @@ func (p windowsPlatform) EnsureEndpoint(endpoint string) error {
 		removeHostRoute()
 		return nil
 	}
-	debugf("switching tunnel service to the direct endpoint")
+	logx.Debugf("switching tunnel service to the direct endpoint")
 	err := p.swapTo("wg0")
 	removeHostRoute()
 	return err
@@ -304,12 +305,12 @@ func (p windowsPlatform) EnsureEndpoint(endpoint string) error {
 
 func addHostRoute(gateway string) error {
 	removeHostRoute()
-	debugf("pinning %s via %s", aegisIPv4, gateway)
-	return runLogged("route", "add", aegisIPv4, "mask", "255.255.255.255", gateway, "metric", "1")
+	logx.Debugf("pinning %s via %s", core.AegisIPv4, gateway)
+	return logx.RunLogged("route", "add", core.AegisIPv4, "mask", "255.255.255.255", gateway, "metric", "1")
 }
 
 func removeHostRoute() {
-	_ = runLogged("route", "delete", aegisIPv4)
+	_ = logx.RunLogged("route", "delete", core.AegisIPv4)
 }
 
 // RepinEndpoint re-points the Aegis address at the new gateway when the relay
@@ -320,7 +321,7 @@ func (p windowsPlatform) RepinEndpoint(gateway, iface string) error {
 		return nil
 	}
 	if gateway == "" {
-		return fmt.Errorf("no default gateway to pin %s to", aegisIPv4)
+		return fmt.Errorf("no default gateway to pin %s to", core.AegisIPv4)
 	}
 	return addHostRoute(gateway)
 }
@@ -348,8 +349,8 @@ func (windowsPlatform) EnsureDNS(iface, gateway string) error {
 }
 
 func (windowsPlatform) InstallService(exePath string, args []string) error {
-	debugf("scheduled task command: %s %s", exePath, strings.Join(args, " "))
-	script, err := windowsTaskScript(winTaskName, exePath, strings.Join(args, " "), winTriggerStartup, systemPrincipal, true)
+	logx.Debugf("scheduled task command: %s %s", exePath, strings.Join(args, " "))
+	script, err := TaskScript(winTaskName, exePath, strings.Join(args, " "), TriggerStartup, SystemPrincipal, true)
 	if err != nil {
 		return err
 	}
@@ -358,12 +359,12 @@ func (windowsPlatform) InstallService(exePath string, args []string) error {
 }
 
 func (windowsPlatform) StartService() error {
-	_ = runLogged("schtasks", "/end", "/tn", winTaskName)
-	return runLogged("schtasks", "/run", "/tn", winTaskName)
+	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
+	return logx.RunLogged("schtasks", "/run", "/tn", winTaskName)
 }
 
 func (windowsPlatform) StopService() error {
-	_ = runLogged("schtasks", "/end", "/tn", winTaskName)
+	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
 	// The task may leave its wstunnel child behind, and a running image
 	// cannot be replaced during reinstall.
 	stopWstunnel()
@@ -387,31 +388,31 @@ func (windowsPlatform) ServiceActive() bool {
 }
 
 func (windowsPlatform) Enable() error {
-	if _, err := execLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
+	if _, err := logx.ExecLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
 		return errors.New("egress is not installed; run install first")
 	}
-	if err := runLogged("schtasks", "/change", "/tn", winTaskName, "/enable"); err != nil {
+	if err := logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/enable"); err != nil {
 		return err
 	}
-	_ = runLogged("schtasks", "/end", "/tn", winTaskName)
-	return runLogged("schtasks", "/run", "/tn", winTaskName)
+	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
+	return logx.RunLogged("schtasks", "/run", "/tn", winTaskName)
 }
 
 // Disable stops the resolver and the tunnel now, disables the boot task, and
 // puts the adapter back on DHCP-provided DNS. Configs stay so Enable is cheap.
 func (p windowsPlatform) Disable() error {
 	_ = p.StopService()
-	_ = runLogged("schtasks", "/change", "/tn", winTaskName, "/disable")
-	_ = runLogged("schtasks", "/delete", "/tn", "egress-update-check", "/f")
-	_ = runLogged("schtasks", "/delete", "/tn", "egress-update-apply", "/f")
-	removeProxyAutostart()
-	clearUserPAC()
-	stopUserProxy()
+	_ = logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/disable")
+	_ = logx.RunLogged("schtasks", "/delete", "/tn", "egress-update-check", "/f")
+	_ = logx.RunLogged("schtasks", "/delete", "/tn", "egress-update-apply", "/f")
+	RemoveProxyAutostart()
+	ClearUserPAC()
+	StopUserProxy()
 	// A proxy left in WinHTTP or a stale PAC is enough to look offline even
 	// with working DNS. Clear every layer, then flush the resolver cache so
 	// answers learned through 127.0.0.1 are not reused.
-	_ = runLogged("netsh", "winhttp", "reset", "proxy")
-	_ = runLogged("ipconfig", "/flushdns")
+	_ = logx.RunLogged("netsh", "winhttp", "reset", "proxy")
+	_ = logx.RunLogged("ipconfig", "/flushdns")
 
 	_ = p.StopTunnel()
 	stopWstunnel()
@@ -423,7 +424,7 @@ func (p windowsPlatform) Disable() error {
 // except for a running binary, which Windows will not let us unlink.
 func (p windowsPlatform) Remove() error {
 	_ = p.Disable()
-	_ = runLogged("schtasks", "/delete", "/tn", winTaskName, "/f")
+	_ = logx.RunLogged("schtasks", "/delete", "/tn", winTaskName, "/f")
 
 	// Decide restores before the wipe and apply them after: the backups
 	// live outside the directory precisely so they survive it, and the
@@ -440,12 +441,12 @@ func (p windowsPlatform) Remove() error {
 		}
 	}
 
-	closeLog()
+	logx.Close()
 	removeWindowsDir()
 	for live, data := range restored {
 		_ = os.MkdirAll(winProgramData, 0700)
 		if err := os.WriteFile(live, data, 0600); err == nil {
-			debugf("restored the pre-existing %s", filepath.Base(live))
+			logx.Debugf("restored the pre-existing %s", filepath.Base(live))
 		}
 	}
 	return nil
@@ -473,7 +474,7 @@ func (p windowsPlatform) restoreDNS() error {
 	if err != nil {
 		return fmt.Errorf("read back DNS on adapter %s: %w", iface, err)
 	}
-	if dnsServersPointAtListener(out) {
+	if DNSServersPointAtListener(out) {
 		return fmt.Errorf("adapter %s still points at the egress listener", iface)
 	}
 	return nil
@@ -510,7 +511,7 @@ func removeWindowsDir() {
 		}
 		// A pre-existing fallback client that findWstunnel reused is not
 		// ours to delete.
-		if strings.EqualFold(entry.Name(), wstunnelExeName()) && !wstunnelIsOurs(path, wstunnelWindowsSHA256) {
+		if strings.EqualFold(entry.Name(), wstunnel.ExeName()) && !wstunnel.WstunnelIsOurs(path, wstunnelWindowsSHA256) {
 			kept = path
 			fmt.Printf("leaving %s: not installed by this tool\n", path)
 			continue
@@ -530,17 +531,17 @@ func removeWindowsDir() {
 }
 
 func (windowsPlatform) Ping(host string) bool {
-	return runLogged("ping", "-n", "2", "-w", "2000", host) == nil
+	return logx.RunLogged("ping", "-n", "2", "-w", "2000", host) == nil
 }
 
-func (windowsPlatform) WstunnelPath() (string, error) { return findWstunnel() }
+func (windowsPlatform) WstunnelPath() (string, error) { return wstunnel.Find() }
 
 // InstallWstunnel extracts the embedded fallback client. No target-side
 // download is attempted: the networks where fallback is needed commonly block
 // GitHub before the tunnel has come up.
 func (windowsPlatform) InstallWstunnel() (string, error) {
-	dest := filepath.Join(winProgramData, wstunnelExeName())
-	if err := extractEmbedded(dest, assets.Wstunnel, wstunnelWindowsSHA256); err != nil {
+	dest := filepath.Join(winProgramData, wstunnel.ExeName())
+	if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelWindowsSHA256); err != nil {
 		return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 	}
 	return dest, nil
@@ -562,7 +563,7 @@ func wireguardExe() string {
 }
 
 func tunnelServiceUp(name string) bool {
-	out, err := execLogged("sc", "query", "WireGuardTunnel$"+name)
+	out, err := logx.ExecLogged("sc", "query", "WireGuardTunnel$"+name)
 	return err == nil && strings.Contains(string(out), "RUNNING")
 }
 
@@ -571,13 +572,13 @@ func uninstallTunnel(name string) {
 	if exe == "" {
 		return
 	}
-	_ = runLogged(exe, "/uninstalltunnelservice", name)
+	_ = logx.RunLogged(exe, "/uninstalltunnelservice", name)
 }
 
 func powershell(script string) (string, error) {
-	out, err := execLogged("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	out, err := logx.ExecLogged("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	if err != nil {
-		return "", fmt.Errorf("powershell: %v (%s)", err, truncate(string(out), 400))
+		return "", fmt.Errorf("powershell: %v (%s)", err, logx.Truncate(string(out), 400))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -594,7 +595,7 @@ func digits(s string) bool {
 	return true
 }
 
-func writeDiagnosePlatform(w io.Writer) error {
+func Diagnose(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	if exe := wireguardExe(); exe != "" {
 		fmt.Fprintf(w, "  wireguard.exe: %s\n", exe)
@@ -618,7 +619,7 @@ func writeDiagnosePlatform(w io.Writer) error {
 	show(w, "schtasks", "/query", "/tn", winTaskName, "/v", "/fo", "list")
 
 	section(w, "route for aegis")
-	show(w, "route", "print", aegisIPv4)
+	show(w, "route", "print", core.AegisIPv4)
 
 	section(w, "listeners")
 	show(w, "powershell", "-NoProfile", "-Command",
@@ -632,7 +633,7 @@ func writeDiagnosePlatform(w io.Writer) error {
 			filepath.Join(winProgramData, "wstunnel.exe")))
 
 	section(w, "tunnel probe")
-	show(w, "ping", "-n", "2", "-w", "2000", aegisTunnelIP)
+	show(w, "ping", "-n", "2", "-w", "2000", core.AegisTunnelIP)
 
 	section(w, "files")
 	show(w, "powershell", "-NoProfile", "-Command",
@@ -642,7 +643,7 @@ func writeDiagnosePlatform(w io.Writer) error {
 	show(w, "icacls", winProgramData)
 
 	section(w, "log tail")
-	tailLog(w, 60)
+	logx.Tail(w, logPath(), 60)
 	return nil
 }
 

@@ -1,13 +1,15 @@
-package egress
+package platform
 
 import (
+	"egress/internal/core"
 	"errors"
 	"net"
 	"testing"
 )
 
 type identityFake struct {
-	platform
+	// embed the interface so the fake only implements what the check reads.
+	Interface
 	pubkey string
 	pubErr error
 }
@@ -28,7 +30,7 @@ func loopbackName(t *testing.T) string {
 		t.Fatal(err)
 	}
 	for _, iface := range ifaces {
-		if interfaceHasIP(iface.Name, "127.0.0.1") {
+		if InterfaceHasIP(iface.Name, "127.0.0.1") {
 			return iface.Name
 		}
 	}
@@ -39,13 +41,13 @@ func loopbackName(t *testing.T) string {
 // TestInterfaceHasIP proves the address half of the identity check.
 func TestInterfaceHasIP(t *testing.T) {
 	iface := loopbackName(t)
-	if !interfaceHasIP(iface, "127.0.0.1") {
+	if !InterfaceHasIP(iface, "127.0.0.1") {
 		t.Errorf("%s should carry 127.0.0.1", iface)
 	}
-	if interfaceHasIP(iface, "192.0.2.1") {
+	if InterfaceHasIP(iface, "192.0.2.1") {
 		t.Errorf("%s must not claim TEST-NET-1", iface)
 	}
-	if interfaceHasIP("does-not-exist-0", "127.0.0.1") {
+	if InterfaceHasIP("does-not-exist-0", "127.0.0.1") {
 		t.Error("missing interface must not match")
 	}
 }
@@ -56,31 +58,31 @@ func TestCheckTunnelIdentity(t *testing.T) {
 	iface := loopbackName(t)
 	const key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 	const other = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
-	want, err := publicKey(key)
+	want, err := core.PublicKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherPub, err := publicKey(other)
+	otherPub, err := core.PublicKey(other)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := tunnelConfig{PrivateKey: key, ClientIP: "127.0.0.1"}
+	base := core.TunnelConfig{PrivateKey: key, ClientIP: "127.0.0.1"}
 
-	if err := checkTunnelIdentityIface(identityFake{pubkey: want}, iface, base); err != nil {
+	if err := CheckTunnelIdentityIface(identityFake{pubkey: want}, iface, base); err != nil {
 		t.Errorf("matching identity must pass: %v", err)
 	}
-	if err := checkTunnelIdentityIface(identityFake{}, iface, base); err != nil {
+	if err := CheckTunnelIdentityIface(identityFake{}, iface, base); err != nil {
 		t.Errorf("unreportable key (windows) must pass on address alone: %v", err)
 	}
-	if err := checkTunnelIdentityIface(identityFake{pubkey: otherPub}, iface, base); err == nil {
+	if err := CheckTunnelIdentityIface(identityFake{pubkey: otherPub}, iface, base); err == nil {
 		t.Error("mismatched live key must fail")
 	}
 	wrongAddr := base
 	wrongAddr.ClientIP = "192.0.2.1"
-	if err := checkTunnelIdentityIface(identityFake{pubkey: want}, iface, wrongAddr); err == nil {
+	if err := CheckTunnelIdentityIface(identityFake{pubkey: want}, iface, wrongAddr); err == nil {
 		t.Error("missing address must fail")
 	}
-	if err := checkTunnelIdentityIface(identityFake{pubErr: errors.New("no wg")}, iface, base); err == nil {
+	if err := CheckTunnelIdentityIface(identityFake{pubErr: errors.New("no wg")}, iface, base); err == nil {
 		t.Error("unreadable live key must fail")
 	}
 }

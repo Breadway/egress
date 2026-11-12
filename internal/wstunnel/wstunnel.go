@@ -1,4 +1,4 @@
-package egress
+package wstunnel
 
 import (
 	"archive/tar"
@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"egress/internal/core"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,28 +27,28 @@ const wstunnelVersion = "11.1.0"
 // Pinned checksums for the platforms this tool downloads for. Add a line here
 // when a new platform or version is supported; never fetch a checksum at
 // runtime, because that would defeat the point of pinning.
-var wstunnelSums = map[string]string{
+var Sums = map[string]string{
 	"linux/amd64":   "512edf4e7bb64fc133522220123514868fae75b5bae4124b53e396787276aa23",
 	"windows/amd64": "b271d076fbba92fe3d8c9b7612bf17f4ac905d68614a6c40debd73107883d75e",
 	"darwin/amd64":  "68bf470b58f6cb7d3dcd96deb42fb5676b8810ef7751a53f7d9e3f8178a1d085",
 	"darwin/arm64":  "87fc0d68563248729c8c45359e5a7501041990145850c43c23a96e51656c2880",
 }
 
-func wstunnelExeName() string {
+func ExeName() string {
 	if runtime.GOOS == "windows" {
 		return "wstunnel.exe"
 	}
 	return "wstunnel"
 }
 
-func wstunnelAsset() string {
+func assetName() string {
 	return fmt.Sprintf("wstunnel_%s_%s_%s.tar.gz", wstunnelVersion, runtime.GOOS, runtime.GOARCH)
 }
 
-// findWstunnel looks next to the executable first so a bundled copy wins, then
+// Find looks next to the executable first so a bundled copy wins, then
 // on PATH, then in the install directory.
-func findWstunnel() (string, error) {
-	name := wstunnelExeName()
+func Find() (string, error) {
+	name := ExeName()
 	if exe, err := os.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(exe), name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -57,22 +58,22 @@ func findWstunnel() (string, error) {
 	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
 	}
-	candidate := filepath.Join(installDir(), name)
+	candidate := filepath.Join(core.InstallDir(), name)
 	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 		return candidate, nil
 	}
 	return "", errors.New("wstunnel is not installed")
 }
 
-// downloadWstunnel fetches the pinned release, verifies its checksum, and
+// Download fetches the pinned release, verifies its checksum, and
 // extracts the executable into the install directory.
-func downloadWstunnel() (string, error) {
-	sum, ok := wstunnelSums[runtime.GOOS+"/"+runtime.GOARCH]
+func Download() (string, error) {
+	sum, ok := Sums[runtime.GOOS+"/"+runtime.GOARCH]
 	if !ok {
 		return "", fmt.Errorf("no pinned wstunnel checksum for %s/%s; install it manually", runtime.GOOS, runtime.GOARCH)
 	}
 
-	url := fmt.Sprintf("https://github.com/erebe/wstunnel/releases/download/v%s/%s", wstunnelVersion, wstunnelAsset())
+	url := fmt.Sprintf("https://github.com/erebe/wstunnel/releases/download/v%s/%s", wstunnelVersion, assetName())
 	client := &http.Client{Timeout: 3 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -110,13 +111,13 @@ func downloadWstunnel() (string, error) {
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
-		if filepath.Base(header.Name) != wstunnelExeName() {
+		if filepath.Base(header.Name) != ExeName() {
 			continue
 		}
-		if err := os.MkdirAll(installDir(), 0700); err != nil {
+		if err := os.MkdirAll(core.InstallDir(), 0700); err != nil {
 			return "", err
 		}
-		dest := filepath.Join(installDir(), wstunnelExeName())
+		dest := filepath.Join(core.InstallDir(), ExeName())
 		file, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
 		if err != nil {
 			return "", err
@@ -134,18 +135,18 @@ func downloadWstunnel() (string, error) {
 	return "", errors.New("wstunnel executable not found in the archive")
 }
 
-func ensureWstunnel() (string, error) {
-	if path, err := findWstunnel(); err == nil {
+func Ensure() (string, error) {
+	if path, err := Find(); err == nil {
 		return path, nil
 	}
-	return downloadWstunnel()
+	return Download()
 }
 
 // relayListening reports whether something already holds the relay port. Go
 // does not set SO_REUSEADDR for UDP, so a second bind fails exactly when the
 // port is taken.
 func relayListening() bool {
-	conn, err := net.ListenPacket("udp", net.JoinHostPort(relayHost, relayPort))
+	conn, err := net.ListenPacket("udp", net.JoinHostPort(core.RelayHost, core.RelayPort))
 	if err != nil {
 		return true
 	}
@@ -153,8 +154,8 @@ func relayListening() bool {
 	return false
 }
 
-// wstunnelProc supervises the wstunnel child process.
-type wstunnelProc struct {
+// Proc supervises the wstunnel child process.
+type Proc struct {
 	path string
 	log  *log.Logger
 
@@ -168,13 +169,13 @@ type wstunnelProc struct {
 	done chan struct{}
 }
 
-func newWstunnelProc(path string, logger *log.Logger) *wstunnelProc {
-	return &wstunnelProc{path: path, log: logger}
+func NewProc(path string, logger *log.Logger) *Proc {
+	return &Proc{path: path, log: logger}
 }
 
 // Ensure starts the client if it is not already running, and waits until the
 // local relay accepts traffic.
-func (w *wstunnelProc) Ensure(ctx context.Context) error {
+func (w *Proc) Ensure(ctx context.Context) error {
 	w.mu.Lock()
 	alive := w.alive
 	leftover := w.cmd == nil && relayListening()
@@ -217,17 +218,17 @@ func (w *wstunnelProc) Ensure(ctx context.Context) error {
 	}
 
 	cmd := exec.Command(w.path, "client",
-		"--http-upgrade-path-prefix", wstunnelPrefix,
+		"--http-upgrade-path-prefix", core.WstunnelPrefix,
 		// Resolve the relay through the in-process DoH listener, not the
 		// system resolver. On a filtered network the system resolver can
 		// return a sinkhole, while the DoH bootstrap already knows the real
 		// Aegis address. Verification stays on: Caddy serves a valid
 		// certificate for dns.breadway.dev.
-		"--dns-resolver", "dns://"+dohListenAddr,
+		"--dns-resolver", "dns://"+core.DoHListenAddr,
 		"--dns-resolver-prefer-ipv4",
 		"--tls-verify-certificate",
-		"-L", "udp://"+net.JoinHostPort(relayHost, relayPort)+":"+net.JoinHostPort(relayHost, aegisWGPort),
-		"wss://"+dohHost,
+		"-L", "udp://"+net.JoinHostPort(core.RelayHost, core.RelayPort)+":"+net.JoinHostPort(core.RelayHost, core.AegisWGPort),
+		"wss://"+core.DoHHost,
 	)
 	cmd.Stdout = w.log.Writer()
 	cmd.Stderr = w.log.Writer()
@@ -260,7 +261,7 @@ func (w *wstunnelProc) Ensure(ctx context.Context) error {
 
 	for i := 0; i < 40; i++ {
 		if relayListening() {
-			w.log.Printf("websocket fallback relay listening on %s", net.JoinHostPort(relayHost, relayPort))
+			w.log.Printf("websocket fallback relay listening on %s", net.JoinHostPort(core.RelayHost, core.RelayPort))
 			return nil
 		}
 		select {
@@ -274,7 +275,7 @@ func (w *wstunnelProc) Ensure(ctx context.Context) error {
 	return errors.New("wstunnel started but the relay never opened")
 }
 
-func (w *wstunnelProc) Stop() {
+func (w *Proc) Stop() {
 	w.mu.Lock()
 	cmd := w.cmd
 	done := w.done
@@ -291,4 +292,26 @@ func (w *wstunnelProc) Stop() {
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// Sum returns the pinned download checksum for a target.
+func Sum(goos, goarch string) string {
+	return Sums[goos+"/"+goarch]
+}
+
+// WstunnelIsOurs reports whether path holds a copy this tool could have
+// installed: the embedded digest for this build, or the pinned download digest
+// for this platform. Anything else is the user's own copy and remove leaves it.
+func WstunnelIsOurs(path, embeddedSHA string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	if embeddedSHA != "" && core.DigestMatches(data, embeddedSHA) {
+		return true
+	}
+	if sum := Sum(runtime.GOOS, runtime.GOARCH); sum != "" && core.DigestMatches(data, sum) {
+		return true
+	}
+	return false
 }

@@ -1,6 +1,6 @@
 //go:build windows
 
-package egress
+package platform
 
 import (
 	"reflect"

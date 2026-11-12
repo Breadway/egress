@@ -1,8 +1,10 @@
-package egress
+package platform
 
 import (
 	"crypto/sha256"
 	"egress/internal/assets"
+	"egress/internal/core"
+	"egress/internal/wstunnel"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -11,7 +13,7 @@ import (
 )
 
 func TestRenderedConfigCarriesMarker(t *testing.T) {
-	cfg := renderWGConfig(tunnelConfig{ClientIP: "10.88.0.4", PrivateKey: "x", Endpoint: "e"})
+	cfg := core.RenderWGConfig(core.TunnelConfig{ClientIP: "10.88.0.4", PrivateKey: "x", Endpoint: "e"})
 	if !carriesEgressMarker([]byte(cfg)) {
 		t.Error("rendered config must carry the egress marker")
 	}
@@ -53,7 +55,7 @@ func TestBackupForeignConfig(t *testing.T) {
 	live := filepath.Join(dir, "wg0.conf")
 	bak := filepath.Join(dir, "wg0.conf.egress.bak")
 
-	if err := backupForeignConfig(live, bak); err != nil {
+	if err := BackupForeignConfig(live, bak); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(bak); !os.IsNotExist(err) {
@@ -61,7 +63,7 @@ func TestBackupForeignConfig(t *testing.T) {
 	}
 
 	_ = os.WriteFile(live, []byte("[Interface]\n# corporate\n"), 0600)
-	if err := backupForeignConfig(live, bak); err != nil {
+	if err := BackupForeignConfig(live, bak); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(bak); string(data) != "[Interface]\n# corporate\n" {
@@ -69,17 +71,17 @@ func TestBackupForeignConfig(t *testing.T) {
 	}
 
 	_ = os.WriteFile(live, []byte("[Interface]\n# other foreign\n"), 0600)
-	if err := backupForeignConfig(live, bak); err != nil {
+	if err := BackupForeignConfig(live, bak); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(bak); string(data) != "[Interface]\n# corporate\n" {
 		t.Errorf("first backup must win, holds %q", data)
 	}
 
-	ours := renderWGConfig(tunnelConfig{ClientIP: "10.88.0.4", PrivateKey: "x", Endpoint: "e"})
+	ours := core.RenderWGConfig(core.TunnelConfig{ClientIP: "10.88.0.4", PrivateKey: "x", Endpoint: "e"})
 	_ = os.WriteFile(live, []byte(ours), 0600)
 	_ = os.Remove(bak)
-	if err := backupForeignConfig(live, bak); err != nil {
+	if err := BackupForeignConfig(live, bak); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(bak); !os.IsNotExist(err) {
@@ -94,14 +96,14 @@ func TestRestoreBackedConfig(t *testing.T) {
 	live := filepath.Join(dir, "wg0.conf")
 	bak := filepath.Join(dir, "wg0.conf.egress.bak")
 
-	if restored, _ := restoreBackedConfig(live, bak); restored {
+	if restored, _ := RestoreBackedConfig(live, bak); restored {
 		t.Error("missing backup must not restore")
 	}
 
-	ours := renderWGConfig(tunnelConfig{ClientIP: "10.88.0.4", PrivateKey: "x", Endpoint: "e"})
+	ours := core.RenderWGConfig(core.TunnelConfig{ClientIP: "10.88.0.4", PrivateKey: "x", Endpoint: "e"})
 	_ = os.WriteFile(live, []byte(ours), 0600)
 	_ = os.WriteFile(bak, []byte("[Interface]\n# corporate\n"), 0600)
-	restored, err := restoreBackedConfig(live, bak)
+	restored, err := RestoreBackedConfig(live, bak)
 	if err != nil || !restored {
 		t.Fatalf("ours + backup must restore: %v", err)
 	}
@@ -114,7 +116,7 @@ func TestRestoreBackedConfig(t *testing.T) {
 
 	_ = os.WriteFile(live, []byte("[Interface]\n# user-edited\n"), 0600)
 	_ = os.WriteFile(bak, []byte("[Interface]\n# stale\n"), 0600)
-	if restored, _ := restoreBackedConfig(live, bak); restored {
+	if restored, _ := RestoreBackedConfig(live, bak); restored {
 		t.Error("a foreign live file must be left alone, not overwritten with a stale backup")
 	}
 	if data, _ := os.ReadFile(live); string(data) != "[Interface]\n# user-edited\n" {
@@ -125,11 +127,11 @@ func TestRestoreBackedConfig(t *testing.T) {
 // TestWstunnelIsOurs proves a foreign copy is never mistaken for ours.
 func TestWstunnelIsOurs(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "wstunnel")
-	if wstunnelIsOurs(missing, "00") {
+	if wstunnel.WstunnelIsOurs(missing, "00") {
 		t.Error("missing file is not ours")
 	}
 	foreign := writeTemp(t, "wstunnel", "definitely not a real binary")
-	if wstunnelIsOurs(foreign, "00") {
+	if wstunnel.WstunnelIsOurs(foreign, "00") {
 		t.Error("foreign binary must not count as ours")
 	}
 	if len(assets.Wstunnel) == 0 {
@@ -137,7 +139,7 @@ func TestWstunnelIsOurs(t *testing.T) {
 	}
 	sum := sha256.Sum256(assets.Wstunnel)
 	ours := writeTemp(t, "ours", string(assets.Wstunnel))
-	if !wstunnelIsOurs(ours, hex.EncodeToString(sum[:])) {
+	if !wstunnel.WstunnelIsOurs(ours, hex.EncodeToString(sum[:])) {
 		t.Error("embedded bytes must count as ours")
 	}
 }

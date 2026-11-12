@@ -1,4 +1,4 @@
-package egress
+package platform
 
 import (
 	"os"
@@ -16,12 +16,12 @@ func TestEnsureInstalledBinary(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root")
 	}
-	dest := installedBinaryPath()
+	dest := InstalledBinaryPath()
 	if _, err := os.Stat(dest); err == nil {
 		t.Skipf("%s already exists; refusing to overwrite a real install", dest)
 	}
 
-	got, err := ensureInstalledBinary()
+	got, err := EnsureInstalledBinary()
 	if err != nil {
 		t.Fatalf("ensureInstalledBinary: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestEnsureInstalledBinary(t *testing.T) {
 	}
 
 	// A second call must succeed and return the same path.
-	again, err := ensureInstalledBinary()
+	again, err := EnsureInstalledBinary()
 	if err != nil {
 		t.Fatalf("second ensureInstalledBinary: %v", err)
 	}

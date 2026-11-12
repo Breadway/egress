@@ -1,9 +1,12 @@
 //go:build darwin
 
-package egress
+package platform
 
 import (
 	"egress/internal/assets"
+	"egress/internal/core"
+	"egress/internal/logx"
+	"egress/internal/wstunnel"
 	"errors"
 	"fmt"
 	"io"
@@ -19,8 +22,8 @@ const (
 	darwinLabel     = "egress"
 	darwinPlistPath = "/Library/LaunchDaemons/egress.plist"
 	darwinWGDir     = "/etc/wireguard"
-	darwinWGPath    = "/etc/wireguard/" + wgInterface + ".conf"
-	darwinWGBak     = "/etc/wireguard/" + wgInterface + ".conf.egress.bak"
+	darwinWGPath    = "/etc/wireguard/" + core.WGInterface + ".conf"
+	darwinWGBak     = "/etc/wireguard/" + core.WGInterface + ".conf.egress.bak"
 	darwinLogPath   = "/var/log/egress.log"
 )
 
@@ -43,9 +46,7 @@ func wstunnelDarwinSHA() string {
 
 type darwinPlatform struct{}
 
-func newPlatform() platform { return darwinPlatform{} }
-
-func installDir() string { return "/usr/local/bin" }
+func New() Interface { return darwinPlatform{} }
 
 // spoolDir holds the pending install report. Both install and the boot
 // service run as root on macOS, so the shared temp directory works.
@@ -89,7 +90,7 @@ func parseDefaultRoutesDarwin(out string) []Route {
 }
 
 func (darwinPlatform) DefaultRoutes() ([]Route, error) {
-	out, err := execLogged("netstat", "-rn", "-f", "inet")
+	out, err := logx.ExecLogged("netstat", "-rn", "-f", "inet")
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +104,7 @@ func (darwinPlatform) DefaultRoutes() ([]Route, error) {
 // serviceForDevice maps a BSD device (en0) to its networksetup service name
 // ("Wi-Fi") by parsing `networksetup -listallhardwareports`.
 func serviceForDevice(device string) (string, error) {
-	out, err := execLogged("networksetup", "-listallhardwareports")
+	out, err := logx.ExecLogged("networksetup", "-listallhardwareports")
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +144,7 @@ func (darwinPlatform) InstallTools() error {
 	// Homebrew refuses to run as root, so install as the invoking user when
 	// this runs under sudo.
 	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" && sudoUser != "root" {
-		if err := runLogged("sudo", "-u", sudoUser, brew, "install", "wireguard-tools"); err == nil {
+		if err := logx.RunLogged("sudo", "-u", sudoUser, brew, "install", "wireguard-tools"); err == nil {
 			if _, err := exec.LookPath("wg"); err == nil {
 				return nil
 			}
@@ -153,16 +154,16 @@ func (darwinPlatform) InstallTools() error {
 	return errors.New("wireguard-tools is required and Homebrew will not run as root; run as your normal user: brew install wireguard-tools")
 }
 
-func (darwinPlatform) WriteTunnelConfig(c tunnelConfig) (bool, error) {
+func (darwinPlatform) WriteTunnelConfig(c core.TunnelConfig) (bool, error) {
 	if err := os.MkdirAll(darwinWGDir, 0700); err != nil {
 		return false, err
 	}
-	if err := backupForeignConfig(darwinWGPath, darwinWGBak); err != nil {
+	if err := BackupForeignConfig(darwinWGPath, darwinWGBak); err != nil {
 		return false, err
 	}
 	// No Table/PostUp extras: wg-quick on Darwin adds the endpoint host route
 	// itself before installing the AllowedIPs routes.
-	return writeFileChanged(darwinWGPath, []byte(renderWGConfig(c)))
+	return WriteFileChanged(darwinWGPath, []byte(core.RenderWGConfig(c)))
 }
 
 func (p darwinPlatform) StartTunnel() error {
@@ -170,15 +171,15 @@ func (p darwinPlatform) StartTunnel() error {
 		if p.hasOurPeer() {
 			return nil
 		}
-		debugf("wg0 exists without our peer; replacing it")
-		_ = runLogged("wg-quick", "down", wgInterface)
+		logx.Debugf("wg0 exists without our peer; replacing it")
+		_ = logx.RunLogged("wg-quick", "down", core.WGInterface)
 	}
-	return runLogged("wg-quick", "up", wgInterface)
+	return logx.RunLogged("wg-quick", "up", core.WGInterface)
 }
 
 // LivePublicKey returns the public key of the running tunnel interface.
 func (darwinPlatform) LivePublicKey() (string, error) {
-	out, err := exec.Command("wg", "show", wgInterface, "public-key").Output()
+	out, err := exec.Command("wg", "show", core.WGInterface, "public-key").Output()
 	if err != nil {
 		return "", err
 	}
@@ -187,12 +188,12 @@ func (darwinPlatform) LivePublicKey() (string, error) {
 
 // hasOurPeer reports whether the live interface carries our Aegis peer.
 func (darwinPlatform) hasOurPeer() bool {
-	out, err := exec.Command("wg", "show", wgInterface, "peers").Output()
+	out, err := exec.Command("wg", "show", core.WGInterface, "peers").Output()
 	if err != nil {
 		return false
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == aegisPublicKey {
+		if strings.TrimSpace(line) == core.AegisPublicKey {
 			return true
 		}
 	}
@@ -200,7 +201,7 @@ func (darwinPlatform) hasOurPeer() bool {
 }
 
 func (p darwinPlatform) StopTunnel() error {
-	_ = runLogged("wg-quick", "down", wgInterface)
+	_ = logx.RunLogged("wg-quick", "down", core.WGInterface)
 	if p.TunnelUp() {
 		return fmt.Errorf("wg0 is still up after stopping the tunnel")
 	}
@@ -208,7 +209,7 @@ func (p darwinPlatform) StopTunnel() error {
 }
 
 func (darwinPlatform) TunnelUp() bool {
-	return exec.Command("ifconfig", wgInterface).Run() == nil
+	return exec.Command("ifconfig", core.WGInterface).Run() == nil
 }
 
 func (darwinPlatform) TunnelConfigured() bool {
@@ -221,24 +222,24 @@ func (darwinPlatform) TunnelConfigured() bool {
 func (darwinPlatform) SecureInstallDir() error { return nil }
 
 func (darwinPlatform) EnsureEndpoint(endpoint string) error {
-	out, err := execLogged("wg", "show", wgInterface, "endpoints")
+	out, err := logx.ExecLogged("wg", "show", core.WGInterface, "endpoints")
 	if err != nil {
 		return fmt.Errorf("read wireguard endpoints: %w", err)
 	}
 	current := ""
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == aegisPublicKey {
+		if len(fields) == 2 && fields[0] == core.AegisPublicKey {
 			current = fields[1]
 			break
 		}
 	}
 	if current == endpoint {
-		debugf("endpoint already %s", endpoint)
+		logx.Debugf("endpoint already %s", endpoint)
 		return nil
 	}
-	debugf("endpoint %s -> %s", current, endpoint)
-	return runLogged("wg", "set", wgInterface, "peer", aegisPublicKey, "endpoint", endpoint)
+	logx.Debugf("endpoint %s -> %s", current, endpoint)
+	return logx.RunLogged("wg", "set", core.WGInterface, "peer", core.AegisPublicKey, "endpoint", endpoint)
 }
 
 // RepinEndpoint re-points the Aegis address at the new gateway. wg-quick owns
@@ -246,10 +247,10 @@ func (darwinPlatform) EnsureEndpoint(endpoint string) error {
 // roam cannot strand Aegis traffic on the old gateway.
 func (darwinPlatform) RepinEndpoint(gateway, iface string) error {
 	if gateway == "" {
-		return fmt.Errorf("no default gateway to pin %s to", aegisIPv4)
+		return fmt.Errorf("no default gateway to pin %s to", core.AegisIPv4)
 	}
-	_ = runLogged("route", "delete", "-host", aegisIPv4)
-	return runLogged("route", "add", "-host", aegisIPv4, gateway)
+	_ = logx.RunLogged("route", "delete", "-host", core.AegisIPv4)
+	return logx.RunLogged("route", "add", "-host", core.AegisIPv4, gateway)
 }
 
 func (darwinPlatform) ApplyDNS(iface, gateway string) error {
@@ -257,7 +258,7 @@ func (darwinPlatform) ApplyDNS(iface, gateway string) error {
 	if err != nil {
 		return err
 	}
-	return runLogged("networksetup", "-setdnsservers", service, "127.0.0.1")
+	return logx.RunLogged("networksetup", "-setdnsservers", service, "127.0.0.1")
 }
 
 func (darwinPlatform) EnsureDNS(iface, gateway string) error {
@@ -265,11 +266,11 @@ func (darwinPlatform) EnsureDNS(iface, gateway string) error {
 	if err != nil {
 		return nil
 	}
-	out, err := execLogged("networksetup", "-getdnsservers", service)
+	out, err := logx.ExecLogged("networksetup", "-getdnsservers", service)
 	if err == nil && strings.Contains(string(out), "127.0.0.1") {
 		return nil
 	}
-	return runLogged("networksetup", "-setdnsservers", service, "127.0.0.1")
+	return logx.RunLogged("networksetup", "-setdnsservers", service, "127.0.0.1")
 }
 
 func (darwinPlatform) restoreDNS() error {
@@ -281,7 +282,7 @@ func (darwinPlatform) restoreDNS() error {
 	if err != nil {
 		return err
 	}
-	if err := runLogged("networksetup", "-setdnsservers", service, "Empty"); err != nil {
+	if err := logx.RunLogged("networksetup", "-setdnsservers", service, "Empty"); err != nil {
 		return fmt.Errorf("reset DNS on %s: %w", service, err)
 	}
 	// Read back: the adapter must not still point at our listener, or
@@ -290,7 +291,7 @@ func (darwinPlatform) restoreDNS() error {
 	if err != nil {
 		return fmt.Errorf("read back DNS on %s: %w", service, err)
 	}
-	if dnsServersPointAtListener(string(out)) {
+	if DNSServersPointAtListener(string(out)) {
 		return fmt.Errorf("%s still points at the egress listener", service)
 	}
 	return nil
@@ -318,8 +319,8 @@ func (darwinPlatform) InstallService(exePath string, args []string) error {
 	if err := os.WriteFile(darwinPlistPath, []byte(b.String()), 0644); err != nil {
 		return err
 	}
-	_ = runLogged("launchctl", "bootout", "system/"+darwinLabel)
-	return runLogged("launchctl", "bootstrap", "system", darwinPlistPath)
+	_ = logx.RunLogged("launchctl", "bootout", "system/"+darwinLabel)
+	return logx.RunLogged("launchctl", "bootstrap", "system", darwinPlistPath)
 }
 
 func plistEscape(s string) string {
@@ -333,11 +334,11 @@ func plistEscape(s string) string {
 }
 
 func (darwinPlatform) StartService() error {
-	return runLogged("launchctl", "kickstart", "-k", "system/"+darwinLabel)
+	return logx.RunLogged("launchctl", "kickstart", "-k", "system/"+darwinLabel)
 }
 
 func (darwinPlatform) StopService() error {
-	_ = runLogged("launchctl", "bootout", "system/"+darwinLabel)
+	_ = logx.RunLogged("launchctl", "bootout", "system/"+darwinLabel)
 	return nil
 }
 
@@ -355,10 +356,10 @@ func (darwinPlatform) Enable() error {
 	if _, err := os.Stat(darwinPlistPath); err != nil {
 		return errors.New("egress is not installed; run install first")
 	}
-	if err := runLogged("launchctl", "enable", "system/"+darwinLabel); err != nil {
+	if err := logx.RunLogged("launchctl", "enable", "system/"+darwinLabel); err != nil {
 		return err
 	}
-	return runLogged("launchctl", "kickstart", "-k", "system/"+darwinLabel)
+	return logx.RunLogged("launchctl", "kickstart", "-k", "system/"+darwinLabel)
 }
 
 // Disable stops the resolver and the tunnel now, prevents both from starting
@@ -366,7 +367,7 @@ func (darwinPlatform) Enable() error {
 // stay so Enable is cheap.
 func (p darwinPlatform) Disable() error {
 	_ = p.StopService()
-	_ = runLogged("launchctl", "disable", "system/"+darwinLabel)
+	_ = logx.RunLogged("launchctl", "disable", "system/"+darwinLabel)
 	_ = p.StopTunnel()
 	return p.restoreDNS()
 }
@@ -375,37 +376,37 @@ func (p darwinPlatform) Disable() error {
 func (p darwinPlatform) Remove() error {
 	_ = p.Disable()
 	_ = os.Remove(darwinPlistPath)
-	if restored, _ := restoreBackedConfig(darwinWGPath, darwinWGBak); restored {
-		debugf("restored the pre-existing %s", darwinWGPath)
+	if restored, _ := RestoreBackedConfig(darwinWGPath, darwinWGBak); restored {
+		logx.Debugf("restored the pre-existing %s", darwinWGPath)
 	} else {
 		_ = os.Remove(darwinWGPath)
 	}
 
-	closeLog()
+	logx.Close()
 	_ = os.Remove(darwinLogPath)
 	_ = os.Remove(darwinLogPath + ".old")
 
-	if wstunnelIsOurs(filepath.Join(installDir(), "wstunnel"), wstunnelDarwinSHA()) {
-		_ = os.Remove(filepath.Join(installDir(), "wstunnel"))
+	if wstunnel.WstunnelIsOurs(filepath.Join(core.InstallDir(), "wstunnel"), wstunnelDarwinSHA()) {
+		_ = os.Remove(filepath.Join(core.InstallDir(), "wstunnel"))
 	} else {
-		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(installDir(), "wstunnel"))
+		fmt.Printf("leaving %s: not installed by this tool\n", filepath.Join(core.InstallDir(), "wstunnel"))
 	}
-	removeInstalledBinary()
+	RemoveInstalledBinary()
 	return nil
 }
 
 func (darwinPlatform) Ping(host string) bool {
-	return runLogged("ping", "-c", "2", "-t", "2", "-i", "0.5", "-n", "-q", host) == nil
+	return logx.RunLogged("ping", "-c", "2", "-t", "2", "-i", "0.5", "-n", "-q", host) == nil
 }
 
-func (darwinPlatform) WstunnelPath() (string, error) { return findWstunnel() }
+func (darwinPlatform) WstunnelPath() (string, error) { return wstunnel.Find() }
 
 // InstallWstunnel extracts the embedded fallback client. A dev build without
 // embedded assets still falls back to the pinned download.
 func (darwinPlatform) InstallWstunnel() (string, error) {
 	if len(assets.Wstunnel) > 0 {
-		dest := filepath.Join(installDir(), wstunnelExeName())
-		if err := extractEmbedded(dest, assets.Wstunnel, wstunnelDarwinSHA()); err != nil {
+		dest := filepath.Join(core.InstallDir(), wstunnel.ExeName())
+		if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelDarwinSHA()); err != nil {
 			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 		}
 		if err := os.Chmod(dest, 0755); err != nil {
@@ -413,10 +414,10 @@ func (darwinPlatform) InstallWstunnel() (string, error) {
 		}
 		return dest, nil
 	}
-	return ensureWstunnel()
+	return wstunnel.Ensure()
 }
 
-func writeDiagnosePlatform(w io.Writer) error {
+func Diagnose(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	if _, err := exec.LookPath("wg"); err == nil {
 		fmt.Fprintf(w, "  wireguard-tools: present\n")
@@ -437,7 +438,7 @@ func writeDiagnosePlatform(w io.Writer) error {
 	}
 
 	section(w, "wireguard")
-	show(w, "wg", "show", wgInterface)
+	show(w, "wg", "show", core.WGInterface)
 
 	section(w, "listeners")
 	show(w, "sh", "-c", "netstat -anv 2>/dev/null | grep -E '\\.(7103|7108)' || echo none")
@@ -446,12 +447,12 @@ func writeDiagnosePlatform(w io.Writer) error {
 	show(w, "sh", "-c", "launchctl list 2>/dev/null | grep -E 'egress' || echo not loaded")
 
 	section(w, "tunnel probe")
-	show(w, "ping", "-c", "2", "-t", "2", "-n", aegisTunnelIP)
+	show(w, "ping", "-c", "2", "-t", "2", "-n", core.AegisTunnelIP)
 
 	section(w, "wstunnel")
 	show(w, "sh", "-c", "command -v wstunnel || ls -l /usr/local/bin/wstunnel 2>/dev/null || echo not found")
 
 	section(w, "log tail")
-	tailLog(w, 40)
+	logx.Tail(w, logPath(), 40)
 	return nil
 }

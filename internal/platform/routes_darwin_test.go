@@ -1,6 +1,6 @@
 //go:build darwin
 
-package egress
+package platform
 
 import "testing"
 
