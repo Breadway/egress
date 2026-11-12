@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -318,9 +319,30 @@ func newRouteManager(dev string, logger *log.Logger) *routeManager {
 		dev:    dev,
 		log:    logger,
 		routes: map[string]time.Time{},
-		run: func(args ...string) error {
-			return exec.Command("ip", args...).Run()
-		},
+		run:    routeCommands(dev),
+	}
+}
+
+// routeCommands returns the host-route commands for the current platform.
+// Linux uses iproute2; macOS uses the BSD route(8) syntax. Both are scoped to
+// the tunnel interface, so the physical link is untouched.
+func routeCommands(dev string) routeRunner {
+	if runtime.GOOS == "darwin" {
+		return func(args ...string) error {
+			switch args[0] {
+			case "route":
+				switch args[1] {
+				case "replace":
+					return exec.Command("route", "-n", "add", "-host", args[2], "-interface", dev).Run()
+				case "del":
+					return exec.Command("route", "-n", "delete", "-host", args[2]).Run()
+				}
+			}
+			return fmt.Errorf("unsupported route command %q", args)
+		}
+	}
+	return func(args ...string) error {
+		return exec.Command("ip", args...).Run()
 	}
 }
 
@@ -352,9 +374,9 @@ func (m *routeManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
 			oldest := m.order[0]
 			m.order = m.order[1:]
 			delete(m.routes, oldest)
-			_ = m.run("route", "del", oldest+"/32", "dev", m.dev)
+			_ = m.run("del", oldest)
 		}
-		if err := m.run("route", "replace", key+"/32", "dev", m.dev); err != nil {
+		if err := m.run("replace", key); err != nil {
 			debugf("split: route add %s failed: %v", key, err)
 			continue
 		}
@@ -377,7 +399,7 @@ func (m *routeManager) Cleanup(now time.Time) {
 			continue
 		}
 		if now.After(expiry) {
-			_ = m.run("route", "del", key+"/32", "dev", m.dev)
+			_ = m.run("del", key)
 			delete(m.routes, key)
 			continue
 		}
@@ -398,7 +420,7 @@ func (m *routeManager) Remove(keys []string) {
 		if _, ok := m.routes[key]; !ok {
 			continue
 		}
-		_ = m.run("route", "del", key+"/32", "dev", m.dev)
+		_ = m.run("del", key)
 		delete(m.routes, key)
 	}
 }
@@ -411,7 +433,7 @@ func (m *routeManager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, key := range m.order {
-		_ = m.run("route", "del", key+"/32", "dev", m.dev)
+		_ = m.run("del", key)
 	}
 	m.routes = map[string]time.Time{}
 	m.order = nil

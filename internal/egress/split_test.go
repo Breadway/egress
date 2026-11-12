@@ -298,7 +298,7 @@ func TestRouteManagerAddCleanup(t *testing.T) {
 	if rm.Count() != 2 {
 		t.Fatalf("count: %d", rm.Count())
 	}
-	if len(calls) != 2 || calls[0][0] != "route" || calls[0][1] != "replace" {
+	if len(calls) != 2 || calls[0][0] != "replace" {
 		t.Fatalf("calls: %v", calls)
 	}
 	rm.Cleanup(now.Add(routeMinTTL + time.Minute))
@@ -326,7 +326,7 @@ func TestRouteManagerRemove(t *testing.T) {
 	}
 	found := false
 	for _, call := range calls {
-		if len(call) > 2 && call[1] == "del" && call[2] == "1.2.3.4/32" {
+		if len(call) > 1 && call[0] == "del" && call[1] == "1.2.3.4" {
 			found = true
 		}
 	}
@@ -355,7 +355,7 @@ func TestSplitControllerRoutesBlockedDomain(t *testing.T) {
 	if rm.Count() != 1 {
 		t.Fatalf("blocked answer did not route: %v", calls)
 	}
-	if len(calls) != 1 || calls[0][1] != "replace" {
+	if len(calls) != 1 || calls[0][0] != "replace" {
 		t.Fatalf("calls: %v", calls)
 	}
 }

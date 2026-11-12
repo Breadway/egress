@@ -1,0 +1,26 @@
+[Unit]
+Description=Shape egress tunnel traffic so no device starves the link
+After=wg-quick@wg0.service
+Requires=wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Total tunnel ceiling and a per-peer ceiling. Only traffic inside wg0 is
+# shaped, so the physical link and everything else on the machine are
+# untouched. Classes are keyed by the tunnel address, so each device has its
+# own limit and none can take the whole tunnel.
+ExecStart=/bin/sh -c '\
+tc qdisc add dev wg0 root handle 1: htb default 20; \
+tc class add dev wg0 parent 1: classid 1:1 htb rate 20mbit ceil 20mbit; \
+tc class add dev wg0 parent 1:1 classid 1:20 htb rate 2mbit ceil 2mbit prio 7; \
+tc qdisc add dev wg0 parent 1:20 handle 20: fq_codel; \
+for i in $(seq 2 254); do \
+  tc class add dev wg0 parent 1:1 classid 1:$i htb rate 2mbit ceil 2mbit prio 7; \
+  tc filter add dev wg0 protocol ip parent 1: prio 1 u32 match ip dst 10.88.0.$i/32 flowid 1:$i; \
+  tc qdisc add dev wg0 parent 1:$i handle $i: fq_codel; \
+done'
+ExecStop=/sbin/tc qdisc del dev wg0 root
+
+[Install]
+WantedBy=multi-user.target
