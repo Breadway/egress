@@ -1,6 +1,6 @@
 //go:build !windows
 
-package egress
+package health
 
 import (
 	"os"

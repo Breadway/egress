@@ -32,18 +32,6 @@ const (
 	regDWORD        = 4
 )
 
-
-
-
-
-
-
-
-
-
-
-
-
 // proxyNetworkAllowed applies the SSID allowlist to the per-user proxy. It
 // clears the PAC and returns false when this network is not one the owner
 // listed, so the machine browses direct instead of filtering.
@@ -60,10 +48,6 @@ func proxyNetworkAllowed() bool {
 	appLogger().Printf("proxy: network %q is not in networks.txt; staying direct", ssid)
 	return false
 }
-
-
-
-
 
 var (
 	user32                  = syscall.NewLazyDLL("user32.dll")

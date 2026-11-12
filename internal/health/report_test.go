@@ -1,6 +1,7 @@
-package egress
+package health
 
 import (
+	"egress/internal/platform"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,11 +23,11 @@ func TestSpoolPathContract(t *testing.T) {
 	if filepath.Base(path) != "egress-pending-report.json" {
 		t.Errorf("spool file = %q", path)
 	}
-	if filepath.Dir(path) != spoolDir() {
-		t.Errorf("spool dir = %q, want spoolDir %q", filepath.Dir(path), spoolDir())
+	if filepath.Dir(path) != platform.SpoolDir() {
+		t.Errorf("spool dir = %q, want spoolDir %q", filepath.Dir(path), platform.SpoolDir())
 	}
-	if info, err := os.Stat(spoolDir()); err == nil && !info.IsDir() {
-		t.Errorf("spoolDir %q is not a directory", spoolDir())
+	if info, err := os.Stat(platform.SpoolDir()); err == nil && !info.IsDir() {
+		t.Errorf("spoolDir %q is not a directory", platform.SpoolDir())
 	}
 }
 

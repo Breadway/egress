@@ -9,6 +9,3 @@ import "errors"
 func cmdSplitUser([]string) error {
 	return errors.New("split-user is Windows only")
 }
-
-// checkWindowsSplit is empty off Windows: there is no split client to probe.
-func checkWindowsSplit() string { return "" }

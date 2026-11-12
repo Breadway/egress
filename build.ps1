@@ -114,7 +114,7 @@ if ($DefaultSplit) { $splitLdflag = " -X egress/internal/egress.embeddedDefaultS
 if ($DebugBuild) { $debugLdflag = " -X egress/internal/egress.defaultDebug=true" }
 
 & go build -tags delivery -trimpath -buildvcs=false `
-    -ldflags "-s -w -X egress/internal/egress.embeddedKey=$Key -X egress/internal/egress.embeddedClientIP=$IP -X egress/internal/egress.buildVersion=$Version$debugLdflag$updateLdflag$socksLdflag$splitLdflag" `
+    -ldflags "-s -w -X egress/internal/egress.embeddedKey=$Key -X egress/internal/egress.embeddedClientIP=$IP -X egress/internal/core.BuildVersion=$Version$debugLdflag$updateLdflag$socksLdflag$splitLdflag" `
     -o $Out .
 if ($LASTEXITCODE -ne 0) { Fail "go build failed" }
 

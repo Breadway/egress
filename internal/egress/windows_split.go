@@ -6,7 +6,6 @@ import (
 	"egress/internal/split"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,13 +69,13 @@ func applyUserSplit(exe, authPath string) error {
 	}
 	// Start the proxy and prove it answers before pointing the browser at it.
 	// A PAC that names a dead port is worse than no PAC (EGRESS-98).
-	if !proxyListening() {
+	if !split.ProxyListening() {
 		cmd := exec.Command(exe, "proxy", "--tray", "--start-relay", "--socks-auth", authPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		if err := cmd.Start(); err != nil {
 			return err
 		}
-		if err := waitForProxy(15 * time.Second); err != nil {
+		if err := split.WaitForProxy(15 * time.Second); err != nil {
 			return err
 		}
 	}
@@ -138,40 +137,6 @@ func writePAC() (string, error) {
 		return "", fmt.Errorf("grant users read on %s: %v: %s", path, err, strings.TrimSpace(string(out)))
 	}
 	return path, nil
-}
-
-// proxyListening reports whether the local split proxy accepts connections.
-func proxyListening() bool {
-	c, err := net.DialTimeout("tcp", proxyListenAddr, time.Second)
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
-}
-
-// waitForProxy blocks until the proxy binds its listen address.
-func waitForProxy(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if proxyListening() {
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("split proxy did not start on %s", proxyListenAddr)
-}
-
-// checkWindowsSplit reports the split client's health for install reports and
-// verify. An empty string means "not applicable".
-func checkWindowsSplit() string {
-	if !proxyListening() {
-		return "proxy not listening on " + proxyListenAddr
-	}
-	if _, err := os.Stat(pacFilePath()); err != nil {
-		return "PAC missing at " + pacFilePath()
-	}
-	return "ok"
 }
 
 // runningAsSystem reports whether this process was started by the task

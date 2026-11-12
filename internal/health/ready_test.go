@@ -1,6 +1,8 @@
-package egress
+package health
 
 import (
+	"egress/internal/core"
+	"egress/internal/platform"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,7 +14,7 @@ func TestReadyMarkerRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TMPDIR", dir)
 
-	if err := writeReadyMarker(); err != nil {
+	if err := WriteReadyMarker(); err != nil {
 		t.Fatal(err)
 	}
 	pid, age, err := readReadyMarker()
@@ -25,7 +27,7 @@ func TestReadyMarkerRoundTrip(t *testing.T) {
 	if age < 0 || age > time.Minute {
 		t.Errorf("age = %v, want a few seconds", age)
 	}
-	removeReadyMarker()
+	RemoveReadyMarker()
 	if _, err := os.Stat(filepath.Join(dir, "egress-ready")); !os.IsNotExist(err) {
 		t.Error("marker still on disk after removal")
 	}
@@ -64,11 +66,11 @@ type readyFake struct {
 	active bool
 }
 
-func (f readyFake) RequirePrivilege() error               { return nil }
-func (f readyFake) DefaultRoute() (string, string, error) { return "", "", nil }
-func (f readyFake) DefaultRoutes() ([]Route, error)       { return nil, nil }
-func (f readyFake) InstallTools() error                   { return nil }
-func (f readyFake) WriteTunnelConfig(tunnelConfig) (bool, error) {
+func (f readyFake) RequirePrivilege() error                  { return nil }
+func (f readyFake) DefaultRoute() (string, string, error)    { return "", "", nil }
+func (f readyFake) DefaultRoutes() ([]platform.Route, error) { return nil, nil }
+func (f readyFake) InstallTools() error                      { return nil }
+func (f readyFake) WriteTunnelConfig(core.TunnelConfig) (bool, error) {
 	return false, nil
 }
 func (f readyFake) StartTunnel() error                    { return nil }
@@ -98,26 +100,26 @@ func TestCheckSupervisorLive(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TMPDIR", dir)
 
-	if err := checkSupervisorLive(readyFake{active: false}, 0); err == nil {
+	if err := CheckSupervisorLive(readyFake{active: false}, 0); err == nil {
 		t.Error("inactive service must fail even with a good marker")
 	}
-	if err := writeReadyMarker(); err != nil {
+	if err := WriteReadyMarker(); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkSupervisorLive(readyFake{active: true}, readyMarkerMaxAge); err != nil {
+	if err := CheckSupervisorLive(readyFake{active: true}, ReadyMarkerMaxAge); err != nil {
 		t.Errorf("fresh marker + active service must pass: %v", err)
 	}
-	if err := checkSupervisorLive(readyFake{active: true}, 0); err != nil {
+	if err := CheckSupervisorLive(readyFake{active: true}, 0); err != nil {
 		t.Errorf("verify mode (no age limit) must pass: %v", err)
 	}
 	old := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(filepath.Join(dir, "egress-ready"), old, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkSupervisorLive(readyFake{active: true}, readyMarkerMaxAge); err == nil {
+	if err := CheckSupervisorLive(readyFake{active: true}, ReadyMarkerMaxAge); err == nil {
 		t.Error("hour-old marker must fail the install freshness check")
 	}
-	if err := checkSupervisorLive(readyFake{active: true}, 0); err != nil {
+	if err := CheckSupervisorLive(readyFake{active: true}, 0); err != nil {
 		t.Errorf("verify mode must accept an old marker from a live process: %v", err)
 	}
 }

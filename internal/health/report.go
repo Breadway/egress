@@ -1,9 +1,12 @@
-package egress
+package health
 
 import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"egress/internal/core"
+	"egress/internal/logx"
+	"egress/internal/platform"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,19 +24,19 @@ import (
 // Reports carry no secrets, only diagnostics. Sending never fails the local
 // command; failures are spooled and retried later.
 type reportPayload struct {
-	Pubkey   string       `json:"pubkey"`
-	OS       string       `json:"os"`
-	Arch     string       `json:"arch"`
-	IP       string       `json:"ip"`
-	Version  string       `json:"version"`
-	Status   string       `json:"status"`          // functional, partial, or failed
-	State    string       `json:"state,omitempty"` // installed, disabled
-	Checks   checkResults `json:"checks"`
-	Error    string       `json:"error,omitempty"`
-	Parked   bool         `json:"parked,omitempty"`
-	Diagnose string       `json:"diagnose,omitempty"`
-	Log      string       `json:"log,omitempty"`
-	TS       string       `json:"ts"`
+	Pubkey   string  `json:"pubkey"`
+	OS       string  `json:"os"`
+	Arch     string  `json:"arch"`
+	IP       string  `json:"ip"`
+	Version  string  `json:"version"`
+	Status   string  `json:"status"`          // functional, partial, or failed
+	State    string  `json:"state,omitempty"` // installed, disabled
+	Checks   Results `json:"checks"`
+	Error    string  `json:"error,omitempty"`
+	Parked   bool    `json:"parked,omitempty"`
+	Diagnose string  `json:"diagnose,omitempty"`
+	Log      string  `json:"log,omitempty"`
+	TS       string  `json:"ts"`
 }
 
 // pendingReportPath is deliberately boring: TempDir survives long enough for
@@ -42,31 +45,31 @@ type reportPayload struct {
 // TempDir is per-user there, so a report spooled by the elevated installer
 // would never be seen by the SYSTEM supervisor, or vice versa.
 func pendingReportPath() string {
-	return filepath.Join(spoolDir(), "egress-pending-report.json")
+	return filepath.Join(platform.SpoolDir(), "egress-pending-report.json")
 }
 
 func collectDiagnose() string {
 	var b strings.Builder
-	if err := writeDiagnose(&b); err != nil {
+	if err := WriteDiagnose(&b); err != nil {
 		fmt.Fprintf(&b, "\ndiagnose error: %v\n", err)
 	}
-	return truncate(b.String(), 12<<10)
+	return logx.Truncate(b.String(), 12<<10)
 }
 
 func collectLogTail() string {
 	var b strings.Builder
-	tailLog(&b, 40)
-	return truncate(b.String(), 8<<10)
+	logx.Tail(&b, platform.LogPath(), 40)
+	return logx.Truncate(b.String(), 8<<10)
 }
 
-func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error, parked bool) ([]byte, error) {
+func BuildReport(tcfg core.TunnelConfig, results Results, verifyErr error, parked bool) ([]byte, error) {
 	pub := tcfg.ReportPubkey
 	if pub == "" && tcfg.PrivateKey != "" {
-		if derived, err := publicKey(tcfg.PrivateKey); err == nil {
+		if derived, err := core.PublicKey(tcfg.PrivateKey); err == nil {
 			pub = derived
 		}
 	}
-	status := results.grade()
+	status := results.Grade()
 	// A recorded failure is a failed install even when every probe passed:
 	// a later setup step failed and the install is parked, not healthy.
 	if verifyErr != nil {
@@ -77,14 +80,14 @@ func buildReport(tcfg tunnelConfig, results checkResults, verifyErr error, parke
 		OS:      runtime.GOOS,
 		Arch:    runtime.GOARCH,
 		IP:      tcfg.ClientIP,
-		Version: reportVersion(),
+		Version: buildVersion(),
 		Status:  status,
 		Parked:  parked,
 		Checks:  results,
 		TS:      time.Now().UTC().Format(time.RFC3339),
 	}
 	if verifyErr != nil {
-		payload.Error = truncate(verifyErr.Error(), 2000)
+		payload.Error = logx.Truncate(verifyErr.Error(), 2000)
 	}
 	// Diagnose runs last so it captures the failure state, not the setup.
 	payload.Diagnose = collectDiagnose()
@@ -119,28 +122,28 @@ func spooledReportStale(data []byte, modTime, now time.Time) bool {
 	return now.Sub(modTime) > maxSpoolAge
 }
 
-func spoolReport(data []byte) {
+func SpoolReport(data []byte) {
 	// The spool directory is the install directory on Windows, which may
 	// not exist yet on the very first failure paths.
-	_ = os.MkdirAll(spoolDir(), 0700)
+	_ = os.MkdirAll(platform.SpoolDir(), 0700)
 	_ = os.WriteFile(pendingReportPath(), data, 0600)
 }
 
 // sendReport POSTs to the enrollment site. It tries the system path first,
 // then dials the known Aegis address directly with the right SNI, so a
 // poisoned local resolver cannot block the report on a filtered network.
-func sendReport(data []byte) error {
+func SendReport(data []byte) error {
 	directErr := postReport(data, nil)
 	if directErr == nil {
 		return nil
 	}
-	for _, ip := range []string{aegisIPv4} {
+	for _, ip := range []string{core.AegisIPv4} {
 		transport := &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				d := &net.Dialer{Timeout: 8 * time.Second}
 				return d.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
 			},
-			TLSClientConfig: &tls.Config{ServerName: reportHost, MinVersion: tls.VersionTLS12},
+			TLSClientConfig: &tls.Config{ServerName: core.ReportHost, MinVersion: tls.VersionTLS12},
 		}
 		if err := postReportWith(data, transport); err == nil {
 			return nil
@@ -153,14 +156,14 @@ func postReport(data []byte, dial func(ctx context.Context, network, addr string
 	transport := &http.Transport{}
 	if dial != nil {
 		transport.DialContext = dial
-		transport.TLSClientConfig = &tls.Config{ServerName: reportHost, MinVersion: tls.VersionTLS12}
+		transport.TLSClientConfig = &tls.Config{ServerName: core.ReportHost, MinVersion: tls.VersionTLS12}
 	}
 	return postReportWith(data, transport)
 }
 
 func postReportWith(data []byte, transport *http.Transport) error {
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
-	resp, err := client.Post(reportURL, "application/json", bytes.NewReader(data))
+	resp, err := client.Post(core.ReportURL, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -176,7 +179,7 @@ func postReportWith(data []byte, transport *http.Transport) error {
 // there is nothing to send: one stat call. Spooled reports older than
 // maxSpoolAge are dropped: a stale failure resurrected months later would
 // arrive looking like current device health.
-func flushPendingReport() {
+func FlushPendingReport() {
 	path := pendingReportPath()
 	info, err := os.Stat(path)
 	if err != nil {
@@ -191,27 +194,27 @@ func flushPendingReport() {
 		return
 	}
 	if spooledReportStale(data, info.ModTime(), time.Now()) {
-		debugf("dropping stale spooled report")
+		logx.Debugf("dropping stale spooled report")
 		_ = os.Remove(path)
 		return
 	}
-	if err := sendReport(data); err != nil {
-		debugf("pending report still unsent: %v", err)
+	if err := SendReport(data); err != nil {
+		logx.Debugf("pending report still unsent: %v", err)
 		return
 	}
 	_ = os.Remove(path)
-	debugf("pending install report delivered")
+	logx.Debugf("pending install report delivered")
 }
 
-// deviceIdentity is the non-secret half of a device's tunnel identity, kept on
+// DeviceIdentity is the non-secret half of a device's tunnel identity, kept on
 // disk so split installs and generic updates can identify themselves in install
 // reports without holding a private key.
-type deviceIdentity struct {
+type DeviceIdentity struct {
 	Pubkey string `json:"pubkey"`
 	IP     string `json:"ip,omitempty"`
 }
 
-func deviceIdentityPath() string {
+func DeviceIdentityPath() string {
 	switch runtime.GOOS {
 	case "windows":
 		return `C:\ProgramData\egress\device.json`
@@ -225,9 +228,9 @@ func deviceIdentityPath() string {
 	}
 }
 
-func loadDeviceIdentity() (deviceIdentity, error) {
-	var id deviceIdentity
-	data, err := os.ReadFile(deviceIdentityPath())
+func LoadDeviceIdentity() (DeviceIdentity, error) {
+	var id DeviceIdentity
+	data, err := os.ReadFile(DeviceIdentityPath())
 	if err != nil {
 		return id, err
 	}
@@ -237,8 +240,8 @@ func loadDeviceIdentity() (deviceIdentity, error) {
 	return id, nil
 }
 
-func saveDeviceIdentity(id deviceIdentity) error {
-	path := deviceIdentityPath()
+func SaveDeviceIdentity(id DeviceIdentity) error {
+	path := DeviceIdentityPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -251,4 +254,27 @@ func saveDeviceIdentity(id deviceIdentity) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// SendState reports a device that was disabled or enabled outside install.
+// Best effort: a report must never fail the command.
+func SendState(pubkey, ip, version, state, status, msg string) {
+	payload := reportPayload{
+		Pubkey:  pubkey,
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
+		IP:      ip,
+		Version: version,
+		Status:  status,
+		State:   state,
+		Error:   msg,
+		TS:      time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if err := SendReport(data); err != nil {
+		logx.Debugf("state report unsent: %v", err)
+	}
 }

@@ -1,6 +1,8 @@
-package egress
+package supervisor
 
 import (
+	"egress/internal/core"
+	"egress/internal/platform"
 	"errors"
 	"log"
 	"os"
@@ -11,11 +13,11 @@ type relayFake struct {
 	pingOK bool
 }
 
-func (f *relayFake) RequirePrivilege() error               { return nil }
-func (f *relayFake) DefaultRoute() (string, string, error) { return "", "", errors.New("none") }
-func (f *relayFake) DefaultRoutes() ([]Route, error)       { return nil, errors.New("none") }
-func (f *relayFake) InstallTools() error                   { return nil }
-func (f *relayFake) WriteTunnelConfig(tunnelConfig) (bool, error) {
+func (f *relayFake) RequirePrivilege() error                  { return nil }
+func (f *relayFake) DefaultRoute() (string, string, error)    { return "", "", errors.New("none") }
+func (f *relayFake) DefaultRoutes() ([]platform.Route, error) { return nil, errors.New("none") }
+func (f *relayFake) InstallTools() error                      { return nil }
+func (f *relayFake) WriteTunnelConfig(core.TunnelConfig) (bool, error) {
 	return false, nil
 }
 func (f *relayFake) StartTunnel() error                    { return nil }
@@ -43,8 +45,8 @@ func (f *relayFake) InstallWstunnel() (string, error)      { return "", nil }
 // signal: a blackholed WebSocket with a listening port must count up toward
 // a restart instead of sitting silent until the next UDP trial.
 func TestProbeRelayCountsFailures(t *testing.T) {
-	newSup := func(pingOK bool) *supervisor {
-		return newSupervisor(&relayFake{pingOK: pingOK}, nil, nil,
+	newSup := func(pingOK bool) *Supervisor {
+		return New(&relayFake{pingOK: pingOK}, nil, nil,
 			log.New(os.Stderr, "test: ", 0), true, true)
 	}
 
