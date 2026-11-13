@@ -65,7 +65,17 @@ matches=$(awk -F'\t' -v l="$name" '$1 == l { count++; row = $0 } END { if (count
         die "no peer labelled '$name' in $registry"
     }
 
-IFS=$'\t' read -r label ip pub key_path binary registered_host created comment <<< "$matches"
+# Parse field by field: bash read collapses empty tab-separated fields, and a
+# provisional row (no binaries yet) is exactly that case.
+field() { printf '%s' "$matches" | awk -F'\t' -v n="$1" '{print $n}'; }
+label=$(field 1)
+ip=$(field 2)
+pub=$(field 3)
+key_path=$(field 4)
+binary=$(field 5)
+registered_host=$(field 6)
+created=$(field 7)
+comment=$(field 8)
 [ -n "$comment" ] || die "registry entry for '$name' is incomplete; refusing to guess"
 
 aegis_host="${AEGIS_HOST:-$registered_host}"

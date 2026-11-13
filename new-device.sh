@@ -242,8 +242,6 @@ registry_add_pending() {
 
 registry_add_pending || die "peer is live but the registry is unwritable; remove it on $aegis_host manually"
 
-provision_relay_credentials
-
 # Fill in the built binaries on the provisional row. A second process adding
 # the same label would have died at the top guard, so label+pub match at
 # most this row.
@@ -268,6 +266,8 @@ provision_relay_credentials() {
     chmod 0600 "$relay_cred_path"
     note "relay user $user added on $aegis_host"
 }
+
+provision_relay_credentials
 
 build_one() {
     # $1 = goos, $2 = goarch, $3 = out path

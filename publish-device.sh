@@ -203,11 +203,18 @@ reply=$(api_post users \
     --data-urlencode "peer=$pub") \
     || die "could not reach bypass-server on $aegis_host"
 code=$(printf '%s' "$reply" | tail -n1)
-[ "$code" = "201" ] || die "registration failed (HTTP $code): $(printf '%s' "$reply" | head -n1)"
+if [ "$code" = "409" ]; then
+    # A retried provisioning run finds the login it created last time. Reuse
+    # it: the peer and label are the same, and the link step still has to run.
+    note "login $user already exists; reusing it"
+elif [ "$code" != "201" ]; then
+    die "registration failed (HTTP $code): $(printf '%s' "$reply" | head -n1)"
+fi
 
 if [ -n "$appid" ]; then
     link_reply=$(api_post link \
-        --data-urlencode "id=$appid") \
+        --data-urlencode "id=$appid" \
+        --data-urlencode "username=$user") \
         || die "registered, but could not reach bypass-server to link the application"
     link_code=$(printf '%s' "$link_reply" | tail -n1)
     [ "$link_code" = "200" ] || die "registered, but linking the application failed (HTTP $link_code): $(printf '%s' "$link_reply" | head -n1)"
