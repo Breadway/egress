@@ -71,7 +71,14 @@ def api(path, data=None):
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             raw = response.read()
-            return json.loads(raw) if raw else None
+            if not raw:
+                return None
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                # Some admin endpoints answer with plain text ("released").
+                # Treat that as success rather than crashing the daemon.
+                return None
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             TOKEN = None
@@ -88,13 +95,25 @@ def label_for(app):
     return f"{slug or 'user'}-{app['id'][:6]}"
 
 
-def registered(label):
+def registry_row(label):
+    """Return (fields, complete). complete means a binary was recorded, so a
+    provisional row from a failed run is not mistaken for a finished device."""
     path = os.path.expanduser("~/.keys/egress-peers.tsv")
     try:
         with open(path) as handle:
-            return any(line.split("\t", 1)[0] == label for line in handle)
+            for line in handle:
+                fields = line.rstrip("\n").split("\t")
+                if fields and fields[0] == label:
+                    complete = len(fields) > 4 and bool(fields[4].strip())
+                    return fields, complete
     except OSError:
-        return False
+        pass
+    return None, False
+
+
+def registered(label):
+    _, complete = registry_row(label)
+    return complete
 
 
 def run(command):
@@ -146,6 +165,11 @@ def main():
             new_device_args.append("--debug-build")
         ok = True
         if not registered(label):
+            # A provisional row from an earlier failed attempt blocks
+            # new-device's label guard and has no binary. Remove it first.
+            fields, _ = registry_row(label)
+            if fields is not None:
+                run(["./remove-device.sh", "--name", label])
             ok = run(new_device_args)
         if ok:
             ok = run(
