@@ -46,8 +46,11 @@ type reportRecord struct {
 }
 
 const (
-	reportBodyMax    = 128 << 10
-	reportRateMax    = 20
+	reportBodyMax = 128 << 10
+	// A report is cheap and rate limiting is only there to bound disk writes.
+	// Devices behind one NAT share a bucket, and a retry storm used to exhaust
+	// a 20/hour limit for a whole household.
+	reportRateMax    = 120
 	reportRateWindow = time.Hour
 	// maxStoredReports caps the reports directory; pruneReports deletes the
 	// oldest first. Enrolled devices number in the tens.
