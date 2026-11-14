@@ -30,11 +30,6 @@ func configureWindowsSplit() error {
 	if err := writeSocksAuth(authPath, user, pass); err != nil {
 		return err
 	}
-	// The PAC is written and made readable here, where the install is
-	// elevated. The per-user step only points the browser at it.
-	if _, err := writePAC(); err != nil {
-		return err
-	}
 	// The install directory is SYSTEM/Administrators only, and the tray runs
 	// with the user's own token, so grant read and execute on what it needs.
 	// The directory stays locked; write access is unchanged.
@@ -67,6 +62,10 @@ func applyUserSplit(exe, authPath string) error {
 	if err := installProxyAutostart(authPath, relayListenAddr); err != nil {
 		return err
 	}
+	pac, err := writePAC()
+	if err != nil {
+		return err
+	}
 	// Start the proxy and prove it answers before pointing the browser at it.
 	// A PAC that names a dead port is worse than no PAC (EGRESS-98).
 	if !split.ProxyListening() {
@@ -79,7 +78,7 @@ func applyUserSplit(exe, authPath string) error {
 			return err
 		}
 	}
-	return setUserPAC(pacURLForFile(pacFilePath()))
+	return setUserPAC(pacURLForFile(pac))
 }
 
 // grantUserExecute lets any interactive account read and run one file. The
@@ -112,11 +111,11 @@ const (
 // account and readable without elevation, so a browser keeps working when the
 // proxy is not running and a SYSTEM check can see it.
 func pacFilePath() string {
-	exe, err := installedExePath()
-	if err != nil {
-		return filepath.Join(split.ProfileDir(), "proxy.pac")
-	}
-	return filepath.Join(filepath.Dir(exe), "proxy.pac")
+	// The install directory is SYSTEM/Administrators only, and the browser
+	// runs as the user: a PAC there is unreadable and the browser reports
+	// itself offline. The PAC belongs in the user's profile (AutoConfigURL is
+	// per-user anyway).
+	return filepath.Join(split.ProxyDir(), "proxy.pac")
 }
 
 // pacURLForFile turns a Windows path into the file:// URL WinINet expects.
@@ -124,17 +123,15 @@ func pacURLForFile(path string) string {
 	return "file:///" + strings.ReplaceAll(path, `\`, "/")
 }
 
-// writePAC writes the PAC beside the installed binary and lets any account
-// read it. Requires elevation, so the install does it before dropping to the
-// per-user step.
+// writePAC writes the PAC into the user's profile, where the browser can read
+// it without touching the locked install directory.
 func writePAC() (string, error) {
 	path := pacFilePath()
-	if err := os.WriteFile(path, []byte(split.PacScript(proxyListenAddr)), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", err
 	}
-	out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(RX)").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("grant users read on %s: %v: %s", path, err, strings.TrimSpace(string(out)))
+	if err := os.WriteFile(path, []byte(split.PacScript(proxyListenAddr)), 0600); err != nil {
+		return "", err
 	}
 	return path, nil
 }

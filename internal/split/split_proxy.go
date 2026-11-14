@@ -579,7 +579,14 @@ func (p *Proxy) Serve(ctx context.Context) error {
 
 func PacScript(listen string) string {
 	return fmt.Sprintf(`function FindProxyForURL(url, host) {
-  // Every request goes to the local proxy, which decides per destination
+  // Windows' own connectivity probe goes direct. Sending it through the
+  // proxy makes Windows report "no internet" whenever the proxy path is slow
+  // or the relay is down, even though ordinary traffic would work.
+  if (host == "www.msftconnecttest.com" || host == "www.msftncsi.com" ||
+      dnsDomainIs(host, ".msftncsi.com")) {
+    return "DIRECT";
+  }
+  // Everything else goes to the local proxy, which decides per destination
   // whether to go direct or through the Aegis relay.
   return "PROXY %s; DIRECT";
 }
