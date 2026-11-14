@@ -164,6 +164,19 @@ func (s *Supervisor) loop(ctx context.Context) error {
 		// Cheap when there is nothing to send: one stat call.
 		health.FlushPendingReport()
 
+		// Defender can quarantine the tunneler after install. Restore it from
+		// the embedded copy: this process runs as SYSTEM and may write there,
+		// while the per-user proxy may not.
+		if s.manageFallback {
+			if _, err := s.plat.WstunnelPath(); err != nil {
+				if path, ierr := s.plat.InstallWstunnel(); ierr == nil {
+					s.log.Printf("restored the tunneler after it went missing: %s", path)
+				} else {
+					s.log.Printf("tunneler missing and could not be restored: %v", ierr)
+				}
+			}
+		}
+
 		// Track the whole default-route set, not just the best route. A new
 		// escape path can appear (or vanish) without the best route
 		// changing, and a best route can go dead while staying selected.

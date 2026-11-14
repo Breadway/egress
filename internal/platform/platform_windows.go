@@ -555,7 +555,33 @@ func (windowsPlatform) InstallWstunnel() (string, error) {
 	if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelWindowsSHA256); err != nil {
 		return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 	}
+	// Defender flags the Go tunneler as a heuristic hit often enough that a
+	// real-time scan can quarantine it after install, which silently kills the
+	// relay. Exclude the exact files, not the directory, and say so.
+	ensureDefenderExclusions(dest)
 	return dest, nil
+}
+
+// ensureDefenderExclusions adds file-level exclusions for the two binaries
+// Windows flags. It is narrow (paths, not directories), best effort, and can
+// be turned off with EGRESS_NO_DEFENDER_EXCLUSION=1.
+func ensureDefenderExclusions(wstunnelPath string) {
+	if strings.TrimSpace(os.Getenv("EGRESS_NO_DEFENDER_EXCLUSION")) != "" {
+		return
+	}
+	paths := []string{wstunnelPath, InstalledBinaryPath()}
+	var quoted []string
+	for _, p := range paths {
+		quoted = append(quoted, "'"+strings.ReplaceAll(p, "'", "''")+"'")
+	}
+	script := "$ErrorActionPreference='SilentlyContinue'; " +
+		"foreach ($p in @(" + strings.Join(quoted, ",") + ")) { " +
+		"if (-not (Get-MpPreference).ExclusionPath -contains $p) { Add-MpPreference -ExclusionPath $p } }"
+	if _, err := powershell(script); err != nil {
+		logx.Debugf("defender exclusion not applied: %v", err)
+		return
+	}
+	logx.Logger().Printf("defender exclusions set for %s", strings.Join(paths, ", "))
 }
 
 func wireguardExe() string {
@@ -652,6 +678,10 @@ func Diagnose(w io.Writer) error {
 
 	section(w, "install directory acl")
 	show(w, "icacls", winProgramData)
+
+	section(w, "defender exclusions")
+	show(w, "powershell", "-NoProfile", "-Command",
+		"(Get-MpPreference).ExclusionPath | Where-Object { $_ -like '*egress*' }")
 
 	section(w, "log tail")
 	logx.Tail(w, logPath(), 60)
