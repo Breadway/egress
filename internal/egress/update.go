@@ -80,9 +80,10 @@ func cmdUpdate(args []string) error {
 		return nil
 	}
 	// A release whose apply failed is not retried every minute: the timer
-	// would otherwise loop on a broken build forever.
-	if sha, at := failedRelease(); sha == m.SHA256 && !at.IsZero() {
-		if wait := 6*time.Hour - time.Since(at); wait > 0 {
+	// would otherwise loop on a broken build forever. A single failure is
+	// usually transient, so the first retry is soon.
+	if sha, at, count := failedRelease(); sha == m.SHA256 && !at.IsZero() {
+		if wait := failedReleaseWait(count) - time.Since(at); wait > 0 {
 			fmt.Printf("previous attempt for %s failed at %s; retrying in %s\n",
 				m.Version, at.Format(time.RFC3339), wait.Round(time.Minute))
 			return nil
@@ -92,11 +93,19 @@ func cmdUpdate(args []string) error {
 	if err := newPlatform().RequirePrivilege(); err != nil {
 		return err
 	}
-	if err := applyUpdate(*base, m, pub); err != nil {
+	staged, err := applyUpdate(*base, m, pub)
+	if err != nil {
 		if rerr := recordFailedRelease(m.SHA256); rerr != nil {
 			debugf("could not record the failed release: %v", rerr)
 		}
 		return err
+	}
+	if staged {
+		// update-apply records the release once the new binary is actually
+		// installed and running. Recording it here claimed a release that the
+		// scheduled task could still fail to apply.
+		fmt.Printf("staged %s; the scheduled task applies it in a few seconds\n", m.Version)
+		return nil
 	}
 	// Record the release so a forced republish of the same version applies
 	// once instead of reinstalling on every poll.
@@ -177,61 +186,31 @@ func fetchUpdateManifest(ctx context.Context, base string, pub ed25519.PublicKey
 	return m, nil
 }
 
-func applyUpdate(base string, m update.Manifest, pub ed25519.PublicKey) error {
+func applyUpdate(base string, m update.Manifest, pub ed25519.PublicKey) (bool, error) {
+	if runtime.GOOS == "windows" {
+		// The running executable is locked and the per-user tray holds it
+		// too; a scheduled task applies the staged build after this process
+		// exits. It records the result, because staging is not applying.
+		if err := stageWindowsRelease(base, m); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return false, err
 	}
-	tmp, err := os.CreateTemp("", "egress-update-*")
+	tmpPath, err := downloadRelease(base, m)
 	if err != nil {
-		return err
+		return false, err
 	}
-	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-
-	url := strings.TrimRight(base, "/") + "/blob/" + m.SHA256
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := doUpdateRequest(req, 5*time.Minute)
-	if err != nil {
-		return fmt.Errorf("download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: %s", resp.Status)
-	}
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, m.Size+1))
-	if err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if n != m.Size {
-		return fmt.Errorf("downloaded %d bytes, manifest says %d", n, m.Size)
-	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != m.SHA256 {
-		return fmt.Errorf("sha256 mismatch: got %s want %s", got, m.SHA256)
-	}
-	if err := os.Chmod(tmpPath, 0755); err != nil {
-		return err
-	}
-
-	if runtime.GOOS == "windows" {
-		// The running executable is locked; a scheduled task applies it after
-		// this process exits.
-		return stageWindowsUpdate(m, tmpPath)
-	}
 
 	// Keep a backup so a broken release can be rolled back without a second
 	// network round trip.
 	backup := exe + ".prev"
 	if err := copyExecutable(exe, backup); err != nil {
-		return fmt.Errorf("back up current binary: %w", err)
+		return false, fmt.Errorf("back up current binary: %w", err)
 	}
 	installArgs := []string{"install", "--keep-config"}
 	if split.Enabled() {
@@ -243,9 +222,78 @@ func applyUpdate(base string, m update.Manifest, pub ed25519.PublicKey) error {
 	if err := cmd.Run(); err != nil {
 		_ = copyExecutable(backup, exe)
 		_ = newPlatform().StartService()
-		return fmt.Errorf("install failed, previous binary restored: %w", err)
+		return false, fmt.Errorf("install failed, previous binary restored: %w", err)
 	}
-	return nil
+	return false, nil
+}
+
+// downloadRelease fetches, verifies and returns a verified release binary in a
+// temporary file. The caller removes it.
+func downloadRelease(base string, m update.Manifest) (string, error) {
+	tmp, err := os.CreateTemp("", "egress-update-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+
+	url := strings.TrimRight(base, "/") + "/blob/" + m.SHA256
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return "", err
+	}
+	resp, err := doUpdateRequest(req, 5*time.Minute)
+	if err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("download: %s", resp.Status)
+	}
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, m.Size+1))
+	if err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if n != m.Size {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("downloaded %d bytes, manifest says %d", n, m.Size)
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != m.SHA256 {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("sha256 mismatch: got %s want %s", got, m.SHA256)
+	}
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+	return tmpPath, nil
+}
+
+// fileSHA256 hashes a file, used to decide whether a staged release is
+// already on disk and intact.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func copyExecutable(src, dst string) error {
@@ -335,7 +383,13 @@ type updateState struct {
 	// release is not retried every minute by the update timer.
 	FailedSHA string `json:"failed_sha,omitempty"`
 	FailedAt  string `json:"failed_at,omitempty"`
+	// FailedCount separates a transient apply failure (a locked file, a
+	// service that had not exited yet) from a release that keeps failing.
+	FailedCount int `json:"failed_count,omitempty"`
 }
+
+// updateStateFile is a variable so tests can point it at a temporary file.
+var updateStateFile = updateStatePath
 
 func updateStatePath() string {
 	switch runtime.GOOS {
@@ -353,7 +407,7 @@ func updateStatePath() string {
 
 func appliedRelease() (string, error) {
 	var st updateState
-	data, err := os.ReadFile(updateStatePath())
+	data, err := os.ReadFile(updateStateFile())
 	if err != nil {
 		return "", err
 	}
@@ -363,25 +417,40 @@ func appliedRelease() (string, error) {
 	return st.ManifestSHA, nil
 }
 
-// failedRelease reports a release that failed to apply and when.
-func failedRelease() (string, time.Time) {
+// failedRelease reports a release that failed to apply, when, and how many
+// times in a row.
+func failedRelease() (string, time.Time, int) {
 	var st updateState
-	data, err := os.ReadFile(updateStatePath())
+	data, err := os.ReadFile(updateStateFile())
 	if err != nil || json.Unmarshal(data, &st) != nil {
-		return "", time.Time{}
+		return "", time.Time{}, 0
 	}
 	at, _ := time.Parse(time.RFC3339, st.FailedAt)
-	return st.FailedSHA, at
+	return st.FailedSHA, at, st.FailedCount
+}
+
+// failedReleaseWait is how long to wait before retrying a release that just
+// failed. The first failure is usually transient (a locked image, a task that
+// had not exited), so retry soon; a release that fails repeatedly waits.
+func failedReleaseWait(count int) time.Duration {
+	if count <= 1 {
+		return 10 * time.Minute
+	}
+	return 6 * time.Hour
 }
 
 // recordFailedRelease remembers an apply failure so the timer backs off
 // instead of retrying a broken release every minute.
 func recordFailedRelease(sha string) error {
-	st := updateState{FailedSHA: sha, FailedAt: time.Now().UTC().Format(time.RFC3339)}
+	st := updateState{FailedSHA: sha, FailedAt: time.Now().UTC().Format(time.RFC3339), FailedCount: 1}
+	prevSHA, _, prevCount := failedRelease()
+	if prevSHA == sha {
+		st.FailedCount = prevCount + 1
+	}
 	if applied, err := appliedRelease(); err == nil {
 		st.ManifestSHA = applied
 	}
-	path := updateStatePath()
+	path := updateStateFile()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -397,7 +466,7 @@ func recordFailedRelease(sha string) error {
 }
 
 func recordAppliedRelease(sha string) error {
-	path := updateStatePath()
+	path := updateStateFile()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -375,15 +376,33 @@ func (windowsPlatform) InstallService(exePath string, args []string) error {
 
 func (windowsPlatform) StartService() error {
 	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
+	// /end returns before the process exits, and starting a task that is
+	// still marked Running is ignored. Waiting is what keeps an update from
+	// leaving the supervisor down.
+	waitTaskStopped(30 * time.Second)
 	return logx.RunLogged("schtasks", "/run", "/tn", winTaskName)
 }
 
 func (windowsPlatform) StopService() error {
 	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
+	waitTaskStopped(30 * time.Second)
 	// The task may leave its wstunnel child behind, and a running image
 	// cannot be replaced during reinstall.
 	stopWstunnel()
 	return nil
+}
+
+// waitTaskStopped blocks until the supervisor task is no longer running. A
+// task that is not running returns immediately.
+func waitTaskStopped(timeout time.Duration) {
+	p := windowsPlatform{}
+	deadline := time.Now().Add(timeout)
+	for p.ServiceActive() {
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // ServiceActive reports whether the scheduled task is currently running. A
