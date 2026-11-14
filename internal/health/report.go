@@ -175,11 +175,20 @@ func postReportWith(data []byte, transport *http.Transport) error {
 	return nil
 }
 
+// spoolRetryAfter throttles spooled-report retries. The supervisor calls this
+// every 15 seconds; retrying a rate-limited endpoint at that rate keeps its
+// per-IP bucket permanently exhausted, which is exactly how reports stopped
+// arriving for a whole testing session.
+var spoolRetryAfter time.Time
+
 // flushPendingReport sends a spooled install report, if any. It is cheap when
 // there is nothing to send: one stat call. Spooled reports older than
 // maxSpoolAge are dropped: a stale failure resurrected months later would
 // arrive looking like current device health.
 func FlushPendingReport() {
+	if time.Now().Before(spoolRetryAfter) {
+		return
+	}
 	path := pendingReportPath()
 	info, err := os.Stat(path)
 	if err != nil {
@@ -199,6 +208,9 @@ func FlushPendingReport() {
 		return
 	}
 	if err := SendReport(data); err != nil {
+		// Back off hard: one attempt every fifteen minutes is enough for a
+		// report, and it lets a rate-limited bucket drain.
+		spoolRetryAfter = time.Now().Add(15 * time.Minute)
 		logx.Debugf("pending report still unsent: %v", err)
 		return
 	}
