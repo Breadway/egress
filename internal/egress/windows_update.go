@@ -1,6 +1,7 @@
 package egress
 
 import (
+	platformpkg "egress/internal/platform"
 	"errors"
 	"fmt"
 	"os"
@@ -26,12 +27,14 @@ func installedExePath() (string, error) {
 
 // cmdUpdateApply is run by the scheduled task, after the updating process has
 // exited so the installed executable is no longer locked. It backs up the
-// current binary, installs the staged release with the existing config, and
-// restores the backup if the install fails.
+// current binary, installs the staged release with the existing config,
+// restores the backup if the install fails, and records which release
+// actually took effect.
 func cmdUpdateApply(args []string) error {
 	fs := newFlagSet("update-apply")
 	staged := fs.String("staged", "", "staged release binary")
 	task := fs.String("task", "", "scheduled task to delete after applying")
+	sha := fs.String("sha", "", "release sha256, recorded so a stuck update backs off")
 	split := fs.Bool("split", false, "preserve split mode")
 	delay := fs.Duration("delay", 8*time.Second, "wait for the updating process to exit")
 	if err := fs.Parse(args); err != nil {
@@ -69,12 +72,28 @@ func cmdUpdateApply(args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		_ = copyExecutable(backup, installed)
+		// The failed install may have left the new service running from the
+		// new image. Stop it before putting the old one back: a running image
+		// cannot be replaced.
+		_ = newPlatform().StopService()
+		if rerr := platformpkg.ReplaceFile(backup, installed); rerr != nil {
+			fmt.Fprintf(os.Stderr, "could not restore the previous binary: %v\n", rerr)
+		}
 		_ = newPlatform().StartService()
+		if *sha != "" {
+			if rerr := recordFailedRelease(*sha); rerr != nil {
+				debugf("could not record the failed release: %v", rerr)
+			}
+		}
 		if *task != "" {
 			_ = exec.Command("schtasks", "/delete", "/tn", *task, "/f").Run()
 		}
 		return fmt.Errorf("install failed, previous binary restored: %w", err)
+	}
+	if *sha != "" {
+		if err := recordAppliedRelease(*sha); err != nil {
+			debugf("could not record the applied release: %v", err)
+		}
 	}
 	if *task != "" {
 		_ = exec.Command("schtasks", "/delete", "/tn", *task, "/f").Run()

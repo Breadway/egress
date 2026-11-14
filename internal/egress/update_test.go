@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testManifest(t *testing.T, priv ed25519.PrivateKey) update.Manifest {
@@ -239,5 +240,55 @@ func TestManifestFetchAndVerify(t *testing.T) {
 	defer bad.Close()
 	if _, err := fetchUpdateManifest(context.Background(), bad.URL, pub); err == nil {
 		t.Fatal("tampered manifest accepted")
+	}
+}
+
+func TestFailedReleaseBacksOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update-state.json")
+	old := updateStateFile
+	updateStateFile = func() string { return path }
+	defer func() { updateStateFile = old }()
+
+	if _, _, count := failedRelease(); count != 0 {
+		t.Fatalf("empty state reports %d failures", count)
+	}
+	if got := failedReleaseWait(1); got != 10*time.Minute {
+		t.Errorf("first retry after %s, want 10m", got)
+	}
+	if got := failedReleaseWait(2); got != 6*time.Hour {
+		t.Errorf("repeated retry after %s, want 6h", got)
+	}
+
+	if err := recordFailedRelease("abc"); err != nil {
+		t.Fatal(err)
+	}
+	sha, _, count := failedRelease()
+	if sha != "abc" || count != 1 {
+		t.Fatalf("state after one failure: sha %q count %d", sha, count)
+	}
+	if err := recordFailedRelease("abc"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, count = failedRelease()
+	if count != 2 {
+		t.Fatalf("failure count %d after a second failure, want 2", count)
+	}
+	// A different release starts its own count.
+	if err := recordFailedRelease("def"); err != nil {
+		t.Fatal(err)
+	}
+	if sha, _, count := failedRelease(); sha != "def" || count != 1 {
+		t.Fatalf("state after a different release: sha %q count %d", sha, count)
+	}
+
+	// A successful apply clears both the pending failure and the count.
+	if err := recordAppliedRelease("def"); err != nil {
+		t.Fatal(err)
+	}
+	if sha, _, count := failedRelease(); sha != "" || count != 0 {
+		t.Fatalf("failure survived a successful apply: sha %q count %d", sha, count)
+	}
+	if applied, err := appliedRelease(); err != nil || applied != "def" {
+		t.Fatalf("applied release %q err %v", applied, err)
 	}
 }
