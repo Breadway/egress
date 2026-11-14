@@ -773,3 +773,43 @@ func TestNetworkAllowlist(t *testing.T) {
 		t.Error("cleared allowlist still blocks")
 	}
 }
+
+func TestDefaultScanDomainsAreUsable(t *testing.T) {
+	domains := DefaultScanDomains()
+	if len(domains) < 100 {
+		t.Fatalf("only %d domains; a seed list should cover the common services", len(domains))
+	}
+	seen := map[string]bool{}
+	for _, d := range domains {
+		d = core.NormalizeDomain(d)
+		if !plausibleDomain(d) {
+			t.Errorf("invalid domain in the list: %q", d)
+		}
+		if seen[d] {
+			t.Errorf("duplicate domain: %q", d)
+		}
+		seen[d] = true
+	}
+}
+
+func TestRecordScanWritesProfile(t *testing.T) {
+	dir := t.TempDir()
+	results := []ScanResult{
+		{Domain: "blocked.example", State: StateBlocked, Evidence: EvidenceTLSStall},
+		{Domain: "allowed.example", State: StateAllowed},
+	}
+	n, err := RecordScanIn(dir, "net", results)
+	if err != nil || n != 2 {
+		t.Fatalf("recorded %d err %v", n, err)
+	}
+	profile, err := LoadProfile(ProfilePathIn(dir, "net"), "net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.State("blocked.example", time.Now()) != StateBlocked {
+		t.Error("blocked result not recorded")
+	}
+	if profile.State("allowed.example", time.Now()) != StateAllowed {
+		t.Error("allowed result not recorded")
+	}
+}

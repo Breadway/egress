@@ -79,6 +79,8 @@ func realMain() error {
 		return cmdVerify(args)
 	case "probe":
 		return cmdProbe(args)
+	case "scan":
+		return cmdScan(args)
 	case "proxy":
 		return cmdProxy(args)
 	case "update":
@@ -123,6 +125,7 @@ Commands:
   verify       check the installed setup
   diagnose     print routing, DNS, tunnel and log state
   probe        classify domains over the direct path (split-mode foundation)
+  scan         bulk-probe a domain list to seed a new network
   proxy        run the per-user split proxy and PAC (Windows split mode)
   update       check for or apply a signed update over the tunnel
   update-sign  sign a release manifest (publisher side)
