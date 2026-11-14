@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/tls"
+	"egress/internal/core"
 	"egress/internal/split"
 	"egress/internal/update"
 	"encoding/hex"
@@ -11,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -106,6 +109,38 @@ func checkManifestVersion(current string, m update.Manifest) error {
 	return nil
 }
 
+// doAegisRequest builds a transport that dials the known Aegis address with
+// the DoH host's SNI. It is the fallback when the system resolver cannot
+// resolve the update host, which is exactly the case where the updater has to
+// work anyway: the resolver it is failing on may be the one being replaced.
+func doAegisRequest(req *http.Request, timeout time.Duration) (*http.Response, error) {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			d := &net.Dialer{Timeout: 10 * time.Second}
+			return d.DialContext(ctx, "tcp", net.JoinHostPort(core.AegisIPv4, "443"))
+		},
+		TLSClientConfig: &tls.Config{ServerName: core.DoHHost, MinVersion: tls.VersionTLS12},
+	}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	return client.Do(req)
+}
+
+// doUpdateRequest tries the normal path, then the Aegis fallback when the host
+// is the default update host.
+func doUpdateRequest(req *http.Request, timeout time.Duration) (*http.Response, error) {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	if !strings.HasPrefix(req.URL.String(), "https://"+core.DoHHost+"/") {
+		return nil, err
+	}
+	debugf("update host did not resolve (%v); retrying against Aegis", err)
+	fallback := req.Clone(req.Context())
+	return doAegisRequest(fallback, timeout)
+}
+
 func fetchUpdateManifest(ctx context.Context, base string, pub ed25519.PublicKey) (update.Manifest, error) {
 	var m update.Manifest
 	url := strings.TrimRight(base, "/") + "/manifest?os=" + runtime.GOOS + "&arch=" + runtime.GOARCH
@@ -113,8 +148,7 @@ func fetchUpdateManifest(ctx context.Context, base string, pub ed25519.PublicKey
 	if err != nil {
 		return m, err
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := doUpdateRequest(req, 15*time.Second)
 	if err != nil {
 		return m, fmt.Errorf("fetch manifest: %w", err)
 	}
@@ -144,8 +178,11 @@ func applyUpdate(base string, m update.Manifest, pub ed25519.PublicKey) error {
 	defer os.Remove(tmpPath)
 
 	url := strings.TrimRight(base, "/") + "/blob/" + m.SHA256
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := doUpdateRequest(req, 5*time.Minute)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
