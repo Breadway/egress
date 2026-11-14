@@ -22,14 +22,6 @@ func configureWindowsSplit() error {
 	if err != nil {
 		return err
 	}
-	authPath := filepath.Join(split.ProfileDir(), "socks-auth")
-	user, pass := resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
-	if user == "" || pass == "" {
-		return errors.New("no SOCKS relay credentials in this build; rebuild with --socks-user and --socks-pass")
-	}
-	if err := writeSocksAuth(authPath, user, pass); err != nil {
-		return err
-	}
 	// The install directory is SYSTEM/Administrators only, and the tray runs
 	// with the user's own token, so grant read and execute on what it needs.
 	// The directory stays locked; write access is unchanged.
@@ -51,14 +43,25 @@ func configureWindowsSplit() error {
 			fmt.Println("no interactive user is logged on; the proxy and PAC will be applied by the next install")
 			return nil
 		}
-		return runSplitUserTask(console, exe, authPath)
+		return runSplitUserTask(console, exe)
 	}
-	return applyUserSplit(exe, authPath)
+	return applyUserSplit(exe)
 }
 
 // applyUserSplit writes the per-user proxy settings and starts the tray. It
 // must run in the target user's session: the Run key lives in HKCU.
-func applyUserSplit(exe, authPath string) error {
+func applyUserSplit(exe string) error {
+	// The proxy is per-user, the install directory is SYSTEM/Administrators
+	// only, and ProxyDir is SYSTEM's profile when install runs as SYSTEM. All
+	// per-user state therefore lives here, in the user's own profile.
+	authPath := filepath.Join(split.ProxyDir(), "socks-auth")
+	user, pass := resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
+	if user == "" || pass == "" {
+		return errors.New("no SOCKS relay credentials in this build; rebuild with --socks-user and --socks-pass")
+	}
+	if err := writeSocksAuth(authPath, user, pass); err != nil {
+		return err
+	}
 	if err := installProxyAutostart(authPath, relayListenAddr); err != nil {
 		return err
 	}
@@ -153,10 +156,10 @@ func consoleUser() (string, error) {
 }
 
 // runSplitUserTask runs the per-user setup in user's session and waits for it.
-func runSplitUserTask(user, exe, authPath string) error {
+func runSplitUserTask(user, exe string) error {
 	// Windows paths go inside plain double quotes: %q would double the
 	// backslashes and hand the child a path that does not exist.
-	args := fmt.Sprintf(`split-user --exe "%s" --auth "%s"`, exe, authPath)
+	args := fmt.Sprintf(`split-user --exe "%s"`, exe)
 	script, err := windowsTaskScript(splitUserTask, exe, args,
 		"New-ScheduledTaskTrigger -Once -At (Get-Date)", userPrincipal(user), false)
 	if err != nil {
@@ -207,17 +210,16 @@ func taskState(out string) (status, result string) {
 func cmdSplitUser(args []string) error {
 	fs := newFlagSet("split-user")
 	exePath := fs.String("exe", "", "installed executable")
-	authPath := fs.String("auth", "", "SOCKS auth file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *exePath == "" || *authPath == "" {
-		return errors.New("missing --exe or --auth")
+	if *exePath == "" {
+		return errors.New("missing --exe")
 	}
 	// The task gives this process no console, so a debug build must log to
 	// the shared file for the failure to be visible at all.
 	setupLogging(resolveDebug(false))
-	if err := applyUserSplit(*exePath, *authPath); err != nil {
+	if err := applyUserSplit(*exePath); err != nil {
 		appLogger().Printf("split-user: %v", err)
 		return err
 	}

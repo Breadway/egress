@@ -196,6 +196,10 @@ func installDirACLArgs(dir string) []string {
 		"/remove:g", "*S-1-5-32-545", // Users
 		"/grant:r", "*S-1-5-18:(OI)(CI)F",
 		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+		// /inheritance:r strands files created before the hardening without
+		// SYSTEM access, which broke reading the proxy's own state. Apply the
+		// grants to the existing tree as well.
+		"/T", "/C",
 	}
 }
 

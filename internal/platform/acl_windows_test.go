@@ -19,6 +19,7 @@ func TestInstallDirACLArgs(t *testing.T) {
 		"/remove:g", "*S-1-5-32-545",
 		"/grant:r", "*S-1-5-18:(OI)(CI)F",
 		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+		"/T", "/C",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("installDirACLArgs =\n%q\nwant\n%q", got, want)

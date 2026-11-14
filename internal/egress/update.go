@@ -79,11 +79,23 @@ func cmdUpdate(args []string) error {
 	if !*apply {
 		return nil
 	}
+	// A release whose apply failed is not retried every minute: the timer
+	// would otherwise loop on a broken build forever.
+	if sha, at := failedRelease(); sha == m.SHA256 && !at.IsZero() {
+		if wait := 6*time.Hour - time.Since(at); wait > 0 {
+			fmt.Printf("previous attempt for %s failed at %s; retrying in %s\n",
+				m.Version, at.Format(time.RFC3339), wait.Round(time.Minute))
+			return nil
+		}
+	}
 
 	if err := newPlatform().RequirePrivilege(); err != nil {
 		return err
 	}
 	if err := applyUpdate(*base, m, pub); err != nil {
+		if rerr := recordFailedRelease(m.SHA256); rerr != nil {
+			debugf("could not record the failed release: %v", rerr)
+		}
 		return err
 	}
 	// Record the release so a forced republish of the same version applies
@@ -319,6 +331,10 @@ func existingTunnelConfig() (string, string, error) {
 // reinstalled on every check.
 type updateState struct {
 	ManifestSHA string `json:"manifest_sha"`
+	// FailedSHA/FailedAt remember a release whose apply failed, so a broken
+	// release is not retried every minute by the update timer.
+	FailedSHA string `json:"failed_sha,omitempty"`
+	FailedAt  string `json:"failed_at,omitempty"`
 }
 
 func updateStatePath() string {
@@ -345,6 +361,39 @@ func appliedRelease() (string, error) {
 		return "", err
 	}
 	return st.ManifestSHA, nil
+}
+
+// failedRelease reports a release that failed to apply and when.
+func failedRelease() (string, time.Time) {
+	var st updateState
+	data, err := os.ReadFile(updateStatePath())
+	if err != nil || json.Unmarshal(data, &st) != nil {
+		return "", time.Time{}
+	}
+	at, _ := time.Parse(time.RFC3339, st.FailedAt)
+	return st.FailedSHA, at
+}
+
+// recordFailedRelease remembers an apply failure so the timer backs off
+// instead of retrying a broken release every minute.
+func recordFailedRelease(sha string) error {
+	st := updateState{FailedSHA: sha, FailedAt: time.Now().UTC().Format(time.RFC3339)}
+	if applied, err := appliedRelease(); err == nil {
+		st.ManifestSHA = applied
+	}
+	path := updateStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func recordAppliedRelease(sha string) error {
