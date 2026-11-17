@@ -48,10 +48,39 @@ func logPath() string { return filepath.Join(winProgramData, "egress.log") }
 
 func (windowsPlatform) RequirePrivilege() error {
 	// "net session" only succeeds with an elevated token.
-	if _, err := logx.ExecLogged("net", "session"); err != nil {
-		return errors.New("must run as Administrator")
+	if _, err := logx.ExecLogged("net", "session"); err == nil {
+		return nil
 	}
-	return nil
+	// An unelevated administrator is a right-click away; an account that is
+	// not in the Administrators group cannot elevate at all and needs someone
+	// else. A filtered token still lists the group, marked deny-only.
+	if out, err := logx.ExecLogged("whoami", "/groups"); err == nil &&
+		!strings.Contains(string(out), administratorSID) {
+		return fmt.Errorf("%s is not an administrator of this PC, and egress has to be installed by one. "+
+			"Ask an administrator to run this, or sign in with an administrator account", accountName())
+	}
+	return errors.New("must run as Administrator: this shell is not elevated, so right-click and choose Run as administrator")
+}
+
+// administratorSID is BUILTIN\Administrators, matched by SID so the check
+// works on non-English installs.
+const administratorSID = "S-1-5-32-544"
+
+// accountName returns DOMAIN\user for messages, falling back to a label that
+// never makes the error self-referential.
+func accountName() string {
+	out, err := logx.ExecLogged("whoami")
+	if err != nil {
+		return "this account"
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "this account"
+	}
+	if i := strings.LastIndex(name, `\`); i >= 0 && i+1 < len(name) {
+		return name[i+1:] + " (" + name + ")"
+	}
+	return name
 }
 
 func (p windowsPlatform) DefaultRoute() (string, string, error) {
