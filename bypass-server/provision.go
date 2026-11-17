@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -207,6 +208,7 @@ The token works once. If this install fails, ask for a new invite.
 		http.Error(w, "could not build the archive", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("setup: application %s from %s downloaded the setup archive", app.ID, clientIP(r))
 	if err := zw.Close(); err != nil {
 		http.Error(w, "could not build the archive", http.StatusInternalServerError)
 		return
