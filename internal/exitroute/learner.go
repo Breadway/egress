@@ -1,16 +1,17 @@
 package exitroute
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,8 +67,6 @@ type Learner struct {
 	state   State
 	applied map[string]bool   // prefix -> route installed
 	lists   map[string]string // exit id -> allowed-ips applied
-	cloud   *http.Client
-	direct  *http.Client
 	blocked map[string]map[string]bool
 
 	// wasHealthy tracks exit health between cycles, so an exit coming back
@@ -76,7 +75,7 @@ type Learner struct {
 	exitsChanged bool
 
 	// Injected in tests.
-	probeFn    func(ctx context.Context, client *http.Client, domain string) (int, error)
+	probeFn    func(ctx context.Context, domain, ip string, mark int) ProbeResult
 	setAllowed func(dev, pub, list string) error
 	addRouteFn func(prefix string) error
 	delRouteFn func(prefix string) error
@@ -123,8 +122,6 @@ func New(opts Options) (*Learner, error) {
 		state:   state,
 		applied: map[string]bool{},
 		lists:   map[string]string{},
-		cloud:   probeClient(opts.Timeout, CloudMark),
-		direct:  probeClient(opts.Timeout, 0),
 	}
 	l.probeFn = l.probe
 	l.setAllowed = func(dev, pub, list string) error {
@@ -135,22 +132,6 @@ func New(opts Options) (*Learner, error) {
 	}
 	l.delRouteFn = func(prefix string) error { return run("ip", "route", "del", prefix) }
 	return l, nil
-}
-
-func probeClient(timeout time.Duration, mark int) *http.Client {
-	dialer := &net.Dialer{Timeout: timeout}
-	if mark != 0 {
-		dialer.Control = markControl(mark)
-	}
-	return &http.Client{
-		Timeout: 2 * timeout,
-		Transport: &http.Transport{
-			DialContext:           dialer.DialContext,
-			TLSHandshakeTimeout:   timeout,
-			ResponseHeaderTimeout: timeout,
-			ForceAttemptHTTP2:     true,
-		},
-	}
 }
 
 // Run loops until the context is cancelled.
@@ -179,9 +160,8 @@ func (l *Learner) Run(ctx context.Context) error {
 type resolved struct {
 	domain   string
 	prefixes []string
-	cloud    int
-	cloudErr string
-	err      error
+	ips      []string
+	cloud    ProbeResult
 	ok       bool
 }
 
@@ -311,12 +291,14 @@ func (l *Learner) decide(ctx context.Context, r resolved, handshakes map[string]
 	site := Site{
 		Domain:   r.domain,
 		Prefixes: r.prefixes,
-		Cloud:    r.cloud,
-		CloudErr: r.cloudErr,
+		Cloud:    r.cloud.Status,
 		Verified: now.UTC(),
 		Expires:  now.Add(l.opts.TTL).UTC(),
 	}
-	if !CloudRefused(r.cloud, r.err) {
+	if r.cloud.Err != nil {
+		site.CloudErr = r.cloud.Err.Error()
+	}
+	if r.cloud.Works() {
 		l.release(r.prefixes)
 		site.State = SiteCloud
 		return site
@@ -329,11 +311,11 @@ func (l *Learner) decide(ctx context.Context, r resolved, handshakes map[string]
 		// the verdict until the retry window passes; the cloud check above
 		// still catches the site becoming reachable again, and an exit coming
 		// back clears the backoff.
-		prev.Cloud, prev.CloudErr = r.cloud, r.cloudErr
+		prev.Cloud, prev.CloudErr = site.Cloud, site.CloudErr
 		return prev
 	}
 	if owner != "" && l.healthy(owner, handshakes, now) {
-		if status, err := l.probeFn(ctx, l.direct, r.domain); err == nil && served(status) {
+		if l.probeAny(ctx, r.domain, r.ips, 0).Works() {
 			site.State, site.Exit = SiteExit, owner
 			return site
 		}
@@ -356,7 +338,7 @@ func (l *Learner) decide(ctx context.Context, r resolved, handshakes map[string]
 			continue
 		}
 		l.assign(r.prefixes, exit.ID)
-		if status, err := l.probeFn(ctx, l.direct, r.domain); err == nil && served(status) {
+		if l.probeAny(ctx, r.domain, r.ips, 0).Works() {
 			site.State, site.Exit = SiteExit, exit.ID
 			return site
 		}
@@ -383,30 +365,78 @@ func (l *Learner) resolveAndProbeCloud(ctx context.Context, domain string) resol
 	if len(out.prefixes) == 0 {
 		return out
 	}
-	out.cloud, err = l.probeFn(ctx, l.cloud, domain)
-	if err != nil {
-		out.err = err
-		out.cloudErr = err.Error()
+	if len(ips) > 3 {
+		ips = ips[:3]
 	}
+	out.ips = ips
+	out.cloud = l.probeAny(ctx, domain, ips, CloudMark)
 	out.ok = true
 	return out
 }
 
-func (l *Learner) probe(ctx context.Context, client *http.Client, domain string) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+domain+"/", nil)
-	if err != nil {
-		return 0, err
+// probeAny tries up to three addresses and returns the best answer: a reply
+// beats a handshake, and a handshake beats a failure.
+func (l *Learner) probeAny(ctx context.Context, domain string, ips []string, mark int) ProbeResult {
+	var best ProbeResult
+	for _, ip := range ips {
+		res := l.probeFn(ctx, domain, ip, mark)
+		if res.Status != 0 {
+			return res
+		}
+		if res.Handshake {
+			best = res
+			continue
+		}
+		if best.Err == nil && best.Status == 0 && !best.Handshake {
+			best = res
+		}
 	}
-	req.Header.Set("User-Agent", probeUserAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
+	return best
+}
+
+// probe dials one address, completes TLS, and asks for "/". A server that
+// closes after the handshake still proves the path works, which is what an
+// exit is being judged on.
+func (l *Learner) probe(ctx context.Context, domain, ip string, mark int) ProbeResult {
+	dialer := &net.Dialer{Timeout: l.opts.Timeout}
+	if mark != 0 {
+		dialer.Control = markControl(mark)
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	return resp.StatusCode, nil
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
+	if err != nil {
+		return ProbeResult{Err: err}
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	tc := tls.Client(conn, &tls.Config{ServerName: domain, MinVersion: tls.VersionTLS12})
+	if err := tc.HandshakeContext(ctx); err != nil {
+		// A certificate that names another host still proves the path got
+		// somewhere; that address just is not a website for this name.
+		return ProbeResult{Handshake: nameMismatch(err), Err: err}
+	}
+	req := "GET / HTTP/1.1\r\nHost: " + domain + "\r\nUser-Agent: " + probeUserAgent +
+		"\r\nAccept: */*\r\nAccept-Language: en-US,en;q=0.9\r\nConnection: close\r\n\r\n"
+	if _, err := tc.Write([]byte(req)); err != nil {
+		return ProbeResult{Handshake: true, Err: err}
+	}
+	line, err := bufio.NewReader(tc).ReadString('\n')
+	if err != nil {
+		// Handshake done, then the server closed without a reply. The path
+		// works; hosts that only serve files do this for "/".
+		return ProbeResult{Handshake: true, Err: err}
+	}
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return ProbeResult{Handshake: true, Err: fmt.Errorf("unexpected status line %q", strings.TrimSpace(line))}
+	}
+	status, convErr := strconv.Atoi(fields[1])
+	if convErr != nil {
+		return ProbeResult{Handshake: true, Err: fmt.Errorf("unexpected status %q", fields[1])}
+	}
+	return ProbeResult{Handshake: true, Status: status}
 }
 
 // ownerOf returns the exit a prefix set is currently assigned to. Conflicting
