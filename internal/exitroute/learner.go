@@ -309,7 +309,9 @@ func (l *Learner) applyObservation(obs Observation, now time.Time) bool {
 		if _, ok := l.state.Entries[prefix]; !ok {
 			fresh = true
 		}
-		l.state.Entries[prefix] = EntryFor(obs, now, l.opts.TTL)
+		entry := EntryFor(obs, now, l.opts.TTL)
+		entry.Prefix = prefix
+		l.state.Entries[prefix] = entry
 	}
 	return fresh
 }
