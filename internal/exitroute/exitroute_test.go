@@ -2,45 +2,31 @@ package exitroute
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
-	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestCloudRefused(t *testing.T) {
+func TestProbeWorks(t *testing.T) {
 	cases := []struct {
-		name  string
-		cloud int
-		err   string
-		want  bool
+		name string
+		res  ProbeResult
+		want bool
 	}{
-		{"forbidden", 403, "", true},
-		{"legal", 451, "", true},
-		{"rate limited", 429, "", true},
-		{"no response", 0, "tls: handshake failure", true},
-		{"certificate name", 0, "x509: certificate is valid for other.example, not this.example", false},
-		{"served", 200, "", false},
-		{"redirect", 302, "", false},
-		{"server error", 500, "", false},
-		{"unknown", 0, "", false},
+		{"served", ProbeResult{Handshake: true, Status: 200}, true},
+		{"redirect", ProbeResult{Handshake: true, Status: 302}, true},
+		{"closed after handshake", ProbeResult{Handshake: true}, true},
+		{"forbidden", ProbeResult{Handshake: true, Status: 403}, false},
+		{"legal refusal", ProbeResult{Handshake: true, Status: 451}, false},
+		{"rate limited", ProbeResult{Handshake: true, Status: 429}, false},
+		{"handshake failed", ProbeResult{Err: os.ErrDeadlineExceeded}, false},
+		{"no handshake no status", ProbeResult{}, false},
 	}
 	for _, c := range cases {
-		var err error
-		if c.cloud == 0 && c.err != "" {
-			var xerr x509.HostnameError
-			if c.name == "certificate name" {
-				err = xerr
-			} else {
-				err = errors.New(c.err)
-			}
-		}
-		if got := CloudRefused(c.cloud, err); got != c.want {
-			t.Errorf("%s: CloudRefused(%d, %v) = %v, want %v", c.name, c.cloud, err, got, c.want)
+		if got := c.res.Works(); got != c.want {
+			t.Errorf("%s: Works() = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -117,11 +103,9 @@ func TestStateRoundTrip(t *testing.T) {
 }
 
 type harness struct {
-	l        *Learner
-	allowed  map[string]string
-	routes   map[string]bool
-	direct   *http.Client
-	probeSet int
+	l       *Learner
+	allowed map[string]string
+	routes  map[string]bool
 }
 
 func newHarness(t *testing.T, exits ...Exit) *harness {
@@ -149,7 +133,7 @@ func newHarness(t *testing.T, exits ...Exit) *harness {
 	reg := Registry{Exits: exits}
 	l.reg = reg
 	l.exits = EnabledExits(reg)
-	h := &harness{l: l, allowed: map[string]string{}, routes: map[string]bool{}, direct: l.direct}
+	h := &harness{l: l, allowed: map[string]string{}, routes: map[string]bool{}}
 	l.setAllowed = func(dev, pub, list string) error {
 		h.allowed[pub] = list
 		return nil
@@ -173,6 +157,16 @@ func (h *harness) route(prefix string) {
 	h.l.applied[prefix] = true
 }
 
+// pathProbe returns 200 only when the prefix is assigned to exit id.
+func (h *harness) pathProbe(prefix, id string) {
+	h.l.probeFn = func(ctx context.Context, domain, ip string, mark int) ProbeResult {
+		if h.owner(prefix) == id {
+			return ProbeResult{Handshake: true, Status: 200}
+		}
+		return ProbeResult{Handshake: true, Status: 403}
+	}
+}
+
 func healthyNow(exits ...Exit) map[string]int64 {
 	hs := map[string]int64{}
 	for _, exit := range exits {
@@ -181,20 +175,20 @@ func healthyNow(exits ...Exit) map[string]int64 {
 	return hs
 }
 
+func resolvedSite(domain, prefix string) resolved {
+	return resolved{
+		domain: domain, prefixes: []string{prefix}, ips: []string{"203.0.113.10"},
+		cloud: ProbeResult{Handshake: true, Status: 403}, ok: true,
+	}
+}
+
 func TestDecideKeepsHealthyOwner(t *testing.T) {
 	a := Exit{ID: "a", PubKey: "pa", Enabled: true, Priority: 10}
 	b := Exit{ID: "b", PubKey: "pb", Enabled: true, Priority: 20}
 	h := newHarness(t, a, b)
 	h.l.state.Assignments["151.101.1.0/24"] = "a"
-	h.l.probeFn = func(ctx context.Context, client *http.Client, domain string) (int, error) {
-		if client == h.direct && h.owner("151.101.1.0/24") == "a" {
-			return 200, nil
-		}
-		return 403, nil
-	}
-	site := h.l.decide(context.Background(), resolved{
-		domain: "www.reddit.com", prefixes: []string{"151.101.1.0/24"}, cloud: 403, ok: true,
-	}, healthyNow(a, b), time.Now())
+	h.pathProbe("151.101.1.0/24", "a")
+	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), healthyNow(a, b), time.Now())
 	if site.State != SiteExit || site.Exit != "a" {
 		t.Fatalf("site %+v, want exit a", site)
 	}
@@ -208,15 +202,8 @@ func TestDecideFailsOver(t *testing.T) {
 	b := Exit{ID: "b", PubKey: "pb", Enabled: true, Priority: 20}
 	h := newHarness(t, a, b)
 	h.l.state.Assignments["151.101.1.0/24"] = "a"
-	h.l.probeFn = func(ctx context.Context, client *http.Client, domain string) (int, error) {
-		if client == h.direct && h.owner("151.101.1.0/24") == "b" {
-			return 200, nil
-		}
-		return 403, nil
-	}
-	site := h.l.decide(context.Background(), resolved{
-		domain: "www.reddit.com", prefixes: []string{"151.101.1.0/24"}, cloud: 403, ok: true,
-	}, healthyNow(a, b), time.Now())
+	h.pathProbe("151.101.1.0/24", "b")
+	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), healthyNow(a, b), time.Now())
 	if site.State != SiteExit || site.Exit != "b" {
 		t.Fatalf("site %+v, want exit b", site)
 	}
@@ -238,23 +225,11 @@ func TestDecideSkipsUnhealthyExit(t *testing.T) {
 	a := Exit{ID: "a", PubKey: "pa", Enabled: true, Priority: 10}
 	b := Exit{ID: "b", PubKey: "pb", Enabled: true, Priority: 20}
 	h := newHarness(t, a, b)
-	probes := 0
-	h.l.probeFn = func(ctx context.Context, client *http.Client, domain string) (int, error) {
-		probes++
-		if h.owner("151.101.1.0/24") == "b" {
-			return 200, nil
-		}
-		return 403, nil
-	}
+	h.pathProbe("151.101.1.0/24", "b")
 	hs := map[string]int64{"pb": time.Now().Unix(), "pa": time.Now().Add(-time.Hour).Unix()}
-	site := h.l.decide(context.Background(), resolved{
-		domain: "www.reddit.com", prefixes: []string{"151.101.1.0/24"}, cloud: 403, ok: true,
-	}, hs, time.Now())
+	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), hs, time.Now())
 	if site.Exit != "b" {
 		t.Fatalf("site %+v, want b", site)
-	}
-	if probes == 0 {
-		t.Fatal("no probe ran")
 	}
 }
 
@@ -263,12 +238,10 @@ func TestDecideUnserved(t *testing.T) {
 	h := newHarness(t, a)
 	h.l.state.Assignments["151.101.1.0/24"] = "a"
 	h.route("151.101.1.0/24")
-	h.l.probeFn = func(ctx context.Context, client *http.Client, domain string) (int, error) {
-		return 403, nil
+	h.l.probeFn = func(ctx context.Context, domain, ip string, mark int) ProbeResult {
+		return ProbeResult{Handshake: true, Status: 403}
 	}
-	site := h.l.decide(context.Background(), resolved{
-		domain: "www.reddit.com", prefixes: []string{"151.101.1.0/24"}, cloud: 403, ok: true,
-	}, healthyNow(a), time.Now())
+	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), healthyNow(a), time.Now())
 	if site.State != SiteUnserved {
 		t.Fatalf("site %+v, want unserved", site)
 	}
@@ -285,9 +258,9 @@ func TestDecideReleasesWhenCloudServes(t *testing.T) {
 	h := newHarness(t, a)
 	h.l.state.Assignments["151.101.1.0/24"] = "a"
 	h.route("151.101.1.0/24")
-	site := h.l.decide(context.Background(), resolved{
-		domain: "www.reddit.com", prefixes: []string{"151.101.1.0/24"}, cloud: 200, ok: true,
-	}, healthyNow(a), time.Now())
+	r := resolvedSite("www.reddit.com", "151.101.1.0/24")
+	r.cloud = ProbeResult{Handshake: true, Status: 200}
+	site := h.l.decide(context.Background(), r, healthyNow(a), time.Now())
 	if site.State != SiteCloud {
 		t.Fatalf("site %+v, want cloud", site)
 	}
@@ -296,6 +269,19 @@ func TestDecideReleasesWhenCloudServes(t *testing.T) {
 	}
 	if h.routes["151.101.1.0/24"] {
 		t.Error("route left behind")
+	}
+}
+
+func TestDecideReleasesWhenCloudClosesAfterHandshake(t *testing.T) {
+	a := Exit{ID: "a", PubKey: "pa", Enabled: true}
+	h := newHarness(t, a)
+	h.l.state.Assignments["104.16.79.0/24"] = "a"
+	h.route("104.16.79.0/24")
+	r := resolvedSite("static.cloudflareinsights.com", "104.16.79.0/24")
+	r.cloud = ProbeResult{Handshake: true}
+	site := h.l.decide(context.Background(), r, healthyNow(a), time.Now())
+	if site.State != SiteCloud {
+		t.Fatalf("site %+v: a host that closes on / still proves the cloud path works", site)
 	}
 }
 
@@ -310,16 +296,14 @@ func TestDecideSkipsExitWhoseNetworkBlocksDomain(t *testing.T) {
 	h := newHarness(t, a, b)
 	h.l.opts.FeedDir = dir
 	tried := ""
-	h.l.probeFn = func(ctx context.Context, client *http.Client, domain string) (int, error) {
+	h.l.probeFn = func(ctx context.Context, domain, ip string, mark int) ProbeResult {
 		tried = h.owner("151.101.1.0/24")
 		if tried == "b" {
-			return 200, nil
+			return ProbeResult{Handshake: true, Status: 200}
 		}
-		return 403, nil
+		return ProbeResult{Handshake: true, Status: 403}
 	}
-	site := h.l.decide(context.Background(), resolved{
-		domain: "www.reddit.com", prefixes: []string{"151.101.1.0/24"}, cloud: 403, ok: true,
-	}, healthyNow(a, b), time.Now())
+	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), healthyNow(a, b), time.Now())
 	if site.Exit != "b" {
 		t.Fatalf("site %+v, want b (a reports the site blocked)", site)
 	}

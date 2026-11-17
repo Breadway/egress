@@ -168,32 +168,30 @@ type Status struct {
 	AllDown     bool              `json:"all_down,omitempty"`
 }
 
-// Observation is one site compared over the cloud exit and (when needed) an
-// exit host.
-type Observation struct {
-	Domain   string
-	Prefixes []string
-	Cloud    int
-	CloudErr string
-	Exit     string
-	Served   int
-	ServedOK bool
+// ProbeResult is one path's answer for a site.
+type ProbeResult struct {
+	// Handshake is set when TLS completed, or when the handshake failed only
+	// because the address does not serve that name. Either way the network
+	// path reached the site.
+	Handshake bool
+	// Status is the HTTP status, zero when the server closed without a reply.
+	Status int
+	Err    error
 }
 
-// CloudRefused reports whether the cloud exit is refused for a site. A zero
-// status with a transport error means the request never produced a response,
-// which is the strongest refusal there is. A certificate name mismatch is not
-// a refusal: that address simply does not serve that name as a website, and
-// routing it through an exit would change nothing.
-func CloudRefused(cloud int, err error) bool {
-	if cloud == 0 {
-		return err != nil && !nameMismatch(err)
+// Works reports whether the path reaches the site. A site may close the
+// connection after the handshake, as file-only CDN hosts do for "/", and that
+// still means the path works. A refusal is a failed handshake (an SNI filter,
+// a stall) or an explicit block.
+func (r ProbeResult) Works() bool {
+	if !r.Handshake {
+		return false
 	}
-	switch cloud {
+	switch r.Status {
 	case 403, 451, 429:
-		return true
+		return false
 	}
-	return false
+	return true
 }
 
 func nameMismatch(err error) bool {
