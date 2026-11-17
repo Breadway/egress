@@ -574,7 +574,17 @@ func cmdVerify(args []string) error {
 	if plat.TunnelConfigured() {
 		tcfg.PrivateKey = "configured"
 	}
-	return verifyAll(plat, tcfg, true)
+	if err := verifyAll(plat, tcfg, true); err != nil {
+		return err
+	}
+	// The listener answering does not prove the file every other program uses
+	// is right. A resolver takeover here is invisible to the checks above.
+	if err := checkSystemDNS(); err != nil {
+		fmt.Printf("[FAIL] system dns: %v\n", err)
+		return errors.New("verification failed: system dns")
+	}
+	fmt.Println("[ok]   system dns")
+	return nil
 }
 
 func cmdDiagnose(args []string) error {

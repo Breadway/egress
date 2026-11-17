@@ -161,6 +161,7 @@ func (c *Controller) probe(domain string) {
 	opts := ProbeOptions{
 		Interface: c.iface,
 		Timeout:   ProbeTimeout,
+		Resolve:   core.LookupHost,
 	}
 	if c.tunnelDev != "" {
 		dev := c.tunnelDev

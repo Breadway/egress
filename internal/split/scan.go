@@ -3,6 +3,7 @@ package split
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -67,6 +68,9 @@ type ScanOptions struct {
 	Concurrency int
 	Timeout     time.Duration
 	Interface   string
+	// Resolve overrides name resolution. The CLI points it at the egress
+	// listener so a broken /etc/resolv.conf cannot fail a scan.
+	Resolve func(context.Context, string) ([]net.IP, error)
 }
 
 // ScanResult is one classification from a bulk probe.
@@ -103,7 +107,7 @@ func ScanDomains(ctx context.Context, domains []string, opts ScanOptions) []Scan
 				return
 			}
 			defer func() { <-sem }()
-			res := ProbeConfirmed(ctx, domain, ProbeOptions{Interface: opts.Interface, Timeout: opts.Timeout})
+			res := ProbeConfirmed(ctx, domain, ProbeOptions{Interface: opts.Interface, Timeout: opts.Timeout, Resolve: opts.Resolve})
 			results[i] = ScanResult{Domain: domain, State: res.State, Evidence: res.Evidence, Err: res.Err}
 		}(i, domain)
 	}
