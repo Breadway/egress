@@ -130,7 +130,7 @@ Commands:
   verify       check the installed setup
   diagnose     print routing, DNS, tunnel and log state
   probe        classify domains over the direct path (split-mode foundation)
-  scan         bulk-probe a domain list to seed a new network
+  scan         bulk-probe a domain list to seed a new network (root, or --preview)
   portal       open the local page that explains blocked sites
   proxy        run the per-user split proxy and PAC (Windows split mode)
   update       check for or apply a signed update over the tunnel
