@@ -50,6 +50,17 @@ func TestReadyMarkerRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestPidAliveForAnotherUsersProcess(t *testing.T) {
+	// pid 1 belongs to root; an unprivileged test gets EPERM, which still
+	// proves the process exists.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; EPERM cannot be produced")
+	}
+	if !pidAlive(1) {
+		t.Fatal("pid 1 reported dead by an unprivileged process")
+	}
+}
+
 func TestPidAlive(t *testing.T) {
 	if !pidAlive(os.Getpid()) {
 		t.Error("own pid must be alive")
