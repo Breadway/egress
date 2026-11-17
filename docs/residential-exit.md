@@ -49,15 +49,20 @@ when the service starts.
 
 ## Deploy
 
+Everything below is scripted and idempotent. Run it from the repo root, with
+ssh access to both hosts:
+
 ```sh
-go build -o dist/egress-exit ./cmd/egress-exit
-scp dist/egress-exit aegis:/tmp/egress-exit
-ssh aegis 'sudo install -o root -g root -m 0755 /tmp/egress-exit /usr/local/bin/egress-exit'
-ssh aegis 'sudo install -m 0644 /dev/stdin /etc/systemd/system/egress-exit.service' < deploy/egress-exit.service
-ssh aegis 'sudo systemctl enable --now egress-exit'
+./deploy/install-exit.sh
 ```
 
-Check the decision without changing routes:
+A second run reports `no changes`. It builds and installs `egress-exit`,
+installs and enables the unit, adds the hestia peer and `Table = off` to
+`wg0.conf` (backing the file up first, never restarting wg0), writes hestia's
+`wgexit.conf` only when it differs, enables `wg-quick@wgexit`, and verifies the
+handshake and the learner.
+
+Check the learner's decision without changing routes:
 
 ```sh
 sudo /usr/local/bin/egress-exit --once --dry-run --verbose
@@ -65,25 +70,13 @@ sudo /usr/local/bin/egress-exit --once --dry-run --verbose
 
 ## hestia side
 
-`/etc/wireguard/wgexit.conf` (private key stays on hestia):
+`deploy/install-exit.sh` writes this file; it is shown so the forwarding and NAT
+can be reviewed. The private key stays on hestia.
+## hestia side
 
-```ini
-[Interface]
-PrivateKey = <hestia key>
-Address = 10.99.0.2/32
-MTU = 1420
-PostUp = sysctl -qw net.ipv4.ip_forward=1; ip route replace 10.88.0.0/24 dev %i
-PostUp = iptables -C FORWARD -i %i -o enp9s0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i %i -o enp9s0 -j ACCEPT
-PostUp = iptables -C FORWARD -i enp9s0 -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i enp9s0 -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-PostUp = iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-PostUp = iptables -t nat -C POSTROUTING -s 10.88.0.0/24 -o enp9s0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.88.0.0/24 -o enp9s0 -j MASQUERADE
-
-[Peer]
-PublicKey = <aegis wg0 public key>
-Endpoint = 152.69.174.7:7105
-AllowedIPs = 10.88.0.0/24
-PersistentKeepalive = 25
-```
-
-`systemctl enable --now wg-quick@wgexit`. The TCP MSS clamp matters: this path
-is two WireGuard layers deep, and without it large responses stall.
+The interface carries `Address = 10.99.0.2/32`, routes `10.88.0.0/24` back to
+Aegis, forwards and masquerades that subnet out the detected uplink, and clamps
+TCP MSS. The clamp matters: this path is two WireGuard layers deep, and without
+it large responses stall. The peer points at the Aegis endpoint with
+`AllowedIPs = 10.88.0.0/24` and a persistent keepalive, so it reconnects after
+either side restarts.
