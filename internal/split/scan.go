@@ -71,6 +71,9 @@ type ScanOptions struct {
 	// Resolve overrides name resolution. The CLI points it at the egress
 	// listener so a broken /etc/resolv.conf cannot fail a scan.
 	Resolve func(context.Context, string) ([]net.IP, error)
+	// OnResult is called from the workers as each probe finishes, for progress
+	// on long lists. It must be safe for concurrent calls.
+	OnResult func(ScanResult)
 }
 
 // ScanResult is one classification from a bulk probe.
@@ -109,6 +112,9 @@ func ScanDomains(ctx context.Context, domains []string, opts ScanOptions) []Scan
 			defer func() { <-sem }()
 			res := ProbeConfirmed(ctx, domain, ProbeOptions{Interface: opts.Interface, Timeout: opts.Timeout, Resolve: opts.Resolve})
 			results[i] = ScanResult{Domain: domain, State: res.State, Evidence: res.Evidence, Err: res.Err}
+			if opts.OnResult != nil {
+				opts.OnResult(results[i])
+			}
 		}(i, domain)
 	}
 	wg.Wait()
