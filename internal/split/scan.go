@@ -136,6 +136,13 @@ func RecordScanIn(dir, network string, results []ScanResult) (int, error) {
 		if r.State == StateUnknown || r.Domain == "" {
 			continue
 		}
+		if r.State == StateBlocked && r.Evidence == EvidenceConnectStall {
+			// A TCP connect timeout is weak evidence: a dead or slow host
+			// looks the same. Recording these turns a scan of a large list
+			// into a pile of false blocks. The live controller still learns
+			// them while browsing, where a tunnel comparison backs it up.
+			continue
+		}
 		if recordProbeOutcome(profile, r.Domain, ProbeResult{State: r.State, Evidence: r.Evidence}, now) {
 			changed++
 		}

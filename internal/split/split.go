@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,6 +53,10 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	}
 	c.overrides = LoadOverrides(ProfileDir())
 	c.load(network)
+	// Clear routes left by a previous process. The supervisor calls SetNetwork
+	// right after this with the same network, which returns early, so startup
+	// is the only chance to remove kernel routes nobody tracks yet.
+	c.routes.Reset()
 	c.reporter = newSplitReporter(network, ProfileDir(), logger)
 	c.reporter.SetMergeFunc(c.mergeFeed)
 	c.reporter.SetRefreshFunc(c.refreshSites)
@@ -89,8 +94,8 @@ func (c *Controller) SetNetwork(network, iface string) {
 	reporter := c.reporter
 	c.mu.Unlock()
 	reporter.SetNetwork(network)
-	c.routes.Clear()
-	c.log.Printf("split: profile %s (routes cleared)", network)
+	c.routes.Reset()
+	c.log.Printf("split: profile %s (stale tunnel routes cleared)", network)
 	c.Sweep()
 }
 
@@ -475,6 +480,56 @@ func NewRouteManager(dev string, logger *log.Logger) *RouteManager {
 		routes: map[string]time.Time{},
 		run:    routeCommands(dev),
 	}
+}
+
+// Reset removes every route on the tunnel device that this process did not
+// add. After a restart or a network change the kernel still holds the previous
+// network's routes, and the in-memory map cannot see them; without this they
+// accumulate and keep sending traffic through the tunnel.
+func (m *RouteManager) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for _, prefix := range kernelRoutesOn(m.dev) {
+		if err := m.run("del", prefix); err == nil {
+			removed++
+		}
+	}
+	m.routes = map[string]time.Time{}
+	m.order = nil
+	if removed > 0 {
+		log.Printf("split: cleared %d stale tunnel routes", removed)
+	}
+}
+
+// kernelRoutesOn lists the destination routes the kernel holds on dev.
+func kernelRoutesOn(dev string) []string {
+	if runtime.GOOS != "linux" || dev == "" {
+		return nil
+	}
+	out, err := exec.Command("ip", "route", "show", "dev", dev).Output()
+	if err != nil {
+		return nil
+	}
+	return parseTunnelRoutes(string(out))
+}
+
+// parseTunnelRoutes returns the destinations of the routes on the tunnel,
+// excluding the tunnel subnet itself, which the tunnel needs.
+func parseTunnelRoutes(output string) []string {
+	var out []string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		dst := fields[0]
+		if dst == "10.88.0.0/24" || dst == "default" {
+			continue
+		}
+		out = append(out, dst)
+	}
+	return out
 }
 
 // routeExec builds one command. Tests replace it to assert the argument

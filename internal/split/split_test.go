@@ -871,3 +871,48 @@ func TestRouteCommandsBuildIpRoute(t *testing.T) {
 		t.Error("an unknown verb should be an error, not a silent success")
 	}
 }
+
+func TestParseTunnelRoutes(t *testing.T) {
+	output := strings.Join([]string{
+		"10.88.0.0/24 dev wg0 scope link",
+		"151.101.1.140 dev wg0 scope link",
+		"203.0.113.0/24 dev wg0 scope link",
+		"default dev wg0 scope link",
+		"",
+	}, "\n")
+	got := parseTunnelRoutes(output)
+	want := []string{"151.101.1.140", "203.0.113.0/24"}
+	if len(got) != len(want) {
+		t.Fatalf("routes %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("routes %v, want %v", got, want)
+		}
+	}
+}
+
+func TestRecordScanSkipsWeakConnectStall(t *testing.T) {
+	dir := t.TempDir()
+	results := []ScanResult{
+		{Domain: "dead.example", State: StateBlocked, Evidence: EvidenceConnectStall},
+		{Domain: "filtered.example", State: StateBlocked, Evidence: EvidenceTLSStall},
+	}
+	n, err := RecordScanIn(dir, "net", results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("recorded %d, want 1: a connect timeout is not proof of a block", n)
+	}
+	profile, err := LoadProfile(ProfilePathIn(dir, "net"), "net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.State("dead.example", time.Now()) == StateBlocked {
+		t.Error("a connect timeout was recorded as blocked")
+	}
+	if profile.State("filtered.example", time.Now()) != StateBlocked {
+		t.Error("a TLS stall was not recorded")
+	}
+}
