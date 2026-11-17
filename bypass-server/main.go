@@ -1045,8 +1045,27 @@ func (s *server) download(w http.ResponseWriter, r *http.Request) {
 	ok := bcrypt.CompareHashAndPassword(hash, []byte(password)) == nil && known
 
 	if !ok {
+		// Caddy discards access logs for this host, so a rejected attempt is
+		// only visible here. "He downloaded it" and "the password never
+		// worked" are otherwise indistinguishable.
+		log.Printf("download: rejected %q from %s", username, clientIP(r))
 		s.renderStatusNav(w, s.validSession(r), "download", "Download", http.StatusUnauthorized,
 			downloadPage(username, "Wrong username or password."))
+		return
+	}
+
+	path := filepath.Join(s.state, "binaries", filepath.Base(u.Binary))
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("download: %q from %s has no installer at %s", username, clientIP(r), path)
+		http.Error(w, "installer is not available; contact the administrator", http.StatusServiceUnavailable)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		log.Printf("download: %q from %s has an unusable installer at %s", username, clientIP(r), path)
+		http.Error(w, "installer is not available; contact the administrator", http.StatusServiceUnavailable)
 		return
 	}
 	// Count the download. Best effort: a failed save must not block the file.
@@ -1060,19 +1079,7 @@ func (s *server) download(w http.ResponseWriter, r *http.Request) {
 		_ = s.saveUsers(current)
 	}
 	s.usersMu.Unlock()
-
-	path := filepath.Join(s.state, "binaries", filepath.Base(u.Binary))
-	f, err := os.Open(path)
-	if err != nil {
-		http.Error(w, "installer is not available; contact the administrator", http.StatusServiceUnavailable)
-		return
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		http.Error(w, "installer is not available; contact the administrator", http.StatusServiceUnavailable)
-		return
-	}
+	log.Printf("download: %q from %s sent %s (%d bytes)", username, clientIP(r), filepath.Base(u.Binary), info.Size())
 	// Serve under the stored binary name: Windows, Linux and macOS builds all
 	// have different naming, and the label alone cannot reconstruct it.
 	filename := filepath.Base(u.Binary)
