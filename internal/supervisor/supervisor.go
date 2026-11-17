@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"path/filepath"
 	"time"
 )
 
@@ -66,7 +67,22 @@ type Supervisor struct {
 	// split, when set, learns blocked domains from DNS and routes only those
 	// destinations into the tunnel.
 	Split *split.Controller
+
+	// Tunneler restores. Security software can quarantine wstunnel.exe, and
+	// this loop re-extracts the embedded copy on every tick. Unbounded, that
+	// is a fight the scanner wins: the file disappears again before it is
+	// used, and nothing in the log says why. After a few consecutive
+	// restores, say so once and stop trying for a while.
+	restores      int
+	restorePaused time.Time
 }
+
+// A scanner that removes the tunneler removes it again within seconds, so a
+// short run of restores means quarantine rather than a one-off deletion.
+const (
+	tunnelerRestoreLimit = 3
+	tunnelerRestorePause = time.Hour
+)
 
 func New(plat platform.Interface, resolver *doh.Resolver, wst *wstunnel.Proc, logger *log.Logger, manageTunnel, manageFallback bool) *Supervisor {
 	return &Supervisor{
@@ -166,14 +182,19 @@ func (s *Supervisor) loop(ctx context.Context) error {
 
 		// Defender can quarantine the tunneler after install. Restore it from
 		// the embedded copy: this process runs as SYSTEM and may write there,
-		// while the per-user proxy may not.
+		// while the per-user proxy may not. Back off when the file keeps
+		// disappearing, because then the scan is the cause, not a bad copy.
 		if s.manageFallback {
 			if _, err := s.plat.WstunnelPath(); err != nil {
-				if path, ierr := s.plat.InstallWstunnel(); ierr == nil {
-					s.log.Printf("restored the tunneler after it went missing: %s", path)
-				} else {
+				if time.Now().Before(s.restorePaused) {
+					// Deliberately quiet: noteRestore already explained it.
+				} else if path, ierr := s.plat.InstallWstunnel(); ierr != nil {
 					s.log.Printf("tunneler missing and could not be restored: %v", ierr)
+				} else {
+					s.noteRestore(path)
 				}
+			} else if s.restores > 0 {
+				s.restores = 0
 			}
 		}
 
@@ -532,4 +553,19 @@ func (s *Supervisor) probe(window time.Duration) bool {
 		}
 		time.Sleep(1500 * time.Millisecond)
 	}
+}
+
+// noteRestore records a successful re-extraction of the tunneler and gives up
+// repeating it once the file is clearly being removed by something else.
+func (s *Supervisor) noteRestore(path string) {
+	s.restores++
+	s.log.Printf("restored the tunneler after it went missing: %s", path)
+	if s.restores < tunnelerRestoreLimit {
+		return
+	}
+	s.log.Printf("the tunneler has been removed %d times in a row, so something is deleting it every few seconds. "+
+		"Security software is quarantining %s; exclude that directory from real-time scanning, or install a signed build. "+
+		"Not retrying for %s.", s.restores, filepath.Dir(path), tunnelerRestorePause)
+	s.restorePaused = time.Now().Add(tunnelerRestorePause)
+	s.restores = 0
 }
