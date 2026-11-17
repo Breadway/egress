@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -49,6 +50,40 @@ func reportVersion() string {
 	return buildVersion
 }
 
+// versionString is what `egress version` prints and what support asks for.
+// It carries the build version, the platform and, when the build recorded it,
+// the commit the binary came from.
+func versionString() string {
+	out := fmt.Sprintf("egress %s %s/%s", reportVersion(), runtime.GOOS, runtime.GOARCH)
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return out
+	}
+	var rev, dirty string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			rev = setting.Value
+		case "vcs.modified":
+			if setting.Value == "true" {
+				dirty = "+dirty"
+			}
+		}
+	}
+	if len(rev) > 7 {
+		rev = rev[:7]
+	}
+	if rev != "" {
+		out += " (" + rev + dirty + ")"
+	}
+	return out
+}
+
+func cmdVersion([]string) error {
+	fmt.Println(versionString())
+	return nil
+}
+
 func Main() {
 	if err := realMain(); err != nil {
 		fmt.Fprintf(os.Stderr, "egress: %v\n", err)
@@ -64,6 +99,8 @@ func realMain() error {
 		case "-h", "--help", "help":
 			usage()
 			return nil
+		case "version", "--version", "-version":
+			return cmdVersion(args[1:])
 		}
 	}
 
@@ -125,6 +162,7 @@ Usage:
   egress [command] [flags]
 
 Commands:
+  version      print the build version and platform
   install      configure this machine (default)
   supervise    run the resolver and the fallback supervisor; used by the boot service
   verify       check the installed setup
@@ -541,7 +579,7 @@ func cmdSupervise(args []string) error {
 	defer stop()
 	go func() {
 		snap := func() portal.Snapshot {
-			out := portal.Snapshot{Generated: time.Now(), Online: plat.TunnelUp() || aegisReachable()}
+			out := portal.Snapshot{Generated: time.Now(), Version: reportVersion(), Online: plat.TunnelUp() || aegisReachable()}
 			if splitter != nil {
 				network, domains := splitter.StatusSnapshot()
 				out.Network = network
@@ -568,6 +606,7 @@ func cmdVerify(args []string) error {
 		return err
 	}
 	setupLogging(resolveDebug(*debug))
+	fmt.Println(versionString())
 
 	plat := newPlatform()
 	tcfg := tunnelConfig{ClientIP: defaultClientIP, Split: true}

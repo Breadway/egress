@@ -401,6 +401,7 @@ func showTrayMenu(hwnd uintptr) {
 		procAppendMenuW.Call(menu, mfString, id, uintptr(unsafe.Pointer(ptr)))
 	}
 
+	addGray("egress " + reportVersion())
 	if trayProxy != nil {
 		for _, line := range trayStatusLines(trayProxy) {
 			addGray(line)

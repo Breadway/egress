@@ -33,6 +33,7 @@ type Domain struct {
 type Snapshot struct {
 	Generated time.Time
 	Network   string
+	Version   string
 	Online    bool
 	Tunnel    string
 	Domains   []Domain
@@ -103,7 +104,7 @@ footer { margin-top: 2rem; color: #888; font-size: .85rem; }
 </head>
 <body>
 <h1>egress</h1>
-<p class="sub">{{.Network}} · updated {{.GeneratedLabel}}</p>
+<p class="sub">{{.Network}}{{if .Version}} · egress {{.Version}}{{end}} · updated {{.GeneratedLabel}}</p>
 {{if .Online}}
 <div class="banner ok">Connected. Blocked sites are routed through the tunnel; each one below says how it is being reached.</div>
 {{else}}
