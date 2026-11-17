@@ -59,7 +59,10 @@ func cmdUpdateApply(args []string) error {
 	}
 	backup := installed + ".prev"
 	if err := copyExecutable(installed, backup); err != nil {
-		return fmt.Errorf("back up installed binary: %w", err)
+		// A blocked or unreadable installed binary must not wedge updates:
+		// the staged release is already verified, and install replaces the
+		// file anyway. Keep any existing backup, which is a known-good build.
+		debugf("could not back up the installed binary: %v", err)
 	}
 
 	installArgs := []string{"install", "--keep-config"}
