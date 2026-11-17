@@ -31,6 +31,7 @@ type Controller struct {
 	iface     string
 	log       *log.Logger
 	routes    *RouteManager
+	tunnelDev string
 	probing   map[string]bool
 	sem       chan struct{}
 	reporter  *splitReporter
@@ -56,6 +57,10 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	go c.refreshProtocols()
 	return c
 }
+
+// SetTunnelDevice names the interface a 403 or 451 comparison is sent over.
+// Without it a filtered response stays transient and never routes.
+func (c *Controller) SetTunnelDevice(dev string) { c.tunnelDev = dev }
 
 func (c *Controller) load(network string) {
 	path := ProfilePath(network)
@@ -117,6 +122,20 @@ func (c *Controller) HandleAnswer(domain string, ips []net.IP, ttl time.Duration
 	c.startProbe(domain, probeCooldown)
 }
 
+// tunnelStatus fetches the same URL over the tunnel interface. Split mode
+// leaves the default route alone, so binding to the tunnel device is how a
+// comparison reaches the destination without a full tunnel.
+func tunnelStatus(ctx context.Context, domain, dev string) (int, error) {
+	res := ProbeConfirmed(ctx, domain, ProbeOptions{Interface: dev, Timeout: ProbeTimeout})
+	if res.Status != 0 {
+		return res.Status, nil
+	}
+	if res.Err != nil {
+		return 0, res.Err
+	}
+	return 0, fmt.Errorf("tunnel probe returned no status (%s)", res.State)
+}
+
 func (c *Controller) startProbe(domain string, minAge time.Duration) {
 	if probeIgnoredName(domain) {
 		return
@@ -139,10 +158,17 @@ func (c *Controller) startProbe(domain string, minAge time.Duration) {
 
 func (c *Controller) probe(domain string) {
 	c.sem <- struct{}{}
-	res := ProbeConfirmed(context.Background(), domain, ProbeOptions{
+	opts := ProbeOptions{
 		Interface: c.iface,
 		Timeout:   ProbeTimeout,
-	})
+	}
+	if c.tunnelDev != "" {
+		dev := c.tunnelDev
+		opts.TunnelStatus = func(ctx context.Context, domain string) (int, error) {
+			return tunnelStatus(ctx, domain, dev)
+		}
+	}
+	res := ProbeConfirmed(context.Background(), domain, opts)
 	<-c.sem
 
 	now := time.Now()
@@ -420,26 +446,34 @@ func NewRouteManager(dev string, logger *log.Logger) *RouteManager {
 	}
 }
 
+// routeExec builds one command. Tests replace it to assert the argument
+// list without touching the kernel.
+var routeExec = exec.Command
+
 // routeCommands returns the host-route commands for the current platform.
 // Linux uses iproute2; macOS uses the BSD route(8) syntax. Both are scoped to
-// the tunnel interface, so the physical link is untouched.
+// the tunnel interface, so the physical link is untouched. Callers pass the
+// verb first: ("replace", ip) or ("del", ip).
 func routeCommands(dev string) routeRunner {
 	if runtime.GOOS == "darwin" {
 		return func(args ...string) error {
 			switch args[0] {
-			case "route":
-				switch args[1] {
-				case "replace":
-					return exec.Command("route", "-n", "add", "-host", args[2], "-interface", dev).Run()
-				case "del":
-					return exec.Command("route", "-n", "delete", "-host", args[2]).Run()
-				}
+			case "replace":
+				return routeExec("route", "-n", "add", "-host", args[1], "-interface", dev).Run()
+			case "del":
+				return routeExec("route", "-n", "delete", "-host", args[1]).Run()
 			}
 			return fmt.Errorf("unsupported route command %q", args)
 		}
 	}
 	return func(args ...string) error {
-		return exec.Command("ip", args...).Run()
+		switch args[0] {
+		case "replace":
+			return routeExec("ip", "route", "replace", args[1], "dev", dev).Run()
+		case "del":
+			return routeExec("ip", "route", "del", args[1], "dev", dev).Run()
+		}
+		return fmt.Errorf("unsupported route command %q", args)
 	}
 }
 

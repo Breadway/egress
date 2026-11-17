@@ -33,7 +33,7 @@ If this machine can SSH to Aegis and has passwordless sudo there, the helper
 does the whole provisioning step:
 
 ```sh
-cd ~/Projects/egress
+cd ~/Projects/Apps/egress
 ./new-device.sh --name sam
 ```
 

@@ -16,7 +16,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -811,5 +813,41 @@ func TestRecordScanWritesProfile(t *testing.T) {
 	}
 	if profile.State("allowed.example", time.Now()) != StateAllowed {
 		t.Error("allowed result not recorded")
+	}
+}
+
+func TestRouteCommandsBuildIpRoute(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		return
+	}
+	var got [][]string
+	old := routeExec
+	routeExec = func(name string, args ...string) *exec.Cmd {
+		got = append(got, append([]string{name}, args...))
+		return exec.Command("true")
+	}
+	t.Cleanup(func() { routeExec = old })
+
+	run := routeCommands("wg0")
+	if err := run("replace", "151.101.1.140"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if err := run("del", "151.101.1.140"); err != nil {
+		t.Fatalf("del: %v", err)
+	}
+	want := [][]string{
+		{"ip", "route", "replace", "151.101.1.140", "dev", "wg0"},
+		{"ip", "route", "del", "151.101.1.140", "dev", "wg0"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ran %d commands, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if strings.Join(got[i], " ") != strings.Join(want[i], " ") {
+			t.Errorf("command %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if err := run("bogus", "x"); err == nil {
+		t.Error("an unknown verb should be an error, not a silent success")
 	}
 }

@@ -518,6 +518,11 @@ func cmdSupervise(args []string) error {
 	if !*noTunnel {
 		splitter = split.NewController(split.NetworkKey("", gateway), iface,
 			split.NewRouteManager(wgInterface, appLogger()), appLogger())
+		if runtime.GOOS == "linux" {
+			// Bind the 403/451 comparison to the tunnel; split mode keeps the
+			// default route direct.
+			splitter.SetTunnelDevice(wgInterface)
+		}
 	}
 	sup := supervisor.New(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
 	sup.Iface, sup.Gateway = iface, gateway
