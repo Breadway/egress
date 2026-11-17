@@ -398,7 +398,7 @@ small,.muted{color:var(--faint);font-size:12.5px}
 .card.tight{padding:var(--md)}
 .card p:last-child{margin-bottom:0}
 .card h2:first-child,.card h3:first-child{margin-top:0}
-.cta-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--md);margin:var(--xl) 0}
+.cta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:var(--md);margin:var(--xl) 0}
 @media(max-width:660px){.cta-grid{grid-template-columns:1fr}.hero{padding-top:var(--lg)}}
 .cta{display:block;padding:var(--lg);border:1px solid var(--line);border-radius:var(--r);background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
 .cta:hover{border-color:var(--line-2);background:var(--surface-2);text-decoration:none}
@@ -735,6 +735,7 @@ func (s *server) landing(w http.ResponseWriter, r *http.Request) {
 <div class="cta-grid">
 <a class="cta" href="/apply"><strong>Apply</strong><span>Two fields. Then a status page.</span></a>
 <a class="cta" href="/download"><strong>Download</strong><span>Approved devices.</span></a>
+<a class="cta" href="/status"><strong>Already applied?</strong><span>Open your status page.</span></a>
 </div>`)
 }
 
@@ -909,6 +910,15 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	app, ok := s.applicationForRequest(r)
 	if !ok {
+		// No link and no cookie: this is a returning applicant without their
+		// link, not an error. Only a wrong id or key stays a 404 so the page
+		// cannot be used to probe applications.
+		if r.URL.Query().Get("app") == "" && r.URL.Query().Get("key") == "" {
+			s.renderNav(w, s.validSession(r), "", "Status", `<div class="admin-head"><h1>Status</h1></div>
+<div class="card"><h2>No application on this browser</h2>
+<p>Open the link you saved, or <a href="/apply">apply</a>.</p></div>`)
+			return
+		}
 		if !s.allow(s.fails, clientIP(r), authFailsMax, authWindow) {
 			http.Error(w, "too many attempts; try again later", http.StatusTooManyRequests)
 			return
