@@ -38,6 +38,10 @@ var (
 // without the flag for a quiet binary.
 var defaultDebug = "false"
 
+// Set by first-activation enrollment; consumed by the Windows per-user setup
+// so the relay credential does not have to live in the installer.
+var enrollRelayUser, enrollRelayPass string
+
 // resolveDebug ORs an explicit --debug flag with the build-time default.
 func resolveDebug(cmdline bool) bool {
 	return cmdline || defaultDebug == "true"
@@ -210,6 +214,8 @@ func runInstall(plat platform, args []string) (err error) {
 	// working; the flag itself no longer changes anything.
 	_ = fs.Bool("split", false, "deprecated: split mode is always on")
 	keepConfig := fs.Bool("keep-config", false, "reuse the existing tunnel key and address (upgrade)")
+	enrollToken := fs.String("enroll-token", "", "bind this device with a one-time enrollment token")
+	enrollServer := fs.String("enroll-server", defaultEnrollServer, "enrollment service base URL")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -256,6 +262,32 @@ func runInstall(plat platform, args []string) (err error) {
 			tcfg.ClientIP = keepIP
 		}
 	}
+	// A token binds this device now: the keypair is generated here, so the
+	// installer that was downloaded carries no identity worth stealing.
+	if token := findEnrollToken(*enrollToken); token != "" {
+		key, err := core.GeneratePrivateKey()
+		if err != nil {
+			return err
+		}
+		pub, err := publicKey(key)
+		if err != nil {
+			return err
+		}
+		host, _ := os.Hostname()
+		creds, err := enrollDevice(context.Background(), *enrollServer, token, pub, host)
+		if err != nil {
+			return fmt.Errorf("enroll this device: %w", err)
+		}
+		tcfg.PrivateKey = key
+		tcfg.ClientIP = creds.IP
+		tcfg.ReportPubkey = pub
+		_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: creds.IP})
+		if creds.hasRelay() {
+			enrollRelayUser, enrollRelayPass = creds.RelayUser, creds.RelayPass
+		}
+		fmt.Printf("enrolled as %s at %s\n", creds.Device, creds.IP)
+	}
+
 	tcfg.Split = true
 	pastInstallService := false
 	parked := false
@@ -301,9 +333,13 @@ func runInstall(plat platform, args []string) (err error) {
 	var pub string
 	if !*noTunnel {
 		var key string
-		if *keepConfig && *keyFlag == "" && *keyFile == "" {
+		switch {
+		case tcfg.PrivateKey != "":
+			// Enrolled above.
+			key = tcfg.PrivateKey
+		case *keepConfig && *keyFlag == "" && *keyFile == "":
 			key = keepKey
-		} else {
+		default:
 			key, err = resolveKey(*keyFlag, *keyFile)
 			if err != nil {
 				return err

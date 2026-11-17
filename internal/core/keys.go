@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -31,7 +32,17 @@ func NormalizeKey(s string) (string, error) {
 	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
-// publicKey derives the Curve25519 public key. It uses crypto/ecdh so it works
+// GeneratePrivateKey creates a WireGuard private key on this machine. Used by
+// first-activation enrollment so the private half never leaves the device.
+func GeneratePrivateKey() (string, error) {
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(key.Bytes()), nil
+}
+
+// PublicKey derives the Curve25519 public key. It uses crypto/ecdh so it works
 // on Windows, which has no wg.exe, and so it never depends on wireguard-tools
 // being installed yet.
 func PublicKey(privateKey string) (string, error) {
