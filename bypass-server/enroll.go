@@ -388,19 +388,20 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var b strings.Builder
-	b.WriteString(`<h1>Devices</h1>
-<p>Invites bind a key on first activation. The device generates its own private key; only the public key reaches the server. A token works once, expires, and cannot displace a bound device.</p>`)
+	b.WriteString(`<div class="admin-head"><h1>Devices</h1></div>`)
+	b.WriteString(adminSubnav("devices"))
+	b.WriteString(`<p>One-time invites. The device brings its own key.</p>`)
 	if created != "" {
 		fmt.Fprintf(&b, `<div class="banner ok"><strong>New invite token</strong> (shown once):<pre>%s</pre>Send it with the installer. The other side runs:<pre>egress install --enroll-token &lt;token&gt;</pre>or puts the token in <code>enroll.txt</code> next to the exe and runs it as administrator.</div>`, template.HTMLEscapeString(created))
 	}
 	if loadErr != nil {
 		fmt.Fprintf(&b, `<p class="warn">Could not read devices.json: %s</p>`, template.HTMLEscapeString(loadErr.Error()))
 	}
-	b.WriteString(`<form method="post" action="/admin/devices"><input type="hidden" name="action" value="invite"><label>Label <input name="label" placeholder="Ethan"></label> <button type="submit">Create invite</button></form>`)
+	b.WriteString(`<form method="post" action="/admin/devices" class="card tight"><input type="hidden" name="action" value="invite"><label for="invite-label">Label</label><input id="invite-label" name="label" placeholder="Ethan"><div class="actions"><button class="btn" type="submit">Create invite</button></div></form>`)
 	if len(reg.Devices) == 0 {
 		b.WriteString(`<p class="muted">No invites yet.</p>`)
 	} else {
-		b.WriteString(`<table><thead><tr><th>Device</th><th>Label</th><th>Status</th><th>Address</th><th>Key</th><th>Created</th><th>Expires</th><th></th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>Label</th><th>Status</th><th>Address</th><th>Key</th><th>Created</th><th>Expires</th><th></th></tr></thead><tbody>`)
 		for _, d := range reg.Devices {
 			key := ""
 			if d.PubKey != "" {
@@ -408,14 +409,14 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			}
 			action := ""
 			if d.Status == "issued" {
-				action = `<form method="post" action="/admin/devices"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><button type="submit">Revoke</button></form>`
+				action = `<form method="post" action="/admin/devices"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><button class="btn ghost small" type="submit">Revoke</button></form>`
 			}
-			fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-				template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.Label), template.HTMLEscapeString(d.Status),
+			fmt.Fprintf(&b, `<tr><td><a href="/admin/devices/%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+				template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.Label), template.HTMLEscapeString(d.Status),
 				template.HTMLEscapeString(d.IP), template.HTMLEscapeString(key),
 				template.HTMLEscapeString(d.Created), template.HTMLEscapeString(d.Expires), action)
 		}
-		b.WriteString(`</tbody></table>`)
+		b.WriteString(`</tbody></table></div>`)
 	}
 	s.renderNav(w, true, "devices", "Devices", b.String())
 }
