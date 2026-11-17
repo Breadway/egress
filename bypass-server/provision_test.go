@@ -162,3 +162,34 @@ func TestDownloadAuth(t *testing.T) {
 		t.Errorf("downloads = %d, want 1 counted", got)
 	}
 }
+
+// TestDownloadTrimsPastedPassword proves a password pasted with a trailing
+// newline still authenticates. Logins are handed out by copying text out of
+// the admin UI and shell scripts, and a stored or pasted newline used to make
+// the visible password impossible to use.
+func TestDownloadTrimsPastedPassword(t *testing.T) {
+	s := claimTestServer(t)
+	password := "correct-horse-37-battery"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.saveUsers(map[string]user{
+		"testuser": {
+			Hash: string(hash), Password: password, Binary: "egress-test.exe",
+			Label: "test", OS: "windows", Arch: "amd64",
+			Created: time.Now().UTC().Format(time.RFC3339),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.download(rec, bearerPost("/download", url.Values{
+		"username": {"testuser"},
+		"password": {password + "\r\n"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pasted password = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+}

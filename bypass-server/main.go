@@ -1022,7 +1022,10 @@ func (s *server) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
-	password := r.FormValue("password")
+	// Trim the password too: a pasted value routinely carries a trailing
+	// newline, and generated passwords never contain whitespace, so a stray
+	// one is always a paste artefact rather than part of the secret.
+	password := strings.TrimSpace(r.FormValue("password"))
 	if r.Method == http.MethodGet && username == "" && password == "" {
 		s.renderNav(w, s.validSession(r), "download", "Download", downloadPage("", ""))
 		return
@@ -1649,7 +1652,9 @@ func (s *server) adminAddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
-	password := r.FormValue("password")
+	// A newline here would be hashed and stored, and the password shown in
+	// the admin UI would then never work. Scripts post this field.
+	password := strings.TrimSpace(r.FormValue("password"))
 	label := strings.TrimSpace(r.FormValue("label"))
 	binary := filepath.Base(strings.TrimSpace(r.FormValue("binary")))
 	peer := strings.TrimSpace(r.FormValue("peer"))
