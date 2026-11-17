@@ -376,28 +376,64 @@ func (windowsPlatform) InstallService(exePath string, args []string) error {
 
 func (windowsPlatform) StartService() error {
 	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
-	// /end returns before the process exits, and starting a task that is
-	// still marked Running is ignored. Waiting is what keeps an update from
-	// leaving the supervisor down.
-	waitTaskStopped(30 * time.Second)
-	return logx.RunLogged("schtasks", "/run", "/tn", winTaskName)
+	// /end returns before the process exits: the task reports Ready while the
+	// old supervisor still holds the DNS port. Starting the new one then
+	// fails to bind and exits, which is how an update left the device with no
+	// resolver. Wait for the port to be released, then start, and confirm a
+	// listener came up.
+	waitListenerGone(core.DoHListenAddr, 20*time.Second)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := logx.RunLogged("schtasks", "/run", "/tn", winTaskName); err != nil {
+			lastErr = err
+		} else if waitListener(core.DoHListenAddr, 20*time.Second) {
+			return nil
+		}
+		_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
+		waitListenerGone(core.DoHListenAddr, 5*time.Second)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("the supervisor task started but nothing is listening on " + core.DoHListenAddr)
 }
 
 func (windowsPlatform) StopService() error {
 	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
-	waitTaskStopped(30 * time.Second)
+	waitListenerGone(core.DoHListenAddr, 20*time.Second)
 	// The task may leave its wstunnel child behind, and a running image
 	// cannot be replaced during reinstall.
 	stopWstunnel()
 	return nil
 }
 
-// waitTaskStopped blocks until the supervisor task is no longer running. A
-// task that is not running returns immediately.
-func waitTaskStopped(timeout time.Duration) {
-	p := windowsPlatform{}
+// waitListener reports whether something answered on addr before the timeout.
+func waitListener(addr string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	for p.ServiceActive() {
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// waitListenerGone blocks until nothing is listening on addr, which is how the
+// port tells us the previous supervisor has really exited.
+func waitListenerGone(addr string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			return
+		}
+		conn.Close()
 		if time.Now().After(deadline) {
 			return
 		}

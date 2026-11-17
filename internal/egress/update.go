@@ -35,6 +35,7 @@ func cmdUpdate(args []string) error {
 	fs := newFlagSet("update")
 	check := fs.Bool("check", false, "report whether a newer release exists")
 	apply := fs.Bool("apply", false, "download, verify and install a newer release")
+	force := fs.Bool("force", false, "retry a release that recently failed to apply")
 	base := fs.String("base", defaultUpdateBase, "update service base URL")
 	debug := fs.Bool("debug", false, "trace commands")
 	if err := fs.Parse(args); err != nil {
@@ -82,7 +83,7 @@ func cmdUpdate(args []string) error {
 	// A release whose apply failed is not retried every minute: the timer
 	// would otherwise loop on a broken build forever. A single failure is
 	// usually transient, so the first retry is soon.
-	if sha, at, count := failedRelease(); sha == m.SHA256 && !at.IsZero() {
+	if sha, at, count := failedRelease(); sha == m.SHA256 && !at.IsZero() && !*force {
 		if wait := failedReleaseWait(count) - time.Since(at); wait > 0 {
 			fmt.Printf("previous attempt for %s failed at %s; retrying in %s\n",
 				m.Version, at.Format(time.RFC3339), wait.Round(time.Minute))
@@ -433,10 +434,14 @@ func failedRelease() (string, time.Time, int) {
 // failed. The first failure is usually transient (a locked image, a task that
 // had not exited), so retry soon; a release that fails repeatedly waits.
 func failedReleaseWait(count int) time.Duration {
-	if count <= 1 {
+	switch {
+	case count <= 1:
 		return 10 * time.Minute
+	case count == 2:
+		return 30 * time.Minute
+	default:
+		return 6 * time.Hour
 	}
-	return 6 * time.Hour
 }
 
 // recordFailedRelease remembers an apply failure so the timer backs off

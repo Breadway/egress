@@ -255,7 +255,10 @@ func TestFailedReleaseBacksOff(t *testing.T) {
 	if got := failedReleaseWait(1); got != 10*time.Minute {
 		t.Errorf("first retry after %s, want 10m", got)
 	}
-	if got := failedReleaseWait(2); got != 6*time.Hour {
+	if got := failedReleaseWait(2); got != 30*time.Minute {
+		t.Errorf("second retry after %s, want 30m", got)
+	}
+	if got := failedReleaseWait(3); got != 6*time.Hour {
 		t.Errorf("repeated retry after %s, want 6h", got)
 	}
 
