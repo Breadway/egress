@@ -19,6 +19,21 @@ const relayAuthPath = "/etc/egress-socks/auth"
 
 const relayUsagePath = "/var/lib/egress-socks/usage.json"
 
+// Configurable so a local preview can point at demo credentials.
+func relayAuthFilePath() string {
+	if p := os.Getenv("BYPASS_RELAY_AUTH"); p != "" {
+		return p
+	}
+	return relayAuthPath
+}
+
+func relayUsageFilePath() string {
+	if p := os.Getenv("BYPASS_RELAY_USAGE"); p != "" {
+		return p
+	}
+	return relayUsagePath
+}
+
 func readRelayAuth(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -78,7 +93,7 @@ func (s *server) adminRelay(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusForbidden)
 			return
 		}
-		users, err := readRelayAuth(relayAuthPath)
+		users, err := readRelayAuth(relayAuthFilePath())
 		if err != nil {
 			http.Error(w, "relay auth file is not readable", http.StatusInternalServerError)
 			return
@@ -98,7 +113,7 @@ func (s *server) adminRelay(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad action", http.StatusBadRequest)
 			return
 		}
-		if err := writeRelayAuth(relayAuthPath, users); err != nil {
+		if err := writeRelayAuth(relayAuthFilePath(), users); err != nil {
 			http.Error(w, "could not write relay credentials", http.StatusInternalServerError)
 			return
 		}
@@ -106,14 +121,14 @@ func (s *server) adminRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users, err := readRelayAuth(relayAuthPath)
-	usage := readRelayUsage(relayUsagePath)
+	users, err := readRelayAuth(relayAuthFilePath())
+	usage := readRelayUsage(relayUsageFilePath())
 	var b strings.Builder
 	b.WriteString(`<div class="admin-head"><h1>Relay</h1></div>`)
 	b.WriteString(adminSubnav("relay"))
-	b.WriteString(`<p class="muted">Per-device SOCKS credentials. Revoking one stops that device's relay access on the next reload (within 30 seconds) without touching anyone else. Rotating changes the password; the device must be rebuilt or re-enrolled to use it.</p>`)
+	b.WriteString(`<p>Per-device relay credentials. Revoke stops a device on the next reload.</p>`)
 	if err != nil {
-		fmt.Fprintf(&b, `<div class="alert error">Cannot read %s: %s</div>`, esc(relayAuthPath), esc(err.Error()))
+		fmt.Fprintf(&b, `<div class="alert error">Cannot read %s: %s</div>`, esc(relayAuthFilePath()), esc(err.Error()))
 		s.renderNav(w, true, "admin", "Relay", b.String())
 		return
 	}
@@ -128,11 +143,11 @@ func (s *server) adminRelay(w http.ResponseWriter, r *http.Request) {
 		if bytes, ok := usage[name]; ok {
 			relayed = fmt.Sprintf("%.0f MB", float64(bytes)/(1<<20))
 		}
-		fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td>%s</td><td><div class="row-actions">
+		fmt.Fprintf(&b, `<tr><td><a href="/admin/relay/%s"><code>%s</code></a></td><td>%s</td><td><div class="row-actions">
 <form method="post" action="/admin/relay"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="user" value="%s"><input type="hidden" name="action" value="rotate"><button class="btn ghost small" type="submit">Rotate</button></form>
 <form method="post" action="/admin/relay" onsubmit="return confirm('Revoke relay access for this device?')"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="user" value="%s"><input type="hidden" name="action" value="revoke"><button class="btn danger small" type="submit">Revoke</button></form>
 </div></td></tr>`,
-			esc(name), relayed, s.csrfToken(r), esc(name), s.csrfToken(r), esc(name))
+			esc(name), esc(name), relayed, s.csrfToken(r), esc(name), s.csrfToken(r), esc(name))
 	}
 	b.WriteString(`</tbody></table></div>`)
 	s.renderNav(w, true, "admin", "Relay", b.String())

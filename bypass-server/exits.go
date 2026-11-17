@@ -167,8 +167,9 @@ func (s *server) adminExits(w http.ResponseWriter, r *http.Request) {
 	status, statusErr := loadExitStatus(exitStatusPath())
 
 	var b strings.Builder
-	b.WriteString(`<h1>Exits</h1>
-<p>Sites the cloud exit refuses are routed through the first enrolled exit that serves them. Prefixes move automatically when an exit stops answering or a site starts working again. Changes here take effect on the router's next cycle.</p>`)
+	b.WriteString(`<div class="admin-head"><h1>Exits</h1></div>`)
+	b.WriteString(adminSubnav("exits"))
+	b.WriteString(`<p>Where refused sites leave. Changes apply on the next cycle.</p>`)
 	if regErr != nil {
 		fmt.Fprintf(&b, `<p class="warn">Could not read the registry: %s</p>`, template.HTMLEscapeString(regErr.Error()))
 	}

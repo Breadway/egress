@@ -9,9 +9,11 @@ their peers and relay users are never touched by this path.
 
 ## Flow
 
-1. The admin opens **Devices** in the web admin and creates an invite with a
-   label. The token is shown once.
-2. The recipient puts the token in `enroll.txt` next to the installer, or runs:
+1. The admin approves the application. Approval issues the invite and prepares
+   the installer automatically; the token is shown once.
+2. The applicant opens their status page (the browser remembers it) and
+   downloads `egress-setup.zip`, which contains the installer, `enroll.txt` and
+   instructions. Manually, the token also works with:
 
    ```powershell
    .\egress.exe install --enroll-token <token>
@@ -63,9 +65,9 @@ enroll endpoint.
 
 - First activation needs a path to `bypass.breadway.dev`. An offline install
   cannot enroll and needs the embedded-key build instead.
-- The generic installer still has to reach the recipient somehow. Today that is
-  sending the generic `egress-windows-amd64-<version>.exe` plus the token;
-  serving a per-token archive from the Devices page is the next step.
+- The generic installer must exist in `/var/lib/bypass/binaries/` as
+  `egress-windows-amd64-<version>.exe`; approval fails with a clear message
+  until it is present.
 - If an install fails after the token was consumed, the device is bound but not
   installed. Its identity file still holds the key on Linux; on Windows split
   the relay credential lives in the per-user profile once the split step ran.

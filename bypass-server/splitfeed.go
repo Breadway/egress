@@ -481,7 +481,9 @@ func (s *server) adminSplit(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, _ := os.ReadDir(s.splitDir())
 	var b strings.Builder
-	b.WriteString(`<h1>Split feed</h1><p>Per-network tables keyed by a hashed SSID. No client identifiers or plaintext network names are stored. Block wins a conflict: one blocked verification keeps the domain blocked.</p>`)
+	b.WriteString(`<div class="admin-head"><h1>Split feed</h1></div>`)
+	b.WriteString(adminSubnav("split"))
+	b.WriteString(`<p>Per-network block tables. Networks are hashed, never stored by name.</p>`)
 	if len(entries) == 0 {
 		b.WriteString(`<p class="muted">No reports yet.</p>`)
 	}
