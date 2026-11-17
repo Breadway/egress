@@ -89,7 +89,6 @@ func (c *Controller) SetNetwork(network, iface string) {
 	reporter := c.reporter
 	c.mu.Unlock()
 	reporter.SetNetwork(network)
-	go reporter.fetchFeed(context.Background())
 	c.routes.Clear()
 	c.log.Printf("split: profile %s (routes cleared)", network)
 	c.Sweep()

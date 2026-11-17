@@ -275,6 +275,13 @@ func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
 		return writeResolvConf()
 	}
 	_ = logx.RunLogged("resolvectl", "flush-caches")
+	// A foreign resolv.conf left from a resolved-less period points at
+	// 127.0.0.1:53, which nothing serves (the listener is 127.0.0.1:7103).
+	// Applications that read the file directly then fail even though
+	// systemd-resolved itself works. Point it at the resolved stub.
+	if err := ensureResolvedStub(); err != nil {
+		return err
+	}
 	// The drop-in only fills the global scope. A link that received a
 	// resolver over DHCP keeps its own copy in the link scope, and
 	// systemd-resolved prefers that scope for names with no routing
@@ -339,6 +346,33 @@ func restoreResolvConf(confPath, bakPath string) error {
 	return nil
 }
 
+// ensureResolvedStub points a foreign /etc/resolv.conf at the systemd-resolved
+// stub. It only touches a file that names 127.0.0.1 without the stub address,
+// which is what this tool writes when resolved is absent; a resolved-managed
+// symlink is left alone.
+func ensureResolvedStub() error {
+	data, err := os.ReadFile(linuxResolvConf)
+	if err != nil {
+		return nil
+	}
+	text := string(data)
+	if strings.Contains(text, "127.0.0.53") {
+		return nil
+	}
+	if !resolvConfPointsAtListener(data) {
+		return nil
+	}
+	if err := backupResolvConf(linuxResolvConf, linuxResolvBak); err != nil {
+		return err
+	}
+	const stub = "nameserver 127.0.0.53\noptions edns0 trust-ad\n"
+	if fi, lerr := os.Lstat(linuxResolvConf); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		_ = os.Remove(linuxResolvConf)
+		return os.Symlink("/run/systemd/resolve/stub-resolv.conf", linuxResolvConf)
+	}
+	return os.WriteFile(linuxResolvConf, []byte(stub), 0644)
+}
+
 func writeResolvConf() error {
 	return writeResolvConfAt(linuxResolvConf, linuxResolvBak)
 }
@@ -396,6 +430,9 @@ func (p linuxPlatform) EnsureDNS(iface, gateway string) error {
 	// The drop-in is present, but a reconnect or a DHCP renew can hand a
 	// link its own resolver again. Re-claim only the links that lost it,
 	// so this stays quiet on the minute-by-minute path.
+	if err := ensureResolvedStub(); err != nil {
+		return err
+	}
 	return claimDefaultRouteDNS()
 }
 

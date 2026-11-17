@@ -484,7 +484,7 @@ func TestReporterFeedFetch(t *testing.T) {
 	r.seedURL = srv.URL
 	var merged []feedDomain
 	r.SetMergeFunc(func(domains []feedDomain, _ []feedProtocol) { merged = domains })
-	r.fetchFeed(context.Background())
+	_ = r.fetchFeed(context.Background())
 	if len(merged) != 1 || merged[0].Domain != "discord.com" {
 		t.Fatalf("merged: %+v", merged)
 	}
