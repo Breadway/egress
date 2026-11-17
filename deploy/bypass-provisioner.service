@@ -10,8 +10,8 @@ Group=breadway
 Environment=HOME=/home/breadway
 # Version embedded in provisioned device builds.
 Environment=EGRESS_VERSION=0.4.21
-WorkingDirectory=/home/breadway/Projects/egress
-ExecStart=/home/breadway/Projects/egress/provision-pending.py
+WorkingDirectory=/home/breadway/Projects/Apps/egress
+ExecStart=/home/breadway/Projects/Apps/egress/provision-pending.py
 Restart=always
 RestartSec=10
 ProtectSystem=full
