@@ -87,6 +87,7 @@ type splitReport struct {
 // requests, timestamps or browsing history leave the machine.
 type splitReporter struct {
 	mu       sync.Mutex
+	feedMu   sync.Mutex
 	device   string
 	network  string
 	dir      string
@@ -160,12 +161,20 @@ func (r *splitReporter) pending() int {
 	return len(r.queue)
 }
 
-// Run flushes the queue on a timer and refreshes the feed at startup.
+const (
+	// splitFeedEvery bounds how stale the shared table, the exit verdicts and
+	// the re-verification leases can get. It used to be fetched only at
+	// startup, so a failed first fetch (the resolver is still coming up) or a
+	// verdict that changed later never reached the device.
+	splitFeedEvery = 10 * time.Minute
+)
+
+// Run flushes the queue on a timer and refreshes the feed on its own schedule.
 func (r *splitReporter) Run(ctx context.Context) {
 	if r.disabled {
 		return
 	}
-	go r.fetchFeed(ctx)
+	go r.feedLoop(ctx)
 	tick := time.NewTicker(splitReportEvery)
 	defer tick.Stop()
 	for {
@@ -174,6 +183,33 @@ func (r *splitReporter) Run(ctx context.Context) {
 			return
 		case <-tick.C:
 			_ = r.flush(ctx)
+		}
+	}
+}
+
+// feedLoop fetches at startup (retrying while the resolver comes up), then on
+// a timer.
+func (r *splitReporter) feedLoop(ctx context.Context) {
+	for _, delay := range []time.Duration{0, 15 * time.Second, time.Minute} {
+		if delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+		if r.fetchFeed(ctx) == nil {
+			break
+		}
+	}
+	tick := time.NewTicker(splitFeedEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			_ = r.fetchFeed(ctx)
 		}
 	}
 }
@@ -234,10 +270,12 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	return nil
 }
 
-func (r *splitReporter) fetchFeed(ctx context.Context) {
+func (r *splitReporter) fetchFeed(ctx context.Context) error {
 	if r.disabled {
-		return
+		return nil
 	}
+	r.feedMu.Lock()
+	defer r.feedMu.Unlock()
 	r.mu.Lock()
 	network := r.network
 	r.mu.Unlock()
@@ -245,26 +283,27 @@ func (r *splitReporter) fetchFeed(ctx context.Context) {
 	u := r.seedURL + "?n=" + NetworkID(network)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return
+		return err
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
 		log.Printf("split: feed fetch failed: %v", err)
-		return
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("split: feed status %s", resp.Status)
-		return
+		return fmt.Errorf("feed status %s", resp.Status)
 	}
 	var feed feedResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&feed); err != nil {
 		log.Printf("split: feed decode: %v", err)
-		return
+		return err
 	}
 	log.Printf("split: feed has %d domains and %d protocol notes", len(feed.Domains), len(feed.Protocols))
 	r.merge(feed.Domains, feed.Protocols)
 	r.refreshDue(feed.Refresh)
+	return nil
 }
 
 // merge writes feed entries into the profile as blocked. It is called from the
