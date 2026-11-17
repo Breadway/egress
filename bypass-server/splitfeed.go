@@ -416,6 +416,10 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 		Contested bool   `json:"contested,omitempty"`
 		Recheck   bool   `json:"recheck,omitempty"`
 		Verify    bool   `json:"verify,omitempty"`
+		// ServedBy names the exit carrying this domain, and Unserved means
+		// every exit the router tried refused it. The local page shows both.
+		ServedBy string `json:"served_by,omitempty"`
+		Unserved bool   `json:"unserved,omitempty"`
 	}
 	type seedProtocol struct {
 		Protocol string `json:"protocol"`
@@ -435,15 +439,21 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 		names = append(names, domain)
 	}
 	sort.Strings(names)
+	exits := s.exitDomainState()
 	for _, domain := range names {
 		entry := feed.Domains[domain]
 		if entry.State != "blocked" {
 			continue
 		}
-		out.Domains = append(out.Domains, seedDomain{
+		seed := seedDomain{
 			Domain: domain, Evidence: entry.Evidence, Count: entry.Count,
 			Contested: entry.Contested, Recheck: entry.RecheckAsked, Verify: entry.VerifyAsked,
-		})
+		}
+		if site, ok := exits[domain]; ok {
+			seed.ServedBy = site.Exit
+			seed.Unserved = site.State == "unserved"
+		}
+		out.Domains = append(out.Domains, seed)
 	}
 	for _, domain := range claimed {
 		entry := feed.Domains[domain]

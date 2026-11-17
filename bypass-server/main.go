@@ -173,6 +173,7 @@ func main() {
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
 	s.mux.HandleFunc("/admin/reports", s.adminReports)
 	s.mux.HandleFunc("/admin/split", s.adminSplit)
+	s.mux.HandleFunc("/admin/exits", s.adminExits)
 	s.mux.HandleFunc("/admin/relay", s.adminRelay)
 	s.mux.HandleFunc("/admin/api/pending", s.adminPending)
 	s.mux.HandleFunc("/admin/api/claim", s.adminClaim)
@@ -676,7 +677,8 @@ func adminSubnav(active string) string {
 		item("/admin/applications", "Applications", "applications") +
 		item("/admin/users", "Logins", "users") +
 		item("/admin/relay", "Relay", "relay") +
-		item("/admin/split", "Split feed", "split") + `</div>`
+		item("/admin/split", "Split feed", "split") +
+		item("/admin/exits", "Exits", "exits") + `</div>`
 }
 
 // ---------------------------------------------------------------- landing ---

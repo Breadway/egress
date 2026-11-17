@@ -1,16 +1,21 @@
-// Package exitroute decides which destination prefixes must leave through the
-// residential exit instead of the cloud exit.
+// Package exitroute decides which destination prefixes leave through which
+// exit, including the cloud exit.
 //
-// A site the local network filters is routed into the tunnel. The tunnel then
-// exits at Aegis, whose address is a cloud one, and some sites refuse cloud
-// addresses with a block page. The learner asks the same site over both exits:
-// when the cloud exit is refused and the home exit is served, the prefixes the
-// site resolves to are routed through the home exit. Nothing is hardcoded: the
-// candidate set comes from the shared block table the fleet reports, and a
-// prefix stops using the home exit as soon as the cloud exit works again.
+// A site the local network filters is routed into the tunnel. The tunnel exits
+// at Aegis by default, whose address is a cloud one, and some sites refuse
+// cloud addresses with a block page. An operator can enroll other hosts as
+// exits (a home connection, a second line, a friend's box). The learner asks
+// every blocked site over the cloud exit and, when that is refused, through
+// each enrolled exit in priority order. The prefixes of a site are routed to
+// the first exit that serves it, and the cloud exit is retried every cycle so
+// a prefix goes back the moment the cloud works again.
+//
+// Nothing is hardcoded: candidates come from the shared block table the fleet
+// reports, and exits come from a registry the operator writes.
 package exitroute
 
 import (
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,63 +27,183 @@ import (
 	"time"
 )
 
-// Entry is one learned prefix.
-type Entry struct {
-	Prefix   string    `json:"prefix"`
+// Exit is one enrolled exit host.
+type Exit struct {
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	PubKey      string `json:"pubkey"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority,omitempty"`
+	MaxPrefixes int    `json:"max_prefixes,omitempty"`
+	Host        string `json:"host,omitempty"`
+	// Network is the exit's own network id when it also runs as a client.
+	// The learner skips it for domains that network reports blocked.
+	Network string `json:"network,omitempty"`
+	Note    string `json:"note,omitempty"`
+}
+
+// Registry is the operator's exit list.
+type Registry struct {
+	Version int    `json:"version"`
+	Exits   []Exit `json:"exits"`
+}
+
+// LoadRegistry reads the exit registry. A missing file is an empty registry:
+// the cloud exit still works, and blocked names are simply unserved.
+func LoadRegistry(path string) (Registry, error) {
+	reg := Registry{Version: 1}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return reg, nil
+		}
+		return reg, err
+	}
+	if err := json.Unmarshal(data, &reg); err != nil {
+		return reg, err
+	}
+	for i := range reg.Exits {
+		e := &reg.Exits[i]
+		if e.ID == "" {
+			e.ID = e.Label
+		}
+		if e.Priority == 0 {
+			e.Priority = 100
+		}
+		if e.MaxPrefixes <= 0 {
+			e.MaxPrefixes = 200
+		}
+	}
+	return reg, nil
+}
+
+// SaveRegistry writes the registry atomically, keeping it readable for the
+// web admin and writable only by root.
+func SaveRegistry(path string, reg Registry) error {
+	reg.Version = 1
+	sort.Slice(reg.Exits, func(i, j int) bool {
+		if reg.Exits[i].Priority != reg.Exits[j].Priority {
+			return reg.Exits[i].Priority < reg.Exits[j].Priority
+		}
+		return reg.Exits[i].ID < reg.Exits[j].ID
+	})
+	data, err := json.MarshalIndent(reg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// EnabledExits returns the enabled exits in priority order.
+func EnabledExits(reg Registry) []Exit {
+	out := make([]Exit, 0, len(reg.Exits))
+	for _, e := range reg.Exits {
+		if e.Enabled {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority < out[j].Priority
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// Site states.
+const (
+	SiteCloud    = "cloud"
+	SiteExit     = "exit"
+	SiteUnserved = "unserved"
+)
+
+// Site is the learned state of one blocked domain.
+type Site struct {
 	Domain   string    `json:"domain"`
+	Prefixes []string  `json:"prefixes"`
 	Cloud    int       `json:"cloud"`
-	Home     int       `json:"home"`
+	CloudErr string    `json:"cloud_error,omitempty"`
+	Exit     string    `json:"exit,omitempty"`
+	State    string    `json:"state"`
 	Verified time.Time `json:"verified"`
-	Expires  time.Time `json:"expires"`
+	Expires  time.Time `json:"expires,omitempty"`
 }
 
 // State is the learner's persisted picture.
 type State struct {
-	Updated time.Time        `json:"updated"`
-	Entries map[string]Entry `json:"entries"`
+	Updated     time.Time         `json:"updated"`
+	Sites       map[string]Site   `json:"sites"`
+	Assignments map[string]string `json:"assignments"` // prefix -> exit id
 }
 
-// Observation is one site compared over both exits. A status of zero means the
-// request did not produce an HTTP response.
+// ExitStatus is one exit's live health, published for the admin page and the
+// fleet feed.
+type ExitStatus struct {
+	ID        string `json:"id"`
+	Label     string `json:"label,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	Healthy   bool   `json:"healthy"`
+	Handshake int64  `json:"handshake,omitempty"`
+	Prefixes  int    `json:"prefixes"`
+	Sites     int    `json:"sites"`
+	Error     string `json:"error,omitempty"`
+}
+
+// Status is the learner's report. It carries no secrets and is world-readable
+// so the web admin can show it.
+type Status struct {
+	Updated     time.Time         `json:"updated"`
+	Sites       map[string]Site   `json:"sites"`
+	Assignments map[string]string `json:"assignments"`
+	Exits       []ExitStatus      `json:"exits"`
+	Unserved    []string          `json:"unserved"`
+	AllDown     bool              `json:"all_down,omitempty"`
+}
+
+// Observation is one site compared over the cloud exit and (when needed) an
+// exit host.
 type Observation struct {
 	Domain   string
 	Prefixes []string
 	Cloud    int
 	CloudErr string
-	Home     int
-	HomeErr  string
+	Exit     string
+	Served   int
+	ServedOK bool
 }
 
-// ExitBlocked reports whether a site serves the home exit while refusing the
-// cloud one. A site that fails over both exits is not the exit's fault, and a
-// site that answers the cloud exit is left alone.
-func ExitBlocked(o Observation) bool {
-	if o.Home == 0 || o.Home >= 400 {
-		return false
+// CloudRefused reports whether the cloud exit is refused for a site. A zero
+// status with a transport error means the request never produced a response,
+// which is the strongest refusal there is. A certificate name mismatch is not
+// a refusal: that address simply does not serve that name as a website, and
+// routing it through an exit would change nothing.
+func CloudRefused(cloud int, err error) bool {
+	if cloud == 0 {
+		return err != nil && !nameMismatch(err)
 	}
-	if o.Cloud == 0 {
-		// No HTTP answer at all over the cloud exit (a reset, a stall or a
-		// refused TLS session) while the home exit is served is the strongest
-		// signal there is.
-		return o.CloudErr != ""
-	}
-	switch o.Cloud {
+	switch cloud {
 	case 403, 451, 429:
 		return true
 	}
 	return false
 }
 
-// EntryFor builds the entry a positive observation produces.
-func EntryFor(o Observation, now time.Time, ttl time.Duration) Entry {
-	return Entry{
-		Domain:   o.Domain,
-		Cloud:    o.Cloud,
-		Home:     o.Home,
-		Verified: now.UTC(),
-		Expires:  now.Add(ttl).UTC(),
-	}
+func nameMismatch(err error) bool {
+	var invalid x509.CertificateInvalidError
+	var host x509.HostnameError
+	var unknown x509.UnknownAuthorityError
+	return errors.As(err, &invalid) || errors.As(err, &host) || errors.As(err, &unknown)
 }
+
+func served(status int) bool { return status >= 200 && status < 400 }
 
 var specialUse = []*net.IPNet{
 	mustCIDR("0.0.0.0/8"),
@@ -100,7 +225,7 @@ func mustCIDR(s string) *net.IPNet {
 	return n
 }
 
-// PrefixesFor turns addressed into the /24 blocks that are safe to route. A
+// PrefixesFor turns addresses into the /24 blocks that are safe to route. A
 // /24 rather than a /32 keeps a Fastly or Cloudflare name working when it
 // resolves to a different address on the next lookup, and the special-use
 // guard keeps a poisoned answer from touching the local network.
@@ -109,10 +234,7 @@ func PrefixesFor(ips []string) []string {
 	out := make([]string, 0, len(ips))
 	for _, raw := range ips {
 		ip := net.ParseIP(strings.TrimSpace(raw)).To4()
-		if ip == nil {
-			continue
-		}
-		if special(ip) {
+		if ip == nil || special(ip) {
 			continue
 		}
 		prefix := fmt.Sprintf("%d.%d.%d.0/24", ip[0], ip[1], ip[2])
@@ -135,61 +257,6 @@ func special(ip net.IP) bool {
 	return false
 }
 
-// Desired merges the entries that are still fresh into the prefix set.
-func Desired(state State, now time.Time, limit int) []string {
-	prefixes := make([]string, 0, len(state.Entries))
-	for prefix, entry := range state.Entries {
-		if now.After(entry.Expires) {
-			continue
-		}
-		prefixes = append(prefixes, prefix)
-	}
-	sort.Strings(prefixes)
-	if limit > 0 && len(prefixes) > limit {
-		// Keep the most recently verified when the cap is hit.
-		sort.Slice(prefixes, func(i, j int) bool {
-			return state.Entries[prefixes[i]].Verified.After(state.Entries[prefixes[j]].Verified)
-		})
-		prefixes = prefixes[:limit]
-		sort.Strings(prefixes)
-	}
-	return prefixes
-}
-
-// Reconcile compares what should be routed with what is routed.
-func Reconcile(desired, applied []string) (add, remove []string) {
-	want := make(map[string]bool, len(desired))
-	for _, p := range desired {
-		want[p] = true
-	}
-	have := make(map[string]bool, len(applied))
-	for _, p := range applied {
-		have[p] = true
-	}
-	for p := range want {
-		if !have[p] {
-			add = append(add, p)
-		}
-	}
-	for p := range have {
-		if !want[p] {
-			remove = append(remove, p)
-		}
-	}
-	sort.Strings(add)
-	sort.Strings(remove)
-	return add, remove
-}
-
-// Prune drops expired entries.
-func Prune(state State, now time.Time) {
-	for prefix, entry := range state.Entries {
-		if now.After(entry.Expires) {
-			delete(state.Entries, prefix)
-		}
-	}
-}
-
 // Candidate is one blocked domain from the shared table.
 type Candidate struct {
 	Domain   string
@@ -198,8 +265,8 @@ type Candidate struct {
 }
 
 // Candidates reads every network's shared block table and returns the domains
-// the fleet says are blocked here. Duplicates across networks collapse to the
-// most recent evidence.
+// the fleet says are blocked anywhere. Duplicates collapse to the most recent
+// evidence.
 func Candidates(dir string) ([]Candidate, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
@@ -286,10 +353,9 @@ func plausibleDomain(d string) bool {
 	return true
 }
 
-// LoadState reads the persisted state, returning an empty state when there is
-// no file yet.
+// LoadState reads the persisted state.
 func LoadState(path string) (State, error) {
-	state := State{Entries: map[string]Entry{}}
+	state := State{Sites: map[string]Site{}, Assignments: map[string]string{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -300,8 +366,11 @@ func LoadState(path string) (State, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return state, err
 	}
-	if state.Entries == nil {
-		state.Entries = map[string]Entry{}
+	if state.Sites == nil {
+		state.Sites = map[string]Site{}
+	}
+	if state.Assignments == nil {
+		state.Assignments = map[string]string{}
 	}
 	return state, nil
 }
@@ -321,4 +390,52 @@ func SaveState(path string, state State) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// SaveStatus publishes the learner's report.
+func SaveStatus(path string, status Status) error {
+	status.Updated = time.Now().UTC()
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadStatus reads the router's published status.
+func LoadStatus(path string) (Status, error) {
+	var status Status
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return status, err
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		return status, err
+	}
+	if status.Sites == nil {
+		status.Sites = map[string]Site{}
+	}
+	if status.Assignments == nil {
+		status.Assignments = map[string]string{}
+	}
+	return status, nil
+}
+
+// Unserved returns the blocked domains no exit serves, sorted.
+func (s Status) UnservedDomains() []string {
+	out := make([]string, 0, len(s.Sites))
+	for domain, site := range s.Sites {
+		if site.State == SiteUnserved {
+			out = append(out, domain)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

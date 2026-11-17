@@ -8,6 +8,7 @@ import (
 	"net"
 	"os/exec"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 )
@@ -304,9 +305,9 @@ func (c *Controller) mergeFeed(domains []feedDomain, protocols []feedProtocol) {
 	}
 	domains = filtered
 	c.mu.Lock()
-	added := mergeFeedDomains(c.profile, domains, now)
+	added, updated := mergeFeedDomains(c.profile, domains, now)
 	protos := mergeProtocols(c.profile, protocols)
-	if added > 0 || protos > 0 {
+	if added > 0 || updated > 0 || protos > 0 {
 		c.saveLocked()
 	}
 	c.mu.Unlock()
@@ -320,6 +321,36 @@ func (c *Controller) mergeFeed(domains []feedDomain, protocols []feedProtocol) {
 	if len(domains) > 0 {
 		c.resolveConflicts(domains)
 	}
+}
+
+// DomainStatus is one blocked domain as the local page shows it.
+type DomainStatus struct {
+	Name      string
+	Evidence  Evidence
+	ServedBy  string
+	Unserved  bool
+	LastProbe time.Time
+}
+
+// StatusSnapshot returns the blocked set for the local page.
+func (c *Controller) StatusSnapshot() (network string, domains []DomainStatus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	network = c.network
+	for name, entry := range c.profile.Entries {
+		if entry.State != StateBlocked {
+			continue
+		}
+		domains = append(domains, DomainStatus{
+			Name:      name,
+			Evidence:  entry.Evidence,
+			ServedBy:  entry.ServedBy,
+			Unserved:  entry.Unserved,
+			LastProbe: entry.LastProbe,
+		})
+	}
+	sort.Slice(domains, func(i, j int) bool { return domains[i].Name < domains[j].Name })
+	return network, domains
 }
 
 // resolveConflicts answers the server's re-check or verification request for

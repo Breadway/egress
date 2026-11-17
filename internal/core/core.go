@@ -10,12 +10,15 @@ const (
 	DoHHost       = "dns.breadway.dev"
 	DoHListenAddr = "127.0.0.1:7103"
 
-	AegisIPv4      = "152.69.174.7"
-	AegisWGPort    = "7105"
-	AegisTunnelIP  = "10.88.0.1"
-	AegisPublicKey = "MsU+DNi9YLMpLfsHifP2+nMLAiblNs0uvPsQs/U2ZUA="
-	WGInterface    = "wg0"
-	TunnelSubnet   = "10.88.0.0/24"
+	AegisIPv4 = "152.69.174.7"
+	// PortalListenAddr is the local page that explains blocked sites. It is
+	// loopback only and answers even when the tunnel is down.
+	PortalListenAddr = "127.0.0.1:7280"
+	AegisWGPort      = "7105"
+	AegisTunnelIP    = "10.88.0.1"
+	AegisPublicKey   = "MsU+DNi9YLMpLfsHifP2+nMLAiblNs0uvPsQs/U2ZUA="
+	WGInterface      = "wg0"
+	TunnelSubnet     = "10.88.0.0/24"
 
 	WstunnelPrefix  = "wg-tunnel"
 	RelayHost       = "127.0.0.1"

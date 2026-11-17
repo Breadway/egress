@@ -5,12 +5,15 @@ import (
 	"egress/internal/core"
 	"egress/internal/doh"
 	"egress/internal/health"
+	"egress/internal/portal"
 	"egress/internal/split"
 	"egress/internal/supervisor"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
@@ -81,6 +84,8 @@ func realMain() error {
 		return cmdProbe(args)
 	case "scan":
 		return cmdScan(args)
+	case "portal":
+		return cmdPortal(args)
 	case "proxy":
 		return cmdProxy(args)
 	case "update":
@@ -126,6 +131,7 @@ Commands:
   diagnose     print routing, DNS, tunnel and log state
   probe        classify domains over the direct path (split-mode foundation)
   scan         bulk-probe a domain list to seed a new network
+  portal       open the local page that explains blocked sites
   proxy        run the per-user split proxy and PAC (Windows split mode)
   update       check for or apply a signed update over the tunnel
   update-sign  sign a release manifest (publisher side)
@@ -533,6 +539,25 @@ func cmdSupervise(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		snap := func() portal.Snapshot {
+			out := portal.Snapshot{Generated: time.Now(), Online: plat.TunnelUp() || aegisReachable()}
+			if splitter != nil {
+				network, domains := splitter.StatusSnapshot()
+				out.Network = network
+				for _, d := range domains {
+					out.Domains = append(out.Domains, portal.Domain{
+						Name: d.Name, Evidence: string(d.Evidence), ServedBy: d.ServedBy,
+						Unserved: d.Unserved, LastProbe: d.LastProbe,
+					})
+				}
+			}
+			return out
+		}
+		if err := portal.Serve(ctx, core.PortalListenAddr, snap, appLogger().Printf); err != nil {
+			appLogger().Printf("portal: %v", err)
+		}
+	}()
 	return sup.Run(ctx)
 }
 
@@ -669,4 +694,42 @@ func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	return fs
+}
+
+// aegisReachable reports whether the exit host answers at all. The page uses
+// it to tell "the tunnel is down" from "everything is down".
+func aegisReachable() bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(core.AegisIPv4, "443"), 800*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// cmdPortal opens the local page that explains blocked sites.
+func cmdPortal(args []string) error {
+	fs := newFlagSet("portal")
+	printOnly := fs.Bool("print", false, "print the URL instead of opening it")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	url := "http://" + core.PortalListenAddr + "/"
+	fmt.Println(url)
+	if *printOnly {
+		return nil
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("could not open a browser (%v); the page is at %s", err, url)
+	}
+	return nil
 }

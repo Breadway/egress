@@ -39,6 +39,8 @@ type feedDomain struct {
 	Evidence  string `json:"evidence"`
 	Count     int    `json:"count"`
 	Contested bool   `json:"contested,omitempty"`
+	ServedBy  string `json:"served_by,omitempty"`
+	Unserved  bool   `json:"unserved,omitempty"`
 	// Recheck asks the device that believes the domain is allowed to probe
 	// again; Verify asks the device that believes it is blocked to confirm.
 	Recheck bool `json:"recheck,omitempty"`
@@ -378,31 +380,47 @@ func (p *Profile) ProtocolStates() map[string]string {
 }
 
 // mergeFeedDomains adds feed entries as blocked. It returns how many were new.
-func mergeFeedDomains(p *Profile, domains []feedDomain, now time.Time) int {
-	added := 0
+func mergeFeedDomains(p *Profile, domains []feedDomain, now time.Time) (added, updated int) {
 	for _, d := range domains {
 		domain := core.NormalizeDomain(d.Domain)
 		if !plausibleDomain(domain) || probeIgnoredName(domain) {
 			continue
 		}
 		if p.State(domain, now) == StateBlocked {
-			if d.Contested {
-				if entry, ok := p.Entries[domain]; ok && !entry.Contested {
-					entry.Contested = true
-					p.Entries[domain] = entry
-				}
+			entry, ok := p.Entries[domain]
+			if !ok {
+				continue
+			}
+			changed := false
+			if entry.ServedBy != d.ServedBy {
+				entry.ServedBy = d.ServedBy
+				changed = true
+			}
+			if entry.Unserved != d.Unserved {
+				entry.Unserved = d.Unserved
+				changed = true
+			}
+			if d.Contested && !entry.Contested {
+				entry.Contested = true
+				changed = true
+			}
+			if changed {
+				p.Entries[domain] = entry
+				updated++
 			}
 			continue
 		}
 		p.AddBlocked(domain, EvidenceFeed, now)
+		entry := p.Entries[domain]
+		entry.ServedBy = d.ServedBy
+		entry.Unserved = d.Unserved
 		if d.Contested {
-			entry := p.Entries[domain]
 			entry.Contested = true
-			p.Entries[domain] = entry
 		}
+		p.Entries[domain] = entry
 		added++
 	}
-	return added
+	return added, updated
 }
 
 func plausibleDomain(domain string) bool {
@@ -477,7 +495,12 @@ const (
 type DomainEntry struct {
 	// Contested marks a domain the shared table disagrees about. It stays
 	// blocked here until a verification says otherwise.
-	Contested bool        `json:"contested,omitempty"`
+	Contested bool `json:"contested,omitempty"`
+	// ServedBy names the exit the exit router is sending this domain through,
+	// and Unserved means every exit it tried refused the site. Both come from
+	// the shared feed; the local page shows them.
+	ServedBy  string      `json:"served_by,omitempty"`
+	Unserved  bool        `json:"unserved,omitempty"`
 	State     DomainState `json:"state"`
 	Evidence  Evidence    `json:"evidence,omitempty"`
 	Failures  int         `json:"failures,omitempty"`
