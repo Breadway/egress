@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -179,20 +180,29 @@ func (s *server) setupArchive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not build the archive", http.StatusInternalServerError)
 		return
 	}
+	sum := sha256.Sum256(exe)
 	instructions := fmt.Sprintf(`egress setup
 
-1. Right-click egress.exe and choose "Run as administrator".
+1. Unblock the files first. Windows marks anything downloaded from the
+   internet and may refuse to run it with "Access is denied".
+   Open PowerShell in this folder and run:
+     Get-ChildItem | Unblock-File
+2. Right-click egress.exe and choose "Run as administrator".
    If Windows shows "Windows protected your PC", click More info, then
    Run anyway.
-2. Leave enroll.txt next to egress.exe. The installer reads it and binds
+3. Leave enroll.txt next to egress.exe. The installer reads it and binds
    this machine once.
-3. Wait about a minute, then check the tray for the egress icon.
+4. Wait about a minute, then check the tray for the egress icon.
+
+Installer SHA-256, so you can tell a damaged download from a blocked one:
+  %x
+  Check it with: Get-FileHash .\egress.exe -Algorithm SHA256
 
 Token: %s
 Application: %s
 
 The token works once. If this install fails, ask for a new invite.
-`, app.EnrollToken, app.Name)
+`, sum, app.EnrollToken, app.Name)
 	if err := add("README.txt", []byte(instructions)); err != nil {
 		http.Error(w, "could not build the archive", http.StatusInternalServerError)
 		return
