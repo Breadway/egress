@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -114,11 +115,16 @@ func newSplitReporter(network, dir string, logger *log.Logger) *splitReporter {
 		dir = ProfileDir()
 	}
 	r := &splitReporter{
-		device:    deviceIDAt(dir),
-		dir:       dir,
-		network:   network,
-		queue:     map[string]Evidence{},
-		client:    &http.Client{Timeout: splitHTTPTimeout},
+		device:  deviceIDAt(dir),
+		dir:     dir,
+		network: network,
+		queue:   map[string]Evidence{},
+		client: &http.Client{
+			Timeout: splitHTTPTimeout,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{Timeout: splitHTTPTimeout, Resolver: core.LocalResolver()}).DialContext,
+			},
+		},
 		log:       logger,
 		seedURL:   splitSeedURL,
 		reportURL: splitReportURL,

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -242,4 +243,38 @@ func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) er
 		return errors.New("verification failed")
 	}
 	return nil
+}
+
+// CheckSystemDNS resolves through /etc/resolv.conf, which is what every other
+// program on the machine uses. The egress listener can be healthy while this
+// path is not: Tailscale's MagicDNS once took the file over and stopped
+// answering, and a scan failed with a resolv.conf it should not have trusted.
+// The CLI reports this; egress's own lookups no longer depend on it.
+func CheckSystemDNS() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if _, err := net.DefaultResolver.LookupHost(ctx, "example.com"); err != nil {
+		if servers := resolvServers(); servers != "" {
+			return fmt.Errorf("%v (resolv.conf: %s)", err, servers)
+		}
+		return err
+	}
+	return nil
+}
+
+// resolvServers returns the nameserver lines for the error message. Empty when
+// the platform has no resolv.conf.
+func resolvServers() string {
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return ""
+	}
+	var servers []string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "nameserver" {
+			servers = append(servers, fields[1])
+		}
+	}
+	return strings.Join(servers, ", ")
 }
