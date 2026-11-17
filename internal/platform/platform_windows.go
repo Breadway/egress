@@ -738,6 +738,16 @@ func Diagnose(w io.Writer) error {
 	section(w, "install directory acl")
 	show(w, "icacls", winProgramData)
 
+	section(w, "installed binary")
+	show(w, "powershell", "-NoProfile", "-Command", fmt.Sprintf(
+		"$p = '%s'; Get-Item $p -ErrorAction SilentlyContinue | Select-Object Length,LastWriteTime,Attributes | Format-List; "+
+			"try { (Get-FileHash $p -Algorithm SHA256).Hash } catch { 'unreadable: ' + $_.Exception.Message }",
+		filepath.Join(winProgramData, "egress.exe")))
+
+	section(w, "defender detections")
+	show(w, "powershell", "-NoProfile", "-Command",
+		"Get-MpThreatDetection -ErrorAction SilentlyContinue | Select-Object -Last 5 InitialDetectionTime,ThreatID,Resources | Format-List")
+
 	section(w, "defender exclusions")
 	show(w, "powershell", "-NoProfile", "-Command",
 		"(Get-MpPreference).ExclusionPath | Where-Object { $_ -like '*egress*' }")
