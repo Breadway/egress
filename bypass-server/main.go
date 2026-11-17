@@ -108,10 +108,12 @@ type server struct {
 	mtx       sync.Mutex
 	usersMu   sync.Mutex
 	appsMu    sync.Mutex
+	devicesMu sync.Mutex
 	fails     map[string][]time.Time
 	applys    map[string][]time.Time
 	reports   map[string][]time.Time
 	splits    map[string][]time.Time
+	enrolls   map[string][]time.Time
 	feedMu    sync.Mutex
 }
 
@@ -155,6 +157,7 @@ func main() {
 		fails: map[string][]time.Time{}, applys: map[string][]time.Time{},
 		reports: map[string][]time.Time{},
 		splits:  map[string][]time.Time{},
+		enrolls: map[string][]time.Time{},
 	}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", s.landing)
@@ -171,8 +174,10 @@ func main() {
 	s.mux.HandleFunc("/api/report", s.apiReport)
 	s.mux.HandleFunc("/api/blocked-report", s.apiBlockedReport)
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
+	s.mux.HandleFunc("/api/enroll", s.apiEnroll)
 	s.mux.HandleFunc("/admin/reports", s.adminReports)
 	s.mux.HandleFunc("/admin/split", s.adminSplit)
+	s.mux.HandleFunc("/admin/devices", s.adminDevices)
 	s.mux.HandleFunc("/admin/exits", s.adminExits)
 	s.mux.HandleFunc("/admin/relay", s.adminRelay)
 	s.mux.HandleFunc("/admin/api/pending", s.adminPending)
@@ -677,6 +682,7 @@ func adminSubnav(active string) string {
 		item("/admin/applications", "Applications", "applications") +
 		item("/admin/users", "Logins", "users") +
 		item("/admin/relay", "Relay", "relay") +
+		item("/admin/devices", "Devices", "devices") +
 		item("/admin/split", "Split feed", "split") +
 		item("/admin/exits", "Exits", "exits") + `</div>`
 }

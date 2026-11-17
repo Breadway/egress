@@ -43,19 +43,22 @@ func configureWindowsSplit() error {
 			fmt.Println("no interactive user is logged on; the proxy and PAC will be applied by the next install")
 			return nil
 		}
-		return runSplitUserTask(console, exe)
+		return runSplitUserTask(console, exe, enrollRelayUser, enrollRelayPass)
 	}
-	return applyUserSplit(exe)
+	return applyUserSplit(exe, enrollRelayUser, enrollRelayPass)
 }
 
 // applyUserSplit writes the per-user proxy settings and starts the tray. It
 // must run in the target user's session: the Run key lives in HKCU.
-func applyUserSplit(exe string) error {
+func applyUserSplit(exe, relayUser, relayPass string) error {
 	// The proxy is per-user, the install directory is SYSTEM/Administrators
 	// only, and ProxyDir is SYSTEM's profile when install runs as SYSTEM. All
 	// per-user state therefore lives here, in the user's own profile.
 	authPath := filepath.Join(split.ProxyDir(), "socks-auth")
-	user, pass := resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
+	user, pass := relayUser, relayPass
+	if user == "" || pass == "" {
+		user, pass = resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
+	}
 	if user == "" || pass == "" {
 		return errors.New("no SOCKS relay credentials in this build; rebuild with --socks-user and --socks-pass")
 	}
@@ -156,10 +159,13 @@ func consoleUser() (string, error) {
 }
 
 // runSplitUserTask runs the per-user setup in user's session and waits for it.
-func runSplitUserTask(user, exe string) error {
+func runSplitUserTask(user, exe, relayUser, relayPass string) error {
 	// Windows paths go inside plain double quotes: %q would double the
 	// backslashes and hand the child a path that does not exist.
 	args := fmt.Sprintf(`split-user --exe "%s"`, exe)
+	if relayUser != "" && relayPass != "" {
+		args += fmt.Sprintf(` --relay-user "%s" --relay-pass "%s"`, relayUser, relayPass)
+	}
 	script, err := windowsTaskScript(splitUserTask, exe, args,
 		"New-ScheduledTaskTrigger -Once -At (Get-Date)", userPrincipal(user), false)
 	if err != nil {
@@ -210,6 +216,8 @@ func taskState(out string) (status, result string) {
 func cmdSplitUser(args []string) error {
 	fs := newFlagSet("split-user")
 	exePath := fs.String("exe", "", "installed executable")
+	relayUser := fs.String("relay-user", "", "enrolled relay user")
+	relayPass := fs.String("relay-pass", "", "enrolled relay password")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -219,7 +227,7 @@ func cmdSplitUser(args []string) error {
 	// The task gives this process no console, so a debug build must log to
 	// the shared file for the failure to be visible at all.
 	setupLogging(resolveDebug(false))
-	if err := applyUserSplit(*exePath); err != nil {
+	if err := applyUserSplit(*exePath, *relayUser, *relayPass); err != nil {
 		appLogger().Printf("split-user: %v", err)
 		return err
 	}

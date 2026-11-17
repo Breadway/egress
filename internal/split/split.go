@@ -465,10 +465,13 @@ type routeRunner func(args ...string) error
 // wg0. Routes disappear with the interface, but expiry keeps the table small
 // between network changes.
 type RouteManager struct {
-	mu     sync.Mutex
-	dev    string
-	log    *log.Logger
-	run    routeRunner
+	mu  sync.Mutex
+	dev string
+	log *log.Logger
+	run routeRunner
+	// list reads the kernel's routes. Injected so tests never touch the real
+	// tunnel; nil means "no listing", which is what a test fake wants.
+	list   func(dev string) []string
 	routes map[string]time.Time
 	order  []string
 }
@@ -479,6 +482,7 @@ func NewRouteManager(dev string, logger *log.Logger) *RouteManager {
 		log:    logger,
 		routes: map[string]time.Time{},
 		run:    routeCommands(dev),
+		list:   kernelRoutesOn,
 	}
 }
 
@@ -490,9 +494,11 @@ func (m *RouteManager) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	removed := 0
-	for _, prefix := range kernelRoutesOn(m.dev) {
-		if err := m.run("del", prefix); err == nil {
-			removed++
+	if m.list != nil {
+		for _, prefix := range m.list(m.dev) {
+			if err := m.run("del", prefix); err == nil {
+				removed++
+			}
 		}
 	}
 	m.routes = map[string]time.Time{}
