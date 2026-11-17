@@ -292,6 +292,7 @@ but no GitHub download is required.
 | Symptom | Cause and fix |
 |---|---|
 | `must run as Administrator` | Not elevated. Reopen PowerShell with "Run as administrator". |
+| `<user> (HOST\user) is not an administrator of this PC` | The account cannot elevate, so it can never install this. Sign in with an administrator account, or have one run the install; split mode then grants the interactive accounts read and execute on what the per-user proxy needs. Do not add a per-user grant to the install directory: it is SYSTEM and Administrators only so a boot task cannot run a user-writable binary. |
 | `Program 'egress.exe' failed to run: Access is denied` | Windows never started the binary, so this is not an egress error. The download is still marked as coming from the internet, or Defender/AppLocker blocks it. Run `Get-ChildItem <folder> | Unblock-File`, confirm `Get-FileHash .\egress.exe -Algorithm SHA256` matches the value in `README.txt`, then retry. On a managed machine an administrator has to allow the file. |
 | `must run as root` | Use `sudo`. |
 | `WireGuard for Windows is required` | Only a build without the embedded MSI says this. Rebuild with `assets/` present or install WireGuard manually. |
