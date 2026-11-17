@@ -2,11 +2,14 @@ package exitroute
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -14,14 +17,11 @@ import (
 )
 
 const (
-	// CloudMark and HomeMark select the routing table a probe leaves through.
-	// They sit above the main table so a learned route cannot make the cloud
-	// check go through the home exit it is meant to verify.
+	// CloudMark selects the routing table the cloud probe leaves through, so a
+	// learned assignment cannot make the cloud check follow an exit.
 	CloudMark = 0x44
-	HomeMark  = 0x45
 
 	cloudTable = 812
-	homeTable  = 811
 
 	probeUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
@@ -31,34 +31,55 @@ type Options struct {
 	FeedDir      string
 	ExtraDomains string
 	StatePath    string
+	StatusPath   string
+	RegistryPath string
 	Interval     time.Duration
 	TTL          time.Duration
-	ExitDev      string
-	CloudDev     string
-	Limit        int
-	Concurrency  int
-	Timeout      time.Duration
-	DryRun       bool
-	Logf         func(format string, args ...any)
+	HealthWindow time.Duration
+	// RetryUnserved is how long a name no exit could serve is left alone
+	// before every exit is tried again. The cloud is still checked each cycle.
+	RetryUnserved time.Duration
+	Dev           string
+	CloudDev      string
+	Limit         int
+	Concurrency   int
+	Timeout       time.Duration
+	DryRun        bool
+	Logf          func(format string, args ...any)
 }
 
 // Summary is one cycle's outcome.
 type Summary struct {
 	Candidates int
 	Checked    int
-	Learned    int
-	Released   int
-	Added      []string
-	Removed    []string
+	Served     int
+	Unserved   int
+	Changed    int
 }
 
-// Learner compares sites over both exits and keeps the learned routes in place.
+// Learner compares sites over the cloud exit and every enrolled exit, and
+// keeps the routes in step with the result.
 type Learner struct {
 	opts    Options
+	reg     Registry
+	exits   []Exit
 	state   State
-	applied map[string]bool
+	applied map[string]bool   // prefix -> route installed
+	lists   map[string]string // exit id -> allowed-ips applied
 	cloud   *http.Client
-	home    *http.Client
+	direct  *http.Client
+	blocked map[string]map[string]bool
+
+	// wasHealthy tracks exit health between cycles, so an exit coming back
+	// clears the unserved backoff instead of waiting it out.
+	wasHealthy   map[string]bool
+	exitsChanged bool
+
+	// Injected in tests.
+	probeFn    func(ctx context.Context, client *http.Client, domain string) (int, error)
+	setAllowed func(dev, pub, list string) error
+	addRouteFn func(prefix string) error
+	delRouteFn func(prefix string) error
 }
 
 // New returns a learner with the given options and its saved state.
@@ -67,7 +88,13 @@ func New(opts Options) (*Learner, error) {
 		opts.Interval = 10 * time.Minute
 	}
 	if opts.TTL <= 0 {
-		opts.TTL = 7 * 24 * time.Hour
+		opts.TTL = 24 * time.Hour
+	}
+	if opts.HealthWindow <= 0 {
+		opts.HealthWindow = 5 * time.Minute
+	}
+	if opts.RetryUnserved <= 0 {
+		opts.RetryUnserved = 30 * time.Minute
 	}
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 4
@@ -75,14 +102,14 @@ func New(opts Options) (*Learner, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = 12 * time.Second
 	}
-	if opts.ExitDev == "" {
-		opts.ExitDev = "wg0"
+	if opts.Dev == "" {
+		opts.Dev = "wg0"
 	}
 	if opts.CloudDev == "" {
 		opts.CloudDev = "ens3"
 	}
 	if opts.Limit <= 0 {
-		opts.Limit = 400
+		opts.Limit = 800
 	}
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
@@ -91,14 +118,30 @@ func New(opts Options) (*Learner, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Learner{opts: opts, state: state, applied: map[string]bool{}}
-	l.cloud = probeClient(opts.Timeout, CloudMark)
-	l.home = probeClient(opts.Timeout, HomeMark)
+	l := &Learner{
+		opts:    opts,
+		state:   state,
+		applied: map[string]bool{},
+		lists:   map[string]string{},
+		cloud:   probeClient(opts.Timeout, CloudMark),
+		direct:  probeClient(opts.Timeout, 0),
+	}
+	l.probeFn = l.probe
+	l.setAllowed = func(dev, pub, list string) error {
+		return run("wg", "set", dev, "peer", pub, "allowed-ips", list)
+	}
+	l.addRouteFn = func(prefix string) error {
+		return run("ip", "route", "replace", prefix, "dev", opts.Dev)
+	}
+	l.delRouteFn = func(prefix string) error { return run("ip", "route", "del", prefix) }
 	return l, nil
 }
 
 func probeClient(timeout time.Duration, mark int) *http.Client {
-	dialer := &net.Dialer{Timeout: timeout, Control: markControl(mark)}
+	dialer := &net.Dialer{Timeout: timeout}
+	if mark != 0 {
+		dialer.Control = markControl(mark)
+	}
 	return &http.Client{
 		Timeout: 2 * timeout,
 		Transport: &http.Transport{
@@ -110,85 +153,8 @@ func probeClient(timeout time.Duration, mark int) *http.Client {
 	}
 }
 
-// ApplySavedRoutes restores the routes for the state on startup, so a reboot
-// does not leave a learned prefix on the cloud exit again.
-func (l *Learner) ApplySavedRoutes(now time.Time) error {
-	desired := Desired(l.state, now, l.opts.Limit)
-	add, remove := Reconcile(desired, l.routedByKernel())
-	for _, prefix := range remove {
-		l.removeRoute(prefix)
-	}
-	for _, prefix := range add {
-		if err := l.addRoute(prefix); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// RunOnce performs one learning cycle.
-func (l *Learner) RunOnce(ctx context.Context) (Summary, error) {
-	var sum Summary
-	now := time.Now()
-
-	if err := l.ensureTestRouting(); err != nil {
-		return sum, err
-	}
-
-	candidates, err := l.candidates()
-	if err != nil {
-		return sum, err
-	}
-	sum.Candidates = len(candidates)
-	if len(candidates) == 0 {
-		return sum, l.reconcile(now, &sum)
-	}
-
-	checked := make(map[string]int, len(candidates))
-	var mu sync.Mutex
-	sem := make(chan struct{}, l.opts.Concurrency)
-	var wg sync.WaitGroup
-
-	for _, candidate := range candidates {
-		candidate := candidate
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-			defer func() { <-sem }()
-
-			obs, ok := l.observe(ctx, candidate.Domain)
-			if !ok {
-				return
-			}
-			mu.Lock()
-			checked[candidate.Domain] = obs.Home
-			mu.Unlock()
-
-			if l.applyObservation(obs, now) {
-				l.opts.Logf("exit: %s refused the cloud exit (%d, %s) and serves the home exit (%d); routing %s",
-					obs.Domain, obs.Cloud, obs.CloudErr, obs.Home, strings.Join(obs.Prefixes, " "))
-			}
-		}()
-	}
-	wg.Wait()
-
-	sum.Checked = len(checked)
-	if err := l.reconcile(now, &sum); err != nil {
-		return sum, err
-	}
-	return sum, nil
-}
-
 // Run loops until the context is cancelled.
 func (l *Learner) Run(ctx context.Context) error {
-	if err := l.ApplySavedRoutes(time.Now()); err != nil {
-		l.opts.Logf("exit: could not restore learned routes: %v", err)
-	}
 	ticker := time.NewTicker(l.opts.Interval)
 	defer ticker.Stop()
 	for {
@@ -199,8 +165,8 @@ func (l *Learner) Run(ctx context.Context) error {
 			}
 			l.opts.Logf("exit: cycle failed: %v", err)
 		} else {
-			l.opts.Logf("exit: checked %d of %d blocked names, %d learned, %d released",
-				sum.Checked, sum.Candidates, sum.Learned, sum.Released)
+			l.opts.Logf("exit: checked %d of %d blocked names, %d served by an exit, %d unserved, %d changes",
+				sum.Checked, sum.Candidates, sum.Served, sum.Unserved, sum.Changed)
 		}
 		select {
 		case <-ctx.Done():
@@ -208,6 +174,544 @@ func (l *Learner) Run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+type resolved struct {
+	domain   string
+	prefixes []string
+	cloud    int
+	cloudErr string
+	err      error
+	ok       bool
+}
+
+// RunOnce performs one learning cycle.
+func (l *Learner) RunOnce(ctx context.Context) (Summary, error) {
+	var sum Summary
+	now := time.Now()
+
+	l.blocked = nil
+	reg, err := LoadRegistry(l.opts.RegistryPath)
+	if err != nil {
+		return sum, fmt.Errorf("read the exit registry: %w", err)
+	}
+	l.reg = reg
+	l.exits = EnabledExits(reg)
+
+	if err := l.ensureCloudRouting(); err != nil {
+		return sum, err
+	}
+
+	candidates, err := l.candidates()
+	if err != nil {
+		return sum, err
+	}
+	sum.Candidates = len(candidates)
+
+	// Probe the cloud for every candidate first. This is independent of any
+	// assignment because it is marked to leave through the physical link.
+	results := make([]resolved, len(candidates))
+	sem := make(chan struct{}, l.opts.Concurrency)
+	var wg sync.WaitGroup
+	for i, candidate := range candidates {
+		i, domain := i, candidate.Domain
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			results[i] = l.resolveAndProbeCloud(ctx, domain)
+		}()
+	}
+	wg.Wait()
+
+	handshakes := l.handshakes()
+	l.noteExitHealth(handshakes, now)
+	if !l.opts.DryRun {
+		// Anything already routed over the tunnel is ours; starting from the
+		// kernel means a stale route can be removed and a dropped one restored.
+		l.applied = l.kernelRoutes()
+	}
+	l.syncRoutes()
+
+	seen := make(map[string]bool, len(results))
+	previous := make(map[string]Site, len(l.state.Sites))
+	for domain, site := range l.state.Sites {
+		previous[domain] = site
+	}
+
+	for _, r := range results {
+		if !r.ok {
+			// A resolution failure says nothing about the site; keep what we
+			// knew rather than flapping an assignment.
+			if prev, ok := l.state.Sites[r.domain]; ok {
+				seen[r.domain] = true
+				_ = prev
+			}
+			continue
+		}
+		seen[r.domain] = true
+		sum.Checked++
+		site := l.decide(ctx, r, handshakes, now)
+		if prev, ok := previous[r.domain]; !ok || prev.State != site.State || prev.Exit != site.Exit {
+			sum.Changed++
+			l.opts.Logf("exit: %s is %s%s (cloud %d%s)", site.Domain, site.State,
+				exitSuffix(site), site.Cloud, errSuffix(site.CloudErr))
+		}
+		l.state.Sites[r.domain] = site
+	}
+
+	l.prune(seen, now)
+	l.syncRoutes()
+	l.state.Updated = now.UTC()
+
+	status := l.buildStatus(now, handshakes)
+	if !l.opts.DryRun {
+		if err := SaveState(l.opts.StatePath, l.state); err != nil {
+			return sum, err
+		}
+		if l.opts.StatusPath != "" {
+			if err := SaveStatus(l.opts.StatusPath, status); err != nil {
+				return sum, err
+			}
+		}
+	}
+	sum.Served, sum.Unserved = 0, 0
+	for _, site := range l.state.Sites {
+		switch site.State {
+		case SiteExit:
+			sum.Served++
+		case SiteUnserved:
+			sum.Unserved++
+		}
+	}
+	return sum, nil
+}
+
+func exitSuffix(site Site) string {
+	if site.State == SiteExit {
+		return " via " + site.Exit
+	}
+	return ""
+}
+
+func errSuffix(s string) string {
+	if s == "" {
+		return ""
+	}
+	return ", " + s
+}
+
+// decide routes one site's prefixes to the first exit that serves it.
+func (l *Learner) decide(ctx context.Context, r resolved, handshakes map[string]int64, now time.Time) Site {
+	site := Site{
+		Domain:   r.domain,
+		Prefixes: r.prefixes,
+		Cloud:    r.cloud,
+		CloudErr: r.cloudErr,
+		Verified: now.UTC(),
+		Expires:  now.Add(l.opts.TTL).UTC(),
+	}
+	if !CloudRefused(r.cloud, r.err) {
+		l.release(r.prefixes)
+		site.State = SiteCloud
+		return site
+	}
+
+	owner := l.ownerOf(r.prefixes)
+	if prev, ok := l.state.Sites[r.domain]; ok && prev.State == SiteUnserved &&
+		now.Sub(prev.Verified) < l.opts.RetryUnserved && owner == "" && !l.exitsChanged {
+		// Churning every exit for a name nothing can serve helps nobody. Keep
+		// the verdict until the retry window passes; the cloud check above
+		// still catches the site becoming reachable again, and an exit coming
+		// back clears the backoff.
+		prev.Cloud, prev.CloudErr = r.cloud, r.cloudErr
+		return prev
+	}
+	if owner != "" && l.healthy(owner, handshakes, now) {
+		if status, err := l.probeFn(ctx, l.direct, r.domain); err == nil && served(status) {
+			site.State, site.Exit = SiteExit, owner
+			return site
+		}
+	}
+
+	for _, exit := range l.exits {
+		if exit.ID == owner || !l.healthy(exit.ID, handshakes, now) {
+			continue
+		}
+		if l.exitBlocks(exit.Network, r.domain) {
+			l.opts.Logf("exit: skipping %s for %s: that network reports it blocked", exit.ID, r.domain)
+			continue
+		}
+		if l.totalPrefixes()+len(r.prefixes) > l.opts.Limit {
+			l.opts.Logf("exit: global cap of %d prefixes reached; not assigning %s", l.opts.Limit, r.domain)
+			continue
+		}
+		if l.prefixCount(exit.ID)+len(r.prefixes) > exit.MaxPrefixes {
+			l.opts.Logf("exit: %s is at its %d prefix cap; not assigning %s", exit.ID, exit.MaxPrefixes, r.domain)
+			continue
+		}
+		l.assign(r.prefixes, exit.ID)
+		if status, err := l.probeFn(ctx, l.direct, r.domain); err == nil && served(status) {
+			site.State, site.Exit = SiteExit, exit.ID
+			return site
+		}
+	}
+
+	l.release(r.prefixes)
+	site.State = SiteUnserved
+	return site
+}
+
+// resolveAndProbeCloud resolves a name and asks it over the cloud exit.
+func (l *Learner) resolveAndProbeCloud(ctx context.Context, domain string) resolved {
+	out := resolved{domain: domain}
+	resolveCtx, cancel := context.WithTimeout(ctx, l.opts.Timeout)
+	ips, err := net.DefaultResolver.LookupHost(resolveCtx, domain)
+	cancel()
+	if err != nil || len(ips) == 0 {
+		return out
+	}
+	if len(ips) > 6 {
+		ips = ips[:6]
+	}
+	out.prefixes = PrefixesFor(ips)
+	if len(out.prefixes) == 0 {
+		return out
+	}
+	out.cloud, err = l.probeFn(ctx, l.cloud, domain)
+	if err != nil {
+		out.err = err
+		out.cloudErr = err.Error()
+	}
+	out.ok = true
+	return out
+}
+
+func (l *Learner) probe(ctx context.Context, client *http.Client, domain string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+domain+"/", nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", probeUserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, nil
+}
+
+// ownerOf returns the exit a prefix set is currently assigned to. Conflicting
+// assignments, which can only happen through a shared /24, are released: an
+// address has one exit, and the next decision prefers a single one.
+func (l *Learner) ownerOf(prefixes []string) string {
+	owner := ""
+	for _, prefix := range prefixes {
+		id, ok := l.state.Assignments[prefix]
+		if !ok || id == "" {
+			continue
+		}
+		if owner == "" {
+			owner = id
+			continue
+		}
+		if owner != id {
+			l.opts.Logf("exit: %s resolves into prefixes owned by both %s and %s; releasing", strings.Join(prefixes, " "), owner, id)
+			l.release(prefixes)
+			return ""
+		}
+	}
+	return owner
+}
+
+// assign moves a prefix set to one exit and updates the data path.
+func (l *Learner) assign(prefixes []string, id string) {
+	touched := map[string]bool{}
+	for _, prefix := range prefixes {
+		if old, ok := l.state.Assignments[prefix]; ok && old != "" {
+			touched[old] = true
+		}
+		l.state.Assignments[prefix] = id
+	}
+	touched[id] = true
+	for exitID := range touched {
+		l.applyAllowed(exitID)
+	}
+	for _, prefix := range prefixes {
+		l.addRoute(prefix)
+	}
+}
+
+// release returns a prefix set to the cloud exit.
+func (l *Learner) release(prefixes []string) {
+	touched := map[string]bool{}
+	for _, prefix := range prefixes {
+		if old, ok := l.state.Assignments[prefix]; ok && old != "" {
+			touched[old] = true
+		}
+		delete(l.state.Assignments, prefix)
+		l.removeRoute(prefix)
+	}
+	for exitID := range touched {
+		l.applyAllowed(exitID)
+	}
+}
+
+// totalPrefixes is the global assignment count.
+func (l *Learner) totalPrefixes() int { return len(l.state.Assignments) }
+
+// exitBlocks reports whether the exit's own network is known to block a
+// domain. The active probe decides in the end; this only skips hopeless
+// candidates without spending a request.
+func (l *Learner) exitBlocks(network, domain string) bool {
+	if network == "" {
+		return false
+	}
+	if l.blocked == nil {
+		l.blocked = map[string]map[string]bool{}
+	}
+	blocked, ok := l.blocked[network]
+	if !ok {
+		blocked = map[string]bool{}
+		if data, err := os.ReadFile(filepath.Join(l.opts.FeedDir, network+".json")); err == nil {
+			var feed struct {
+				Domains map[string]struct {
+					State string `json:"state"`
+				} `json:"domains"`
+			}
+			if json.Unmarshal(data, &feed) == nil {
+				for name, obs := range feed.Domains {
+					if obs.State == "blocked" {
+						blocked[strings.ToLower(name)] = true
+					}
+				}
+			}
+		}
+		l.blocked[network] = blocked
+	}
+	return blocked[domain]
+}
+
+// prefixCount is how many prefixes an exit currently carries.
+func (l *Learner) prefixCount(id string) int {
+	n := 0
+	for _, owner := range l.state.Assignments {
+		if owner == id {
+			n++
+		}
+	}
+	return n
+}
+
+// applyAllowed pushes the per-exit allowed-ips list to WireGuard. The list is
+// what maps a destination prefix to an exit on a shared interface.
+func (l *Learner) applyAllowed(id string) {
+	exit, ok := l.exitByID(id)
+	if !ok {
+		l.opts.Logf("exit: %s is not in the registry; remove it with deploy/remove-exit.sh", id)
+		return
+	}
+	var prefixes []string
+	for prefix, owner := range l.state.Assignments {
+		if owner == id {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	sort.Strings(prefixes)
+	list := strings.Join(prefixes, ",")
+	if prev, seen := l.lists[id]; seen && prev == list {
+		return
+	}
+	if prev, seen := l.lists[id]; !seen || len(strings.Split(prev, ",")) != len(prefixes) || (prev == "" && len(prefixes) > 0) {
+		l.opts.Logf("exit: %s carries %d prefixes", id, len(prefixes))
+	}
+	if l.opts.DryRun {
+		l.lists[id] = list
+		return
+	}
+	if err := l.setAllowed(l.opts.Dev, exit.PubKey, list); err != nil {
+		l.opts.Logf("exit: could not set allowed-ips for %s: %v", id, err)
+		return
+	}
+	l.lists[id] = list
+}
+
+func (l *Learner) exitByID(id string) (Exit, bool) {
+	for _, exit := range l.reg.Exits {
+		if exit.ID == id {
+			return exit, true
+		}
+	}
+	return Exit{}, false
+}
+
+// noteExitHealth records health transitions so a returning exit is used at
+// once. The first cycle after a start counts every healthy exit as returning,
+// which is what an operator restarting the unit expects.
+func (l *Learner) noteExitHealth(handshakes map[string]int64, now time.Time) {
+	if l.wasHealthy == nil {
+		l.wasHealthy = map[string]bool{}
+	}
+	l.exitsChanged = false
+	for _, exit := range l.exits {
+		healthy := l.healthy(exit.ID, handshakes, now)
+		if healthy && !l.wasHealthy[exit.ID] {
+			l.exitsChanged = true
+		}
+		l.wasHealthy[exit.ID] = healthy
+	}
+}
+
+// healthy reports whether an exit has handshaked recently.
+func (l *Learner) healthy(id string, handshakes map[string]int64, now time.Time) bool {
+	exit, ok := l.exitByID(id)
+	if !ok || !exit.Enabled {
+		return false
+	}
+	at, ok := handshakes[exit.PubKey]
+	if !ok || at == 0 {
+		return false
+	}
+	return now.Unix()-at <= int64(l.opts.HealthWindow.Seconds())
+}
+
+func (l *Learner) handshakes() map[string]int64 {
+	out := map[string]int64{}
+	if l.opts.DryRun {
+		// A dry run cannot ask the kernel what is live, so treat every enabled
+		// exit as healthy and let the probes decide.
+		now := time.Now().Unix()
+		for _, exit := range l.reg.Exits {
+			if exit.Enabled {
+				out[exit.PubKey] = now
+			}
+		}
+		return out
+	}
+	raw, err := exec.Command("wg", "show", l.opts.Dev, "latest-handshakes").Output()
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		var at int64
+		if _, err := fmt.Sscan(fields[1], &at); err == nil {
+			out[fields[0]] = at
+		}
+	}
+	return out
+}
+
+// prune drops sites no longer reported blocked and releases their prefixes.
+func (l *Learner) prune(seen map[string]bool, now time.Time) {
+	for domain, site := range l.state.Sites {
+		if seen[domain] {
+			continue
+		}
+		if now.After(site.Expires) {
+			delete(l.state.Sites, domain)
+			l.release(site.Prefixes)
+		}
+	}
+	// An assignment with no site behind it is stale.
+	live := map[string]bool{}
+	for _, site := range l.state.Sites {
+		for _, prefix := range site.Prefixes {
+			live[prefix] = true
+		}
+	}
+	for prefix := range l.state.Assignments {
+		if !live[prefix] {
+			delete(l.state.Assignments, prefix)
+			l.removeRoute(prefix)
+		}
+	}
+}
+
+// addRoute/removeRoute keep the main table in step. Routes carry no next hop:
+// WireGuard picks the exit from the prefix's allowed-ips owner.
+func (l *Learner) addRoute(prefix string) {
+	if l.applied[prefix] {
+		return
+	}
+	if l.opts.DryRun {
+		l.applied[prefix] = true
+		return
+	}
+	if err := l.addRouteFn(prefix); err != nil {
+		l.opts.Logf("exit: could not route %s: %v", prefix, err)
+		return
+	}
+	l.applied[prefix] = true
+}
+
+func (l *Learner) removeRoute(prefix string) {
+	if !l.applied[prefix] {
+		return
+	}
+	delete(l.applied, prefix)
+	if l.opts.DryRun {
+		return
+	}
+	if err := l.delRouteFn(prefix); err != nil {
+		// Already gone is fine.
+		return
+	}
+}
+
+// syncRoutes makes the kernel match the assignments, which also heals a wg0
+// restart that dropped interface routes.
+func (l *Learner) syncRoutes() {
+	if l.opts.DryRun {
+		return
+	}
+	kernel := l.kernelRoutes()
+	want := map[string]bool{}
+	for prefix := range l.state.Assignments {
+		want[prefix] = true
+	}
+	for prefix := range want {
+		if !kernel[prefix] {
+			l.applied[prefix] = false
+			l.addRoute(prefix)
+		}
+	}
+	for prefix := range kernel {
+		if !want[prefix] {
+			l.applied[prefix] = true
+			l.removeRoute(prefix)
+		}
+	}
+}
+
+func (l *Learner) kernelRoutes() map[string]bool {
+	out := map[string]bool{}
+	raw, err := exec.Command("ip", "route", "show", "dev", l.opts.Dev).Output()
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.Contains(fields[0], "/") {
+			continue
+		}
+		if fields[0] == "10.88.0.0/24" {
+			continue
+		}
+		out[fields[0]] = true
+	}
+	return out
 }
 
 func (l *Learner) candidates() ([]Candidate, error) {
@@ -235,193 +739,9 @@ func (l *Learner) candidates() ([]Candidate, error) {
 	return out, nil
 }
 
-// observe resolves a site and asks it over both exits.
-func (l *Learner) observe(ctx context.Context, domain string) (Observation, bool) {
-	obs := Observation{Domain: domain}
-	resolveCtx, cancel := context.WithTimeout(ctx, l.opts.Timeout)
-	ips, err := net.DefaultResolver.LookupHost(resolveCtx, domain)
-	cancel()
-	if err != nil || len(ips) == 0 {
-		return obs, false
-	}
-	if len(ips) > 6 {
-		ips = ips[:6]
-	}
-	obs.Prefixes = PrefixesFor(ips)
-	if len(obs.Prefixes) == 0 {
-		return obs, false
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		status, err := requestStatus(ctx, l.cloud, domain)
-		obs.Cloud = status
-		if err != nil {
-			obs.CloudErr = err.Error()
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		status, err := requestStatus(ctx, l.home, domain)
-		obs.Home = status
-		if err != nil {
-			obs.HomeErr = err.Error()
-		}
-	}()
-	wg.Wait()
-	return obs, true
-}
-
-func requestStatus(ctx context.Context, client *http.Client, domain string) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+domain+"/", nil)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("User-Agent", probeUserAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	return resp.StatusCode, nil
-}
-
-// applyObservation updates the state for one checked site and reports whether
-// it learned a prefix it did not already hold.
-func (l *Learner) applyObservation(obs Observation, now time.Time) bool {
-	// A site that no longer refuses the cloud exit releases every prefix it
-	// held, whether or not the new answer resolves differently.
-	if !ExitBlocked(obs) {
-		for prefix, entry := range l.state.Entries {
-			if entry.Domain == obs.Domain {
-				delete(l.state.Entries, prefix)
-			}
-		}
-		return false
-	}
-	fresh := false
-	for _, prefix := range obs.Prefixes {
-		if _, ok := l.state.Entries[prefix]; !ok {
-			fresh = true
-		}
-		entry := EntryFor(obs, now, l.opts.TTL)
-		entry.Prefix = prefix
-		l.state.Entries[prefix] = entry
-	}
-	return fresh
-}
-
-// reconcile prunes expired entries, applies the difference and records it.
-func (l *Learner) reconcile(now time.Time, sum *Summary) error {
-	Prune(l.state, now)
-	desired := Desired(l.state, now, l.opts.Limit)
-	add, remove := Reconcile(desired, l.routedByKernel())
-
-	for _, prefix := range remove {
-		if err := l.removeRoute(prefix); err != nil {
-			l.opts.Logf("exit: could not remove %s: %v", prefix, err)
-			continue
-		}
-		sum.Removed = append(sum.Removed, prefix)
-	}
-	for _, prefix := range add {
-		if err := l.addRoute(prefix); err != nil {
-			l.opts.Logf("exit: could not route %s: %v", prefix, err)
-			continue
-		}
-		sum.Added = append(sum.Added, prefix)
-	}
-	// A released prefix means at least one site is served by the cloud exit
-	// again; count domains, not prefixes, for the summary line.
-	released := map[string]bool{}
-	for _, prefix := range remove {
-		if entry, ok := l.state.Entries[prefix]; ok {
-			released[entry.Domain] = true
-		}
-	}
-	sum.Learned = len(sum.Added)
-	sum.Released = len(released)
-
-	if l.opts.DryRun {
-		return nil
-	}
-	return SaveState(l.opts.StatePath, l.state)
-}
-
-// routedByKernel reports which learned prefixes the kernel actually holds. A
-// wg0 restart drops interface routes, so trusting the in-memory set would leave
-// a prefix on the cloud exit until the next state change.
-func (l *Learner) routedByKernel() []string {
-	known := make(map[string]bool, len(l.state.Entries)+len(l.applied))
-	for prefix := range l.state.Entries {
-		known[prefix] = true
-	}
-	for prefix := range l.applied {
-		known[prefix] = true
-	}
-	if l.opts.DryRun {
-		out := make([]string, 0, len(l.applied))
-		for prefix := range l.applied {
-			out = append(out, prefix)
-		}
-		return out
-	}
-	out, err := exec.Command("ip", "route", "show", "dev", l.opts.ExitDev).Output()
-	if err != nil {
-		routed := make([]string, 0, len(l.applied))
-		for prefix := range l.applied {
-			routed = append(routed, prefix)
-		}
-		return routed
-	}
-	var routed []string
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 || !known[fields[0]] {
-			continue
-		}
-		routed = append(routed, fields[0])
-	}
-	return routed
-}
-
-func (l *Learner) addRoute(prefix string) error {
-	l.opts.Logf("exit: routing %s via %s", prefix, l.opts.ExitDev)
-	if l.opts.DryRun {
-		l.applied[prefix] = true
-		return nil
-	}
-	if err := run("ip", "route", "replace", prefix, "dev", l.opts.ExitDev); err != nil {
-		return err
-	}
-	l.applied[prefix] = true
-	return nil
-}
-
-func (l *Learner) removeRoute(prefix string) error {
-	l.opts.Logf("exit: releasing %s back to the cloud exit", prefix)
-	if l.opts.DryRun {
-		delete(l.applied, prefix)
-		return nil
-	}
-	if err := run("ip", "route", "del", prefix); err != nil {
-		// Already gone is not an error.
-		delete(l.applied, prefix)
-		return nil
-	}
-	delete(l.applied, prefix)
-	return nil
-}
-
-// ensureTestRouting pins each probe class to its own table. The cloud probe
-// must not follow a learned route, and the home probe must not follow the
-// default route.
-func (l *Learner) ensureTestRouting() error {
+// ensureCloudRouting pins the cloud probe to its own table. The cloud check
+// must not follow a learned route, or it would verify the exit being tested.
+func (l *Learner) ensureCloudRouting() error {
 	gateway, err := defaultGateway()
 	if err != nil {
 		return fmt.Errorf("read the default route: %w", err)
@@ -429,21 +749,53 @@ func (l *Learner) ensureTestRouting() error {
 	if gateway == "" {
 		return fmt.Errorf("no default route")
 	}
-	// The test tables are set up in dry-run too: without them the home probe
-	// follows the cloud route and every comparison looks identical.
+	if l.opts.DryRun {
+		return nil
+	}
 	if err := run("ip", "route", "replace", "default", "via", gateway, "dev", l.opts.CloudDev, "table", fmt.Sprint(cloudTable)); err != nil {
 		return err
 	}
-	if err := run("ip", "route", "replace", "default", "dev", l.opts.ExitDev, "table", fmt.Sprint(homeTable)); err != nil {
-		return err
-	}
-	for _, rule := range [][2]string{
-		{fmt.Sprintf("0x%x/0xff", CloudMark), fmt.Sprint(cloudTable)},
-		{fmt.Sprintf("0x%x/0xff", HomeMark), fmt.Sprint(homeTable)},
-	} {
-		_ = run("ip", "rule", "add", "fwmark", rule[0], "lookup", rule[1], "priority", "90")
-	}
+	_ = run("ip", "rule", "add", "fwmark", fmt.Sprintf("0x%x/0xff", CloudMark), "lookup", fmt.Sprint(cloudTable), "priority", "90")
 	return nil
+}
+
+func (l *Learner) buildStatus(now time.Time, handshakes map[string]int64) Status {
+	status := Status{
+		Sites:       l.state.Sites,
+		Assignments: l.state.Assignments,
+		Unserved:    []string{},
+	}
+	healthyAny := false
+	for _, exit := range l.reg.Exits {
+		es := ExitStatus{
+			ID:        exit.ID,
+			Label:     exit.Label,
+			Enabled:   exit.Enabled,
+			Handshake: handshakes[exit.PubKey],
+			Prefixes:  l.prefixCount(exit.ID),
+		}
+		for _, site := range l.state.Sites {
+			if site.Exit == exit.ID {
+				es.Sites++
+			}
+		}
+		es.Healthy = exit.Enabled && l.healthy(exit.ID, handshakes, now)
+		if es.Healthy {
+			healthyAny = true
+		}
+		if exit.Enabled && !es.Healthy {
+			es.Error = "no recent handshake"
+		}
+		status.Exits = append(status.Exits, es)
+	}
+	for _, site := range l.state.Sites {
+		if site.State == SiteUnserved {
+			status.Unserved = append(status.Unserved, site.Domain)
+		}
+	}
+	sort.Strings(status.Unserved)
+	status.AllDown = len(l.exits) > 0 && !healthyAny
+	return status
 }
 
 func defaultGateway() (string, error) {

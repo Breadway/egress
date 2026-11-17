@@ -4,6 +4,7 @@ package egress
 
 import (
 	"context"
+	"egress/internal/core"
 	"egress/internal/split"
 	"fmt"
 	"os"
@@ -280,6 +281,8 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			pauseFiltering(15 * time.Minute)
 		case 11:
 			go runUpdateCheck()
+		case 12:
+			openURL("http://" + core.PortalListenAddr + "/")
 		default:
 			if id := wparam & 0xffff; id >= 100 {
 				if spec, ok := trayDomainMenu[id]; ok {
@@ -415,6 +418,7 @@ func showTrayMenu(hwnd uintptr) {
 	addItem(4, "Open data folder")
 	addItem(5, "Reload allow/block lists")
 	addItem(6, "Run diagnose")
+	addItem(12, "Why is this blocked?")
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	addItem(7, "Start at boot")
 	addItem(8, "Do not start at boot")

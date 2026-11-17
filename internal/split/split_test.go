@@ -375,7 +375,7 @@ func TestMergeFeedDomains(t *testing.T) {
 	p := NewProfile("net")
 	p.AddBlocked("poki.com", EvidenceIPRejected, now)
 
-	added := mergeFeedDomains(p, []feedDomain{
+	added, _ := mergeFeedDomains(p, []feedDomain{
 		{Domain: "Discord.com", Evidence: "tls-stall", Count: 3},
 		{Domain: "poki.com", Evidence: "ip-rejected"},
 		{Domain: "not a domain", Evidence: "tls-stall"},
@@ -390,8 +390,28 @@ func TestMergeFeedDomains(t *testing.T) {
 	if p.Entries["discord.com"].Evidence != EvidenceFeed {
 		t.Fatalf("evidence: %q", p.Entries["discord.com"].Evidence)
 	}
-	if mergeFeedDomains(p, []feedDomain{{Domain: "discord.com"}}, now) != 0 {
+	if again, updated := mergeFeedDomains(p, []feedDomain{{Domain: "discord.com"}}, now); again != 0 || updated != 0 {
 		t.Fatal("merge must be idempotent")
+	}
+}
+
+func TestMergeFeedCarriesExitState(t *testing.T) {
+	now := time.Now()
+	p := NewProfile("net")
+	mergeFeedDomains(p, []feedDomain{{Domain: "reddit.com", ServedBy: "hestia"}}, now)
+	if got := p.Entries["reddit.com"].ServedBy; got != "hestia" {
+		t.Fatalf("served_by %q", got)
+	}
+	_, updated := mergeFeedDomains(p, []feedDomain{{Domain: "reddit.com", Unserved: true}}, now)
+	if updated != 1 {
+		t.Fatalf("updated %d, want 1", updated)
+	}
+	entry := p.Entries["reddit.com"]
+	if !entry.Unserved || entry.ServedBy != "" {
+		t.Fatalf("entry kept stale exit state: %+v", entry)
+	}
+	if got := p.Entries["reddit.com"].Evidence; got != EvidenceFeed {
+		t.Fatalf("evidence %q", got)
 	}
 }
 

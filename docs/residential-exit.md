@@ -1,82 +1,119 @@
-# Residential exit for sites that refuse the cloud one
+# Exits, and the local page
 
-A filtered network pushes blocked destinations into the tunnel. Those exit at
-Aegis, which is a cloud address, and some sites answer a cloud address with a
-block page. reddit is the example: `403 blocked by network security` from
-Aegis, `200` from hestia's home connection.
+A filtered network pushes blocked destinations into the tunnel. Those leave
+through Aegis by default, which is a cloud address, and some sites answer a
+cloud address with a block page. reddit is the example: `403 blocked by network
+security` from Aegis, `200` from hestia's home connection.
 
-`egress-exit` keeps the cloud exit as the default and learns the exceptions. It
-runs on Aegis only.
+Two pieces handle that:
 
-## Path
+- **`egress-exit`** runs on Aegis and chooses which exit carries which
+  destination.
+- **The local page** runs on each client and explains, per blocked site,
+  whether it is being reached and through which exit.
+
+## Exits
+
+An exit is any host that dials Aegis as an ordinary `wg0` peer, forwards
+`10.88.0.0/24` back, and NATs it out its own uplink. hestia is the first one.
+Nothing about an exit is hardcoded: the operator enrolls it in a registry.
 
 ```
-client -> wg0 (10.88.0.x) -> Aegis -> wg0 peer "hestia" (home 125.253.50.4)
-                                          -> hestia NAT -> internet
+client -> wg0 -> Aegis -> the exit that serves the destination -> internet
 ```
 
-- hestia dials Aegis:7105 as an ordinary wg0 peer, so it works behind NAT and
-  needs no new inbound port on Aegis.
-- Its peer entry on Aegis allows `0.0.0.0/0`. That is only a mapping: nothing
-  goes to hestia unless a route sends it there. `/etc/wireguard/wg0.conf` sets
-  `Table = off`, so wg-quick never installs that default.
-- hestia keeps `AllowedIPs = 10.88.0.0/24`, routes that subnet over the link,
-  forwards, and masquerades `10.88.0.0/24` out its uplink. Client source
-  addresses are preserved end to end, so Aegis needs no second NAT.
+All exits share `wg0`, so an exit needs no new inbound port on Aegis and works
+behind NAT. WireGuard picks the peer from the destination prefix, so each exit
+carries only the prefixes assigned to it. `wg0.conf` sets `Table = off`, which
+keeps an exit's `0.0.0.0/0` mapping from installing a default route; the routes
+are managed by the router.
 
-## Learning
+### Registry
 
-`egress-exit` reads the fleet's shared block table (`/var/lib/bypass/split/`)
-plus `/etc/egress-exit/domains`, resolves each blocked name, and asks it twice:
+`/var/lib/bypass/exits.json`, owned by `bypass` so the web admin can flip the
+enabled flag:
 
-- cloud exit, socket marked `0x44`, routing table 812 (default via ens3)
-- home exit, socket marked `0x45`, routing table 811 (default via wg0)
+```json
+{"version": 1, "exits": [
+  {"id": "hestia", "label": "hestia", "pubkey": "...", "enabled": true,
+   "priority": 10, "max_prefixes": 200, "host": "hestia"}
+]}
+```
 
-The marks guarantee a learned route cannot make the cloud check follow the home
-exit. A site that refuses the cloud exit (`403`, `451`, `429`, or no HTTP answer
-at all) while the home exit serves it (`2xx`/`3xx`) has its `/24`s routed over
-wg0, which sends them to hestia. A site that the cloud exit serves again
-releases its prefixes on the next cycle. Entries expire after seven days
-without a successful observation, and at most 400 prefixes are kept.
+`network` is optional: when the exit also runs as a client, its network id lets
+the router skip it for domains that network already reports blocked. The active
+probe still decides.
 
-The `/24` granularity survives a CDN answer changing between lookups. The
-learner resolves names itself, so an address the client sees but Aegis never
-resolves is still reached over the cloud exit; extend the learner to consume
-client-observed addresses if that shows up in practice.
+### Enroll and remove
 
-State lives in `/var/lib/egress-exit/state.json`; routes are restored from it
-when the service starts.
+```sh
+./deploy/add-exit.sh --id hestia --host hestia [--priority 10] [--network <id>]
+./deploy/remove-exit.sh --id hestia
+```
 
-## Deploy
-
-Everything below is scripted and idempotent. Run it from the repo root, with
-ssh access to both hosts:
+`add-exit` keeps the private key on the exit host, writes its `wgexit.conf`,
+adds the peer to `wg0.conf` (a backup first, never restarting `wg0`), registers
+it, and verifies the handshake. `install-exit.sh` installs the router itself:
 
 ```sh
 ./deploy/install-exit.sh
+./deploy/add-exit.sh --id hestia --host hestia
 ```
 
-A second run reports `no changes`. It builds and installs `egress-exit`,
-installs and enables the unit, adds the hestia peer and `Table = off` to
-`wg0.conf` (backing the file up first, never restarting wg0), writes hestia's
-`wgexit.conf` only when it differs, enables `wg-quick@wgexit`, and verifies the
-handshake and the learner.
+The web admin has an **Exits** page: health, handshake age, carried prefixes,
+served sites, routed prefixes, unserved names, and enable/disable buttons.
 
-Check the learner's decision without changing routes:
+## How the router decides
 
-```sh
-sudo /usr/local/bin/egress-exit --once --dry-run --verbose
-```
+Every cycle (ten minutes) it:
 
-## hestia side
+1. Reads the fleet's shared block table for candidate domains.
+2. Probes each one over the **cloud exit**, on a marked socket that leaves
+   through the physical link, so a learned route can never make the cloud check
+   follow an exit.
+3. If the cloud serves the site, releases its prefixes.
+4. Otherwise keeps the current exit if it is healthy and still serves the site.
+5. Otherwise tries the enabled exits in priority order, skipping any whose own
+   network reports the domain blocked, and assigns the site's `/24`s to the
+   first one that serves it.
+6. If none serve it, releases the prefixes and marks the site **unserved**.
 
-`deploy/install-exit.sh` writes this file; it is shown so the forwarding and NAT
-can be reviewed. The private key stays on hestia.
-## hestia side
+Health is the WireGuard handshake: an exit with no handshake in five minutes is
+not a candidate. When an exit comes back, the unserved backoff is cleared at
+once. Unserved names are retried every thirty minutes; the cloud check still
+runs every cycle, so a site that stops refusing the cloud exit is released
+immediately.
 
-The interface carries `Address = 10.99.0.2/32`, routes `10.88.0.0/24` back to
-Aegis, forwards and masquerades that subnet out the detected uplink, and clamps
-TCP MSS. The clamp matters: this path is two WireGuard layers deep, and without
-it large responses stall. The peer points at the Aegis endpoint with
-`AllowedIPs = 10.88.0.0/24` and a persistent keepalive, so it reconnects after
-either side restarts.
+Guards: per-exit prefix cap (default 200), global cap (800), no chaining (an
+exit never becomes a client of another exit), and certificate-name mismatches
+are not treated as refusals.
+
+State is in `/var/lib/egress-exit/state.json`; the published status is
+`/var/lib/egress-exit/status.json` (0644, no secrets). The learner re-reads the
+kernel every cycle, so a `wg0` restart cannot silently drop a route.
+
+### Failure behaviour
+
+- Exit gone: its prefixes move to the next exit that serves them, within one
+  cycle (or as soon as the handshake is stale).
+- Every exit gone: blocked sites stay on the cloud exit and are marked
+  unserved, and the admin page says every exit is unreachable.
+- `egress-exit` down: routes persist in the kernel; a restart restores them.
+
+## The local page
+
+`http://127.0.0.1:7280/`, served by the client's own supervisor.
+
+- Each blocked site says **via `<exit>`**, **cloud exit**, or **no path**.
+- It answers when the tunnel is down; the banner says egress is offline and the
+  table is the last known state.
+- Open it from the tray (**Why is this blocked?**) or with `egress portal`.
+- `egress portal --print` prints the URL without opening a browser.
+
+The feed carries `served_by` and `unserved` per domain, so the page reflects the
+router's decisions without asking Aegis at page load time.
+
+There is no certificate authority in this design: the browser still shows its
+own error page for an unserved HTTPS site, and this page is where the
+explanation lives. A browser-injected page would require a device-local CA and
+is deliberately not implemented.
