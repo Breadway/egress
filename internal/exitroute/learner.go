@@ -794,7 +794,7 @@ func (l *Learner) buildStatus(now time.Time, handshakes map[string]int64) Status
 		}
 	}
 	sort.Strings(status.Unserved)
-	status.AllDown = len(l.exits) > 0 && !healthyAny
+	status.AllDown = len(l.reg.Exits) > 0 && !healthyAny
 	return status
 }
 
