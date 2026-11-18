@@ -459,6 +459,13 @@ func runInstall(plat platform, args []string) (err error) {
 	if err := plat.SecureInstallDir(); err != nil {
 		return fmt.Errorf("secure install directory: %w", err)
 	}
+	// A previous failed install can leave files inside the directory that the
+	// new install is about to write: the relay credential and the start
+	// launcher. One left with an unusable ACL makes those writes fail with
+	// access denied while the directory itself is perfectly writable.
+	for _, name := range []string{"socks-auth", "start-egress.cmd"} {
+		removeStaleFile(filepath.Join(core.InstallDir(), name))
+	}
 	// The boot service and the scheduled task both reference this exact path,
 	// which is always the permanent install location regardless of where the
 	// user ran this command from.
