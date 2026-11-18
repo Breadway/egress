@@ -90,6 +90,10 @@ func EnsureInstalledBinary() (string, error) {
 	for attempt := 0; attempt < 40; attempt++ {
 		if renameErr = ReplaceFile(tmp, dest); renameErr == nil {
 			logx.Debugf("installed binary to %s", dest)
+			// A file created while the directory ACL was being rewritten can
+			// inherit an empty DACL. Repair it here rather than leaving a
+			// binary only its owner can load.
+			ensureBinaryACL(dest)
 			return dest, nil
 		}
 		time.Sleep(250 * time.Millisecond)
