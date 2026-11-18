@@ -310,6 +310,7 @@ but no GitHub download is required.
 | `WireGuard for Windows is required` | Only a build without the embedded MSI says this. Rebuild with `assets/` present or install WireGuard manually. |
 | `... did not start listening` | The supervisor crashed or could not bind 7103. Run `diagnose` and read the log. |
 | `wireguard tunnel is down` | The tunnel service failed to install. Check the `diagnose` tunnel-service section and `wireguard.exe` path. |
+| Binary stops running after an update on Windows | The updater now proves the new binary executes and restores `egress.exe.prev` if it does not. The boot task also starts through `start-egress.cmd`, which does the same check before running and falls back to the previous build. If both are refused, run `deploy/windows-recovery.ps1`, then install again. |
 | `10.88.0.1 does not answer` | The peer is not enrolled, the `/32` does not match `--ip`, or Aegis is not forwarding. Check the public key and `allowed-ips` on Aegis. |
 | `exit address is X, expected 152.69.174.7` | Traffic is not entering the tunnel. Same checks as above, plus `AllowedIPs = 0.0.0.0/0` and the route pin. |
 | DNS fails but the tunnel is up | The DoH listener is down or the gateway resolver is unreachable. `diagnose` shows the listener and log tail. |
