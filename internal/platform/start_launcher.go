@@ -20,9 +20,14 @@ func startLauncherScript(exePath string, args []string) string {
 		"set \"BAK=%%EXE%%.prev\"\r\n"+
 		"\"%%EXE%%\" version >nul 2>&1\r\n"+
 		"if not errorlevel 1 goto run\r\n"+
-		"if not exist \"%%BAK%%\" goto run\r\n"+
+		// Repair the ownership and DACL first: an empty DACL is the common
+		// failure and needs no backup, only a reset that restores the
+		// directory's grants.
 		"takeown /f \"%%EXE%%\" >nul 2>&1\r\n"+
 		"icacls \"%%EXE%%\" /reset >nul 2>&1\r\n"+
+		"\"%%EXE%%\" version >nul 2>&1\r\n"+
+		"if not errorlevel 1 goto run\r\n"+
+		"if not exist \"%%BAK%%\" goto run\r\n"+
 		"copy /y \"%%BAK%%\" \"%%EXE%%\" >nul 2>&1\r\n"+
 		":run\r\n"+
 		"\"%%EXE%%\" %s\r\n", exePath, strings.Join(args, " "))
