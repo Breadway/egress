@@ -107,3 +107,30 @@ func TestBucketsEvicted(t *testing.T) {
 		t.Error("stale bucket must be evicted on the next allow call")
 	}
 }
+
+// TestReportAcceptedForEnrolledDevice covers the enrollment path: a device
+// that bound through /api/enroll is known only to devices.json, and its
+// reports used to be rejected as "unknown device".
+func TestReportAcceptedForEnrolledDevice(t *testing.T) {
+	const bound = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
+	const issued = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD="
+	s := reportTestServer(t)
+
+	reg := deviceRegistry{
+		Version: 1,
+		Devices: []device{
+			{ID: "d-11111111", Label: "vm", TokenHash: "x", Status: "bound", Created: "t", PubKey: bound, IP: "10.88.0.25"},
+			{ID: "d-22222222", Label: "invite", TokenHash: "y", Status: "issued", Created: "t"},
+		},
+	}
+	if err := saveDevices(s.devicesPath(), reg); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := postReport(t, s, bound); w.Code != http.StatusAccepted {
+		t.Fatalf("bound device report = %d, want 202 (%s)", w.Code, w.Body.String())
+	}
+	if w := postReport(t, s, issued); w.Code != http.StatusNotFound {
+		t.Fatalf("issued device report = %d, want 404", w.Code)
+	}
+}

@@ -166,6 +166,20 @@ func (s *server) peerEnrolled(pubkey string) bool {
 			return true
 		}
 	}
+	// Devices enrolled through /api/enroll live in the device registry, not
+	// users.json. Without this the gate silently rejected every report from a
+	// token-enrolled install, which is now the only install path.
+	s.devicesMu.Lock()
+	reg, err := loadDevices(s.devicesPath())
+	s.devicesMu.Unlock()
+	if err != nil {
+		return false
+	}
+	for _, d := range reg.Devices {
+		if d.Status == "bound" && d.PubKey == pubkey {
+			return true
+		}
+	}
 	return false
 }
 
