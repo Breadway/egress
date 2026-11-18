@@ -3,6 +3,7 @@
 package egress
 
 import (
+	"egress/internal/core"
 	"egress/internal/split"
 	"errors"
 	"fmt"
@@ -55,6 +56,20 @@ func applyUserSplit(exe, relayUser, relayPass string) error {
 	// only, and ProxyDir is SYSTEM's profile when install runs as SYSTEM. All
 	// per-user state therefore lives here, in the user's own profile.
 	authPath := filepath.Join(split.ProxyDir(), "socks-auth")
+	// An install that enrolled but failed before this step leaves the device
+	// credential in the install directory only, and the next `enable` has no
+	// token to enrol again. Seed the per-user copy from it so finishing the
+	// split setup does not need a new invite.
+	if _, _, ok := readAuthFile(authPath); !ok {
+		installed := filepath.Join(core.InstallDir(), "socks-auth")
+		if u, p, ok := readAuthFile(installed); ok {
+			if err := os.MkdirAll(filepath.Dir(authPath), 0700); err == nil {
+				if err := writeSocksAuth(authPath, u, p); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not seed the relay credential: %v\n", err)
+				}
+			}
+		}
+	}
 	user, pass := relayUser, relayPass
 	if user == "" || pass == "" {
 		user, pass = resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
