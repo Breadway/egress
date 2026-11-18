@@ -657,14 +657,17 @@ func (windowsPlatform) InstallWstunnel() (string, error) {
 	return dest, nil
 }
 
-// ensureDefenderExclusions adds file-level exclusions for the two binaries
-// Windows flags. It is narrow (paths, not directories), best effort, and can
-// be turned off with EGRESS_NO_DEFENDER_EXCLUSION=1.
+// ensureDefenderExclusions covers the binaries Defender flags and the
+// directory they are written in. The directory matters because the extraction
+// and update paths write temporary names beside the real ones (wstunnel.exe.new
+// is the file a real detection named), and a file-level exclusion does not
+// cover those. Best effort, and can be turned off with
+// EGRESS_NO_DEFENDER_EXCLUSION=1.
 func ensureDefenderExclusions(wstunnelPath string) {
 	if strings.TrimSpace(os.Getenv("EGRESS_NO_DEFENDER_EXCLUSION")) != "" {
 		return
 	}
-	paths := []string{wstunnelPath, InstalledBinaryPath()}
+	paths := []string{filepath.Dir(wstunnelPath), wstunnelPath, InstalledBinaryPath()}
 	var quoted []string
 	for _, p := range paths {
 		quoted = append(quoted, "'"+strings.ReplaceAll(p, "'", "''")+"'")
