@@ -214,8 +214,16 @@ func (p windowsPlatform) WriteTunnelConfig(c core.TunnelConfig) (bool, error) {
 // directory to SYSTEM and Administrators by SID, so it works on non-English
 // installs too. Pure function so the exact SIDs and flags stay testable.
 func installDirACLArgs(dir string) []string {
+	// Grants come first on purpose. Between /inheritance:r and the grants the
+	// directory has no entries at all, and a file created in that window
+	// inherits an empty DACL: only its owner can touch it, so an administrator
+	// gets access denied on a binary that is otherwise intact. Explicit grants
+	// survive /inheritance:r, so the end state is identical and the window is
+	// gone.
 	return []string{
 		dir,
+		"/grant:r", "*S-1-5-18:(OI)(CI)F",
+		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
 		"/inheritance:r",
 		// /inheritance:r drops inherited ACEs but keeps explicit ones. A
 		// directory created by the installing user can carry a full-control
@@ -224,8 +232,6 @@ func installDirACLArgs(dir string) []string {
 		"/remove:g", "*S-1-1-0", // Everyone
 		"/remove:g", "*S-1-5-11", // Authenticated Users
 		"/remove:g", "*S-1-5-32-545", // Users
-		"/grant:r", "*S-1-5-18:(OI)(CI)F",
-		"/grant:r", "*S-1-5-32-544:(OI)(CI)F",
 		// /inheritance:r strands files created before the hardening without
 		// SYSTEM access, which broke reading the proxy's own state. Apply the
 		// grants to the existing tree as well.
@@ -834,4 +840,19 @@ func RemoveFromMachinePath(dir string) error {
 	}
 	_, err := powershell(machinePathScript(dir, false))
 	return err
+}
+
+// ensureBinaryACL re-applies the grants the installed binary needs, then reads
+// it back. A file that cannot be read after install is the empty-DACL state
+// that made administrators see "access denied" on a perfectly good binary.
+func ensureBinaryACL(path string) {
+	if _, err := powershell(binaryACLScript(path)); err != nil {
+		logx.Debugf("binary ACL repair failed: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		logx.Logger().Printf("warning: %s is not readable after install: %v", filepath.Base(path), err)
+		return
+	}
+	_ = f.Close()
 }
