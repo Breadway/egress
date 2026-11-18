@@ -440,6 +440,10 @@ func runInstall(plat platform, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	// Register the CLI before anything that can fail. A parked install used to
+	// leave the machine with a working binary and no way to run it without a
+	// full path, which is exactly when someone needs `diagnose`.
+	configureWindowsPath(exe)
 	// Lock the install directory in every mode, including --no-tunnel: it
 	// always holds the installed binary, whose embedded key is recoverable
 	// with strings. Fail closed rather than leave it permissive.
@@ -523,7 +527,6 @@ func runInstall(plat platform, args []string) (err error) {
 			parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
 			return err
 		}
-		configureWindowsPath(exe)
 	}
 	if err := installUpdateTimer(updatePollInterval); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
