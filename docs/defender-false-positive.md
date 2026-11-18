@@ -27,6 +27,32 @@ tools, legit system utilities, and software development apps".
 Upstream wstunnel has the same report open. So does `cloudflared`, which is
 signed and published by Cloudflare.
 
+## Confirmed on a test Windows machine
+
+A Windows 11 VM with Defender at default settings, installing from a local disc,
+reports exactly this:
+
+```
+InitialDetectionTime : 13/11/2026 3:51:47 PM
+ThreatID             : 2147939874
+Resources            : {file:_C:\ProgramData\egress\wstunnel.exe.new}
+```
+
+Three things matter in that record:
+
+- The flagged file is `wstunnel.exe.new`, the temporary copy egress writes while
+  unpacking the embedded upstream binary. Defender flags the write, which is
+  the dropper signature it is matching.
+- The ThreatID is the Kepavll entry, a reputation and behaviour detection, not
+  a signature match on our code.
+- After adding an exclusion for the install directory, the same build runs and
+  `version` reports normally, which is consistent with a false positive rather
+  than an actual payload.
+
+That makes the in-process fallback the structural fix: if the WebSocket client
+is compiled into `egress.exe`, nothing is written to disk at install time and
+there is no dropper-shaped event to match.
+
 ## Hashes to submit
 
 | File | SHA-256 |
