@@ -375,22 +375,27 @@ func (windowsPlatform) ApplyDNS(iface, gateway string) error {
 	if !digits(iface) {
 		return fmt.Errorf("unexpected interface identifier %q", iface)
 	}
-	script := fmt.Sprintf(
-		`Set-DnsClientServerAddress -InterfaceIndex %s -ServerAddress '127.0.0.1' -ErrorAction Stop`, iface)
-	_, err := powershell(script)
+	_, err := powershell(applyDNSScript(iface, winProgramData))
 	return err
 }
 
-func (windowsPlatform) EnsureDNS(iface, gateway string) error {
+func (p windowsPlatform) EnsureDNS(iface, gateway string) error {
 	if !digits(iface) {
 		return nil
 	}
 	script := fmt.Sprintf(
 		`$s = (Get-DnsClientServerAddress -InterfaceIndex %s -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses; `+
-			`if ($s -notcontains '127.0.0.1') { Set-DnsClientServerAddress -InterfaceIndex %s -ServerAddress '127.0.0.1' -ErrorAction SilentlyContinue }`,
-		iface, iface)
-	_, err := powershell(script)
-	return err
+			`if ($s -contains '127.0.0.1') { 'ok' } else { 'missing' }`, iface)
+	out, err := powershell(script)
+	if err != nil {
+		return err
+	}
+	// Re-apply through the full path so the DHCP fallback is re-read from the
+	// adapter rather than dropped along with the listener entry.
+	if strings.Contains(out, "missing") {
+		return p.ApplyDNS(iface, gateway)
+	}
+	return nil
 }
 
 func (windowsPlatform) InstallService(exePath string, args []string) error {
@@ -562,7 +567,9 @@ func (p windowsPlatform) restoreDNS() error {
 		return fmt.Errorf("no numeric default-route adapter to reset (got %q)", iface)
 	}
 	script := fmt.Sprintf(
-		`Set-DnsClientServerAddress -InterfaceIndex %s -ResetServerAddresses -ErrorAction Stop`, iface)
+		`Set-DnsClientServerAddress -InterfaceIndex %s -ResetServerAddresses -ErrorAction Stop
+Remove-Item -LiteralPath '%s' -Force -ErrorAction SilentlyContinue`, iface,
+		filepath.Join(winProgramData, "dns-fallback.txt"))
 	if _, err := powershell(script); err != nil {
 		return fmt.Errorf("reset DNS on adapter %s: %w", iface, err)
 	}

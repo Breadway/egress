@@ -281,6 +281,15 @@ time, then an interactive prompt.
 | Linux | root, systemd, `wireguard-tools`, `ping`. `systemd-resolved` is used when present, otherwise `/etc/resolv.conf` is rewritten and restored on disable or remove. |
 | Windows | Administrator, PowerShell, `ping`, `schtasks`, `route`. The signed WireGuard installer and `wstunnel` are embedded. |
 
+On Windows the adapter is pointed at the local DoH listener (`127.0.0.1`) with
+the server Windows already had as a secondary, so a stopped, blocked or deleted
+resolver degrades to plain DNS instead of leaving the machine with no lookups at
+all. The fallback is used whenever the listener does not answer, including when
+it is running but cannot reach its upstream, which means a query can leave
+unfiltered on a network that blocks the local path. `remove` and `disable` put
+the adapter back on DHCP and delete the remembered server. Machines installed
+before this change have no fallback entry and fail closed.
+
 On both platforms the `wstunnel` fallback client is extracted from the binary
 and verified against a pinned SHA-256 digest; on Windows the WireGuard MSI is
 also Authenticode-checked. Linux still needs `wireguard-tools` from its package
