@@ -301,6 +301,7 @@ but no GitHub download is required.
 | `10.88.0.1 does not answer` | The peer is not enrolled, the `/32` does not match `--ip`, or Aegis is not forwarding. Check the public key and `allowed-ips` on Aegis. |
 | `exit address is X, expected 152.69.174.7` | Traffic is not entering the tunnel. Same checks as above, plus `AllowedIPs = 0.0.0.0/0` and the route pin. |
 | DNS fails but the tunnel is up | The DoH listener is down or the gateway resolver is unreachable. `diagnose` shows the listener and log tail. |
+| DNS fails after deleting the install by hand | Install points the adapter at `127.0.0.1:7103`, so removing the files without `remove` leaves the machine with no resolver. Run `deploy/windows-recovery.ps1` from an elevated PowerShell; it clears the tasks, tunnel services, PAC and proxy, puts adapter DNS back on DHCP and drops the pinned routes, all without needing `egress.exe`. |
 | Fallback never starts | The embedded `wstunnel` is missing or could not be extracted. Run `diagnose`; check `C:\ProgramData\egress\wstunnel.exe` on Windows or `/usr/local/bin/wstunnel` on Linux. |
 | Every page times out on a hostile network | Expected until the first WebSocket switch, which takes roughly 40 seconds (two 15-second probes plus the probe timeouts). |
 | `no default route found` | No usable network yet. Connect, then re-run. |
