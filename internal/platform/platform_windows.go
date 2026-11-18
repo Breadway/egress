@@ -241,9 +241,24 @@ func installDirACLArgs(dir string) []string {
 
 // SecureInstallDir applies installDirACLArgs. Unlike most install steps this
 // one fails closed: a permissive directory must never pass silently.
-func (windowsPlatform) SecureInstallDir() error {
+func (p windowsPlatform) SecureInstallDir() error {
 	if err := logx.RunLogged("icacls", installDirACLArgs(winProgramData)...); err != nil {
 		return err
+	}
+	// The permissive-ACE check below cannot tell a hardened directory from an
+	// empty one: an empty DACL has no bad entries and passes, then nothing can
+	// be written, which is how an install got as far as "installed to ..." and
+	// then failed to write its own launcher. Prove it is usable and rebuild if
+	// it is not.
+	if err := p.checkInstallDirWritable(); err != nil {
+		logx.Logger().Printf("install directory is not writable by this account (%v); rebuilding its ACL", err)
+		_ = logx.RunLogged("icacls", winProgramData, "/reset", "/T", "/C")
+		if rerr := logx.RunLogged("icacls", installDirACLArgs(winProgramData)...); rerr != nil {
+			return fmt.Errorf("rebuild install directory ACL: %w (first failure: %v)", rerr, err)
+		}
+		if err := p.checkInstallDirWritable(); err != nil {
+			return fmt.Errorf("install directory is not writable by this account: %w", err)
+		}
 	}
 	// /inheritance:r keeps explicit ACEs, and both the installing account and
 	// any account that touched the directory can carry one. Remove every
@@ -855,4 +870,17 @@ func ensureBinaryACL(path string) {
 		return
 	}
 	_ = f.Close()
+}
+
+// checkInstallDirWritable creates and removes one file. Access checks and ACL
+// text both lie in the empty-DACL case; a real create is what proves an
+// install can proceed.
+func (windowsPlatform) checkInstallDirWritable() error {
+	f, err := os.CreateTemp(winProgramData, ".acl-check-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	_ = f.Close()
+	return os.Remove(name)
 }
