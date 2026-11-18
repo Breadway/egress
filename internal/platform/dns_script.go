@@ -17,14 +17,17 @@ func applyDNSScript(iface, dir string) string {
 $iface = %s
 $dir = '%s'
 $fallback = Join-Path $dir 'dns-fallback.txt'
+$ErrorActionPreference = 'Continue'
 $current = @(Get-DnsClientServerAddress -InterfaceIndex $iface -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
 $dhcp = @($current | Where-Object { $_ -and $_ -ne '127.0.0.1' })
 if ($dhcp.Count -gt 0) {
-  New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  $dhcp | Set-Content -Path $fallback
-} elseif (Test-Path $fallback) {
-  $dhcp = @(Get-Content $fallback | Where-Object { $_ })
+  # Remembering the previous server is best effort: a locked or stale file here
+  # must never stop DNS from being applied, which is what an earlier build did.
+  try { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null } catch {}
+  try { $dhcp | Set-Content -Path $fallback -ErrorAction Stop } catch {}
+} else {
+  try { if (Test-Path $fallback) { $dhcp = @(Get-Content $fallback -ErrorAction Stop | Where-Object { $_ }) } } catch { $dhcp = @() }
 }
 $servers = @('127.0.0.1') + @($dhcp | Select-Object -First 1)
-Set-DnsClientServerAddress -InterfaceIndex $iface -ServerAddress $servers`, iface, dir)
+Set-DnsClientServerAddress -InterfaceIndex $iface -ServerAddress $servers -ErrorAction Stop`, iface, dir)
 }
