@@ -193,3 +193,42 @@ func TestDownloadTrimsPastedPassword(t *testing.T) {
 		t.Fatalf("pasted password = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
 }
+
+// TestSetupArchiveCountsTheDownload proves the approval archive records that
+// it was fetched. Approval hands out the generic installer through this route,
+// so the per-login download counter on the Logins page stays empty and cannot
+// answer whether the applicant actually received the file.
+func TestSetupArchiveCountsTheDownload(t *testing.T) {
+	s := claimTestServer(t)
+	if err := os.WriteFile(filepath.Join(s.state, "binaries", "egress-windows-amd64-0.0.1.exe"),
+		[]byte("generic-installer"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app, ok := s.applicationByID("0123456789abcdef")
+	if !ok {
+		t.Fatal("missing test application")
+	}
+	claim := "0123456789abcdef0123456789abcdef"
+	app.Reviewed = true
+	app.ClaimHash = hashClaim(claim)
+	app.DeviceID = "d-11112222"
+	app.EnrollToken = "abcdef0123456789abcdef0123456789"
+	if err := s.saveApplication(&app); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	url := "/setup/0123456789abcdef.zip?key=" + claim
+	s.setupArchive(rec, httptest.NewRequest(http.MethodGet, url, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup archive = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	after, _ := s.applicationByID("0123456789abcdef")
+	if after.SetupDownloads != 1 {
+		t.Errorf("setup downloads = %d, want 1", after.SetupDownloads)
+	}
+	if after.SetupDownloaded == "" {
+		t.Error("setup download time not recorded")
+	}
+}

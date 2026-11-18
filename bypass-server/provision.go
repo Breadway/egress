@@ -208,11 +208,24 @@ The token works once. If this install fails, ask for a new invite.
 		http.Error(w, "could not build the archive", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("setup: application %s from %s downloaded the setup archive", app.ID, clientIP(r))
 	if err := zw.Close(); err != nil {
 		http.Error(w, "could not build the archive", http.StatusInternalServerError)
 		return
 	}
+	// Record it before serving: a browser that starts the download and closes
+	// the connection still counts, which matches what the admin needs to know
+	// (was it fetched at all), not a byte count.
+	s.appsMu.Lock()
+	if fresh, ok := s.applicationByID(app.ID); ok {
+		fresh.SetupDownloads++
+		fresh.SetupDownloaded = time.Now().UTC().Format(time.RFC3339)
+		if err := s.saveApplication(&fresh); err != nil {
+			log.Printf("setup: could not record the download for %s: %v", app.ID, err)
+		}
+		app = &fresh
+	}
+	s.appsMu.Unlock()
+	log.Printf("setup: application %s from %s downloaded the setup archive (%d total)", app.ID, clientIP(r), app.SetupDownloads)
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="egress-setup.zip"`)
 	_, _ = w.Write(buf.Bytes())

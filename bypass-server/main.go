@@ -101,6 +101,11 @@ type application struct {
 	DeviceID      string `json:"device_id,omitempty"`
 	EnrollToken   string `json:"enroll_token,omitempty"`
 	ProvisionedAt string `json:"provisioned_at,omitempty"`
+	// SetupDownloads counts served setup archives. Approval hands out the
+	// generic installer through this archive, not through a per-login file, so
+	// the Logins page cannot answer "did they get it?".
+	SetupDownloads  int    `json:"setup_downloads,omitempty"`
+	SetupDownloaded string `json:"setup_downloaded,omitempty"`
 }
 
 type server struct {
@@ -1452,6 +1457,11 @@ func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
 			case a.DeviceID != "":
 				chip, chipClass = "ready", "ok"
 				installer = fmt.Sprintf(`<code>%s</code> <button type="button" class="btn ghost small" data-copy="%s">Copy token</button>`, esc(a.DeviceID), esc(a.EnrollToken))
+				if a.SetupDownloads > 0 {
+					installer += fmt.Sprintf(`<span class="cell-sub">fetched %d&times; &middot; %s</span>`, a.SetupDownloads, esc(displayTime(a.SetupDownloaded)))
+				} else {
+					installer += `<span class="cell-sub">not fetched yet</span>`
+				}
 			case a.Reviewed:
 				chip, chipClass = "approved", ""
 			}
