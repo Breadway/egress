@@ -463,7 +463,7 @@ func runInstall(plat platform, args []string) (err error) {
 	// new install is about to write: the relay credential and the start
 	// launcher. One left with an unusable ACL makes those writes fail with
 	// access denied while the directory itself is perfectly writable.
-	for _, name := range []string{"socks-auth", "start-egress.cmd"} {
+	for _, name := range []string{"socks-auth", "start-egress.cmd", "dns-fallback.txt"} {
 		removeStaleFile(filepath.Join(core.InstallDir(), name))
 	}
 	// The boot service and the scheduled task both reference this exact path,
