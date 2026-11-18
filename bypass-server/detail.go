@@ -73,10 +73,16 @@ func (s *server) adminApplicationDetail(w http.ResponseWriter, r *http.Request) 
 		fmt.Fprintf(&b, `<div class="card"><h2>Reason</h2><p>%s</p></div>`, esc(app.Why))
 	}
 	if app.DeviceID != "" {
+		fetched := `<span class="muted">not downloaded yet</span>`
+		if app.SetupDownloads > 0 {
+			fetched = fmt.Sprintf(`%d &times; <span class="cell-sub">last %s</span>`,
+				app.SetupDownloads, esc(displayTime(app.SetupDownloaded)))
+		}
 		inst := detailList(
 			"Device", `<a href="/admin/devices/`+esc(app.DeviceID)+`"><code>`+esc(app.DeviceID)+`</code></a>`,
 			"Token", `<code>`+esc(app.EnrollToken)+`</code> <button type="button" class="btn ghost small" data-copy="`+esc(app.EnrollToken)+`">Copy</button>`,
 			"Prepared", esc(displayTime(app.ProvisionedAt)),
+			"Setup archive", fetched,
 		)
 		b.WriteString(inst)
 	}
