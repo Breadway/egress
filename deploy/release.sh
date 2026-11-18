@@ -45,11 +45,36 @@ done
 update_key=$(tr -d ' \t\r\n' < "$HOME/.keys/egress-update-public.key") \
     || die "missing ~/.keys/egress-update-public.key"
 
+# Windows Authenticode. Signing has to happen before publish-update.sh: the
+# update manifest holds the SHA-256 of the exact file we ship, so signing after
+# publishing would make every device reject the release. Skipped unless a
+# certificate is configured, so an unsigned build still works.
+sign_windows() {
+    local path="$1"
+    [ -n "${EGRESS_SIGN_PFX:-}" ] || return 0
+    command -v osslsigncode >/dev/null 2>&1 \
+        || die "EGRESS_SIGN_PFX is set but osslsigncode is not installed"
+    [ -n "${EGRESS_SIGN_PFX_PASS:-}" ] \
+        || die "EGRESS_SIGN_PFX_PASS is required with EGRESS_SIGN_PFX"
+    note "signing $(basename "$path")"
+    osslsigncode sign \
+        -pkcs12 "$EGRESS_SIGN_PFX" -pass "$EGRESS_SIGN_PFX_PASS" \
+        -h sha256 -n "egress" -i "${EGRESS_SIGN_URL:-https://bypass.breadway.dev}" \
+        -ts "${EGRESS_SIGN_TSA:-http://timestamp.digicert.com}" \
+        -in "$path" -out "$path.signed" \
+        || die "signing $(basename "$path") failed"
+    osslsigncode verify -in "$path.signed" >/dev/null 2>&1 \
+        || die "signature on $(basename "$path") did not verify"
+    mv "$path.signed" "$path"
+}
+
 note "building generic targets for $version"
 ./build.sh --no-key --os windows --version "$version" --update-key "$update_key" \
     --out "dist/egress-windows-amd64-$version.exe" --quiet
 ./build.sh --no-key --os linux --version "$version" --update-key "$update_key" \
     --out "dist/egress-linux-amd64-$version" --quiet
+
+sign_windows "dist/egress-windows-amd64-$version.exe"
 
 note "publishing manifests"
 ./deploy/publish-update.sh --binary "dist/egress-windows-amd64-$version.exe" \
@@ -65,6 +90,7 @@ if [ -n "$device" ]; then
     ./build.sh --key-file "$key" --ip "$ip" --os windows --version "$version" \
         --update-key "$update_key" --socks-user "$socks_user" --socks-pass "$socks_pass" \
         --debug-build --out "$out" --quiet
+    sign_windows "$out"
     scp -q "$out" "aegis:/tmp/$(basename "$out")"
     ssh aegis "sudo -n install -o bypass -g bypass -m 0600 /tmp/$(basename "$out") /var/lib/bypass/binaries/$(basename "$out")"
     note "uploaded $(basename "$out"); point the login at it in the admin UI"
