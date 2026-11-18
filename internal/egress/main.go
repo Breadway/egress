@@ -264,6 +264,7 @@ func runInstall(plat platform, args []string) (err error) {
 		tcfg.ClientIP = *ipFlag
 	}
 
+	var enrolledPub, enrolledIP string
 	var keepKey string
 	if *keepConfig {
 		var keepIP string
@@ -295,6 +296,7 @@ func runInstall(plat platform, args []string) (err error) {
 		tcfg.ClientIP = creds.IP
 		tcfg.ReportPubkey = pub
 		_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: creds.IP})
+		enrolledPub, enrolledIP = pub, creds.IP
 		if creds.hasRelay() {
 			enrollRelayUser, enrollRelayPass = creds.RelayUser, creds.RelayPass
 			// Persist immediately. A failure later in the install used to lose
@@ -458,6 +460,21 @@ func runInstall(plat platform, args []string) (err error) {
 	// with strings. Fail closed rather than leave it permissive.
 	if err := plat.SecureInstallDir(); err != nil {
 		return fmt.Errorf("secure install directory: %w", err)
+	}
+	// Enrollment writes the device identity and the relay credential before the
+	// directory is hardened, which is exactly when a damaged directory swallows
+	// them: the device binds, verify passes, and every later support upload says
+	// "no enrollment identity yet". Re-save both once the directory is known to
+	// be writable.
+	if enrolledPub != "" {
+		if err := saveDeviceIdentity(deviceIdentity{Pubkey: enrolledPub, IP: enrolledIP}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not save the device identity: %v\n", err)
+		}
+		if enrollRelayUser != "" && enrollRelayPass != "" {
+			if err := writeSocksAuth(filepath.Join(core.InstallDir(), "socks-auth"), enrollRelayUser, enrollRelayPass); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not save the relay credential: %v\n", err)
+			}
+		}
 	}
 	// A previous failed install can leave files inside the directory that the
 	// new install is about to write: the relay credential and the start
