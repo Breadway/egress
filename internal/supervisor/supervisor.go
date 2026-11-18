@@ -8,6 +8,7 @@ import (
 	"egress/internal/logx"
 	"egress/internal/platform"
 	"egress/internal/split"
+	"egress/internal/winlog"
 	"egress/internal/wstunnel"
 	"fmt"
 	"log"
@@ -568,4 +569,5 @@ func (s *Supervisor) noteRestore(path string) {
 		"Not retrying for %s.", s.restores, filepath.Dir(path), tunnelerRestorePause)
 	s.restorePaused = time.Now().Add(tunnelerRestorePause)
 	s.restores = 0
+	winlog.Notify("error", "the tunneler keeps being removed; security software is quarantining "+filepath.Dir(path))
 }

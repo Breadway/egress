@@ -290,6 +290,10 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			pauseFiltering(15 * time.Minute)
 		case 11:
 			go runUpdateCheck()
+		case 13:
+			runElevated("repair")
+		case 14:
+			go copyTrayStatus()
 		case 12:
 			openURL("http://" + core.PortalListenAddr + "/")
 		default:
@@ -443,6 +447,8 @@ func showTrayMenu(hwnd uintptr) {
 		addDomainMenu(menu, trayProxy)
 	}
 	addItem(11, "Check for updates")
+	addItem(13, "Repair install")
+	addItem(14, "Copy status")
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	addItem(2, "Exit")
 
@@ -546,6 +552,27 @@ func addDomainMenu(menu uintptr, p *split.Proxy) {
 // runElevated re-runs this binary with the given arguments through the UAC
 // prompt. Changing a SYSTEM scheduled task needs that elevation; the tray
 // itself runs as the user.
+// copyTrayStatus puts the same lines the menu shows on the clipboard, which is
+// the fastest way to include them in a message.
+func copyTrayStatus() {
+	var b strings.Builder
+	fmt.Fprintf(&b, "egress %s\n", reportVersion())
+	if trayProxy != nil {
+		for _, line := range trayStatusLines(trayProxy) {
+			b.WriteString(line + "\n")
+		}
+	}
+	trayMu.Lock()
+	lines := append([]string(nil), trayPing...)
+	trayMu.Unlock()
+	for _, line := range lines {
+		b.WriteString(line + "\n")
+	}
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $input")
+	cmd.Stdin = strings.NewReader(b.String())
+	_ = cmd.Run()
+}
+
 func runElevated(params string) {
 	verb, _ := syscall.UTF16PtrFromString("runas")
 	exe, err := os.Executable()

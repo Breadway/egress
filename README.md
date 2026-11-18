@@ -227,6 +227,8 @@ The debug log rotates to `egress.log.old` when it passes 5 MB.
 | `verify` | check DNS, tunnel, probe and exit address |
 | `diagnose` | print platform state: routes, DNS, tunnel services, listeners, probe and log tail |
 | `support` | write one archive (summary, diagnose, log tail) with keys and tokens redacted, ready to attach to a message |
+| `repair` | reinstall the installed build over the existing config: binary, ACL, tasks, PATH, DNS |
+| `allow-defender` | add or remove the Defender exclusion for the install directory (`--remove`) |
 | `disable` | stop now, restore DNS, and prevent it from starting at boot; keep configs and logs |
 | `enable` | allow it to start at boot again and start it now |
 | `remove` | remove every installed part: service, tunnel, DNS settings, configs, wstunnel, logs, installed binary |
@@ -317,6 +319,14 @@ but no GitHub download is required.
 | `no default route found` | No usable network yet. Connect, then re-run. |
 | Re-running `install` changes nothing | `wg0` already exists; the task is recreated and restarted. Use `remove` first for a clean slate. |
 | Everything dies after switching networks (WiFi to Ethernet, dock, roam) | The supervisor re-pins on change, fails over across all default routes while probes fail, and engages the fallback on the first failed probe after a change. Give it ~60s after a flip before disabling. |
+
+## Antivirus
+
+Defender flags the extracted `wstunnel.exe` as `Trojan:Win32/Kepavll!rfn`, a
+reputation-based false positive. `docs/defender-false-positive.md` has the
+evidence, the hashes and the submission text. On a machine that has already
+quarantined the file, `egress allow-defender` adds an exclusion for the install
+directory and prints what it changed; `remove` undoes it.
 
 ## Support bundle
 
