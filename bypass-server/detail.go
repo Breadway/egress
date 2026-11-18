@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 )
 
@@ -109,6 +110,11 @@ func (s *server) adminDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
+	raw := strings.TrimPrefix(r.URL.Path, "/admin/devices/")
+	if id, isSupport := strings.CutSuffix(raw, "/support"); isSupport {
+		s.serveDeviceSupport(w, r, id)
+		return
+	}
 	id, ok := pathID(r.URL.Path, "/admin/devices/")
 	if !ok {
 		http.NotFound(w, r)
@@ -156,6 +162,14 @@ func (s *server) adminDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if dev.RelayUser != "" {
 		pairs = append(pairs, "Relay user", `<a href="/admin/relay/`+esc(dev.RelayUser)+`"><code>`+esc(dev.RelayUser)+`</code></a>`)
+	}
+	if _, meta, ok := s.latestSupport(dev.PubKey); ok && dev.PubKey != "" {
+		when := esc(displayTime(meta.Received))
+		size := fmt.Sprintf("%.0f KB", float64(meta.Bytes)/1024)
+		pairs = append(pairs, "Support bundle",
+			`<a href="/admin/devices/`+esc(dev.ID)+`/support">download</a> <span class="cell-sub">`+esc(size)+` &middot; `+when+`</span>`)
+	} else if dev.PubKey != "" {
+		pairs = append(pairs, "Support bundle", `<span class="muted">none uploaded</span>`)
 	}
 	if dev.Platform != "" {
 		pairs = append(pairs, "Platform", esc(dev.Platform+"/"+dev.Arch))
@@ -249,4 +263,34 @@ func (s *server) adminUserDetail(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, `<form method="post" action="/admin/users" onsubmit="return confirm('Revoke this login, delete the installer, and remove the WireGuard peer?')"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="username" value="%s"><input type="hidden" name="action" value="revoke"><button class="btn danger" type="submit">Revoke</button></form>`, s.csrfToken(r), esc(name))
 	b.WriteString(`</div></div>`)
 	s.renderNav(w, true, "users", name, b.String())
+}
+
+// serveDeviceSupport streams the newest uploaded bundle for one device.
+func (s *server) serveDeviceSupport(w http.ResponseWriter, r *http.Request, id string) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	s.devicesMu.Lock()
+	reg, err := loadDevices(s.devicesPath())
+	s.devicesMu.Unlock()
+	if err != nil {
+		http.Error(w, "device registry unreadable", http.StatusInternalServerError)
+		return
+	}
+	for _, dev := range reg.Devices {
+		if dev.ID != id {
+			continue
+		}
+		file, _, ok := s.latestSupport(dev.PubKey)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(file)+`"`)
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, file)
+		return
+	}
+	http.NotFound(w, r)
 }
