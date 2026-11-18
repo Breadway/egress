@@ -317,6 +317,29 @@ but no GitHub download is required.
 | Re-running `install` changes nothing | `wg0` already exists; the task is recreated and restarted. Use `remove` first for a clean slate. |
 | Everything dies after switching networks (WiFi to Ethernet, dock, roam) | The supervisor re-pins on change, fails over across all default routes while probes fail, and engages the fallback on the first failed probe after a change. Give it ~60s after a flip before disabling. |
 
+## Signing Windows builds
+
+`deploy/release.sh` signs every Windows binary with Authenticode when a
+certificate is configured, and skips the step otherwise:
+
+```
+EGRESS_SIGN_PFX=/path/to/cert.pfx EGRESS_SIGN_PFX_PASS=... ./deploy/release.sh --version 0.4.40
+```
+
+Optional: `EGRESS_SIGN_TSA` (RFC 3161 timestamp server, default DigiCert) and
+`EGRESS_SIGN_URL`. Each signature is verified with `osslsigncode verify` before
+the build is used, and signing runs before the update manifest is published,
+because the manifest holds the SHA-256 of the exact bytes we ship.
+
+Authenticode does not replace the update signature: manifests are still signed
+offline with Ed25519 and every binary is still checked against that before it is
+applied. The two answer different questions, one to Windows and one to us.
+
+Signing `egress.exe` does not sign `wstunnel.exe`, which is a pinned upstream
+release extracted at runtime and is the file antivirus usually flags. Until the
+fallback client is ours, a Defender detection on that file has to be handled
+with a false-positive submission or an exclusion.
+
 ## Install reports (automatic tech support)
 
 Every `install` reports home to `https://bypass.breadway.dev/api/report`,
