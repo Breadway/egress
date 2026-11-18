@@ -55,6 +55,16 @@ Remove-ItemProperty -Path $inet -Name AutoConfigURL -ErrorAction SilentlyContinu
 Set-ItemProperty -Path $inet -Name ProxyEnable -Value 0 -Type DWord -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name egress -ErrorAction SilentlyContinue
 
+Step 'removing the PATH entry'
+$envKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+$cur = [string](Get-ItemProperty -Path $envKey -Name Path -ErrorAction SilentlyContinue).Path
+if ($cur) {
+    $kept = @($cur -split ';' | Where-Object { $_ -ne '' -and $_.TrimEnd('\') -ne $installDir.TrimEnd('\') })
+    if ($kept.Count -gt 0 -and ($kept -join ';') -ne $cur) {
+        Set-ItemProperty -Path $envKey -Name Path -Value ($kept -join ';') -Type ExpandString
+    }
+}
+
 Step 'putting adapter DNS back on DHCP'
 Get-NetAdapter -ErrorAction SilentlyContinue |
     Where-Object { $_.Status -eq 'Up' } |
