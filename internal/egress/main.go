@@ -511,6 +511,7 @@ func runInstall(plat platform, args []string) (err error) {
 			parkInstall(plat, tcfg, runChecks(plat, tcfg), err)
 			return err
 		}
+		configureWindowsPath(exe)
 	}
 	if err := installUpdateTimer(updatePollInterval); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: update timer not installed: %v\n", err)
@@ -759,6 +760,9 @@ func cmdRemove(args []string) error {
 	}
 	if err := plat.Remove(); err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		cleanupWindowsPath()
 	}
 	fmt.Println("egress removed")
 	return nil

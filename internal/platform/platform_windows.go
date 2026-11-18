@@ -792,3 +792,23 @@ func Diagnose(w io.Writer) error {
 	logx.Tail(w, logPath(), 60)
 	return nil
 }
+
+// AddToMachinePath puts dir on the machine PATH so a new shell resolves the
+// installed binary without a full path. The value is edited in place: entries
+// keep their order and %VAR% references survive.
+func AddToMachinePath(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("not an absolute directory: %q", dir)
+	}
+	_, err := powershell(machinePathScript(dir, true))
+	return err
+}
+
+// RemoveFromMachinePath undoes AddToMachinePath.
+func RemoveFromMachinePath(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("not an absolute directory: %q", dir)
+	}
+	_, err := powershell(machinePathScript(dir, false))
+	return err
+}
