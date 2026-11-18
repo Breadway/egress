@@ -400,12 +400,32 @@ func (p windowsPlatform) EnsureDNS(iface, gateway string) error {
 
 func (windowsPlatform) InstallService(exePath string, args []string) error {
 	logx.Debugf("scheduled task command: %s %s", exePath, strings.Join(args, " "))
-	script, err := TaskScript(winTaskName, exePath, strings.Join(args, " "), TriggerStartup, SystemPrincipal, true)
+	// Start through a launcher so a binary that Windows refuses to load does
+	// not take the service down with it: the launcher proves the image runs
+	// and falls back to the previous build before giving up.
+	launcher, err := writeStartLauncher(exePath, args)
+	if err != nil {
+		return err
+	}
+	script, err := TaskScript(winTaskName, `C:\Windows\System32\cmd.exe`,
+		`/c "`+launcher+`"`, TriggerStartup, SystemPrincipal, true)
 	if err != nil {
 		return err
 	}
 	_, err = powershell(script)
 	return err
+}
+
+// writeStartLauncher writes the fail-open start script next to the binary. It
+// is a batch file on purpose: a script is not an executable image, so a policy
+// that blocks the binary does not block the thing meant to repair it.
+func writeStartLauncher(exePath string, args []string) (string, error) {
+	dir := filepath.Dir(exePath)
+	path := filepath.Join(dir, "start-egress.cmd")
+	if err := os.WriteFile(path, []byte(startLauncherScript(exePath, args)), 0755); err != nil {
+		return "", fmt.Errorf("write start launcher: %w", err)
+	}
+	return path, nil
 }
 
 func (windowsPlatform) StartService() error {

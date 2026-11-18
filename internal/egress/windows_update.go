@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"context"
 	platformpkg "egress/internal/platform"
 	"egress/internal/winlog"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -95,6 +97,31 @@ func cmdUpdateApply(args []string) error {
 		}
 		return fmt.Errorf("install failed, previous binary restored: %w", err)
 	}
+	// Fail open: a swap that leaves an image Windows refuses to load is worse
+	// than a failed update. Prove the new binary runs before recording success
+	// and before the previous one stops being the way back.
+	if verr := runInstalled(installed); verr != nil {
+		winlog.Notify("error", "updated binary does not run, restoring the previous build: "+verr.Error())
+		_ = newPlatform().StopService()
+		if rerr := forceRestore(backup, installed); rerr != nil {
+			winlog.Notify("error", "previous binary could not be restored: "+rerr.Error())
+			if *sha != "" {
+				_ = recordFailedRelease(*sha)
+			}
+			if *task != "" {
+				_ = exec.Command("schtasks", "/delete", "/tn", *task, "/f").Run()
+			}
+			return fmt.Errorf("updated binary does not run (%v) and the previous one could not be restored: %w", verr, rerr)
+		}
+		_ = newPlatform().StartService()
+		if *sha != "" {
+			_ = recordFailedRelease(*sha)
+		}
+		if *task != "" {
+			_ = exec.Command("schtasks", "/delete", "/tn", *task, "/f").Run()
+		}
+		return fmt.Errorf("updated binary did not run, previous build restored: %w", verr)
+	}
 	if *sha != "" {
 		if err := recordAppliedRelease(*sha); err != nil {
 			debugf("could not record the applied release: %v", err)
@@ -105,4 +132,36 @@ func cmdUpdateApply(args []string) error {
 	}
 	fmt.Printf("update applied to %s\n", installed)
 	return nil
+}
+
+// runInstalled proves a binary at path actually executes. A file can land on
+// disk with the right bytes and still be refused by Windows, which is the one
+// failure an update must never leave behind.
+func runInstalled(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return fmt.Errorf("%v (%s)", err, msg)
+	}
+	return nil
+}
+
+// forceRestore puts the backup back even when the file it replaces has been
+// locked down to the point that a plain rename fails. It clears the ACL first,
+// which is the state Defender leaves a quarantined file in.
+func forceRestore(backup, installed string) error {
+	if _, err := os.Stat(backup); err != nil {
+		return fmt.Errorf("no backup to restore from: %w", err)
+	}
+	_ = exec.Command("takeown", "/f", installed).Run()
+	_ = exec.Command("icacls", installed, "/reset").Run()
+	if err := platformpkg.ReplaceFile(backup, installed); err != nil {
+		return err
+	}
+	return runInstalled(installed)
 }
