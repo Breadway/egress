@@ -2,6 +2,7 @@ package egress
 
 import (
 	platformpkg "egress/internal/platform"
+	"egress/internal/winlog"
 	"errors"
 	"fmt"
 	"os"
@@ -83,6 +84,7 @@ func cmdUpdateApply(args []string) error {
 			fmt.Fprintf(os.Stderr, "could not restore the previous binary: %v\n", rerr)
 		}
 		_ = newPlatform().StartService()
+		winlog.Notify("error", "update apply failed, previous binary restored: "+err.Error())
 		if *sha != "" {
 			if rerr := recordFailedRelease(*sha); rerr != nil {
 				debugf("could not record the failed release: %v", rerr)

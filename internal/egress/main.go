@@ -8,6 +8,7 @@ import (
 	"egress/internal/portal"
 	"egress/internal/split"
 	"egress/internal/supervisor"
+	"egress/internal/winlog"
 	"errors"
 	"flag"
 	"fmt"
@@ -153,6 +154,10 @@ func realMain() error {
 		return cmdEnable(args)
 	case "support":
 		return cmdSupport(args)
+	case "repair":
+		return cmdRepair(args)
+	case "allow-defender":
+		return cmdDefender(args)
 	case "remove", "uninstall":
 		return cmdRemove(args)
 	default:
@@ -180,6 +185,8 @@ Commands:
   update       check for or apply a signed update over the tunnel
   update-sign  sign a release manifest (publisher side)
   update-keygen make an Ed25519 update signing key
+  repair       reinstall the installed build over the existing config
+  allow-defender  exclude the install directory from Defender (--remove undoes it)
   support      write one archive with version, diagnose and log for sending
   disable      stop now, restore DNS, and do not start at boot; keep the config
   enable       let it start at boot again and start it now
@@ -236,6 +243,8 @@ func runInstall(plat platform, args []string) (err error) {
 	if err := plat.RequirePrivilege(); err != nil {
 		return err
 	}
+	// Register the Application log source once, while we hold the rights.
+	winlog.EnsureSource()
 
 	// Validate everything that can fail without touching the system before
 	// stopping the running supervisor: while the old service is up, DNS
@@ -549,6 +558,7 @@ func parkInstall(plat platform, tcfg tunnelConfig, results checkResults, cause e
 	} else {
 		fmt.Fprintln(os.Stderr, "networking restored; the install is parked until a fixed release lands")
 	}
+	winlog.Notify("error", "install failed and was parked: "+cause.Error())
 	if err := installUpdateTimer(updatePollInterval); err != nil {
 		fmt.Fprintf(os.Stderr, "park: update check not armed, the next release needs a manual install: %v\n", err)
 	}
@@ -749,6 +759,24 @@ func cmdEnable(args []string) error {
 	return nil
 }
 
+// cmdRepair reinstalls the installed build over the existing configuration.
+// It exists because every Windows failure this month needed the same manual
+// sequence: restore the binary, the ACL, the tasks, PATH and DNS. That is
+// exactly what "install --keep-config" does, so repair is that path with the
+// identity fixed, which keeps one code path instead of a second one that
+// drifts.
+func cmdRepair(args []string) error {
+	installArgs := []string{"--keep-config"}
+	for _, arg := range args {
+		if arg != "--debug" && arg != "-debug" {
+			return fmt.Errorf("repair takes no flags except --debug; the install is reused")
+		}
+		installArgs = append(installArgs, "--debug")
+	}
+	fmt.Println("repairing: reinstalling over the existing configuration")
+	return cmdInstall(installArgs)
+}
+
 func cmdRemove(args []string) error {
 	fs := newFlagSet("remove")
 	debug := fs.Bool("debug", false, "trace commands")
@@ -765,6 +793,7 @@ func cmdRemove(args []string) error {
 		return err
 	}
 	if runtime.GOOS == "windows" {
+		cleanupDefenderExclusions()
 		cleanupWindowsPath()
 	}
 	fmt.Println("egress removed")
