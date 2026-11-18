@@ -151,6 +151,8 @@ func realMain() error {
 		return cmdDisable(args)
 	case "enable":
 		return cmdEnable(args)
+	case "support":
+		return cmdSupport(args)
 	case "remove", "uninstall":
 		return cmdRemove(args)
 	default:
@@ -178,6 +180,7 @@ Commands:
   update       check for or apply a signed update over the tunnel
   update-sign  sign a release manifest (publisher side)
   update-keygen make an Ed25519 update signing key
+  support      write one archive with version, diagnose and log for sending
   disable      stop now, restore DNS, and do not start at boot; keep the config
   enable       let it start at boot again and start it now
   remove       remove every installed part, including configs, logs and wstunnel

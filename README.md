@@ -226,6 +226,7 @@ The debug log rotates to `egress.log.old` when it passes 5 MB.
 | `supervise` | run the resolver and fallback loop; used by the boot service |
 | `verify` | check DNS, tunnel, probe and exit address |
 | `diagnose` | print platform state: routes, DNS, tunnel services, listeners, probe and log tail |
+| `support` | write one archive (summary, diagnose, log tail) with keys and tokens redacted, ready to attach to a message |
 | `disable` | stop now, restore DNS, and prevent it from starting at boot; keep configs and logs |
 | `enable` | allow it to start at boot again and start it now |
 | `remove` | remove every installed part: service, tunnel, DNS settings, configs, wstunnel, logs, installed binary |
@@ -316,6 +317,24 @@ but no GitHub download is required.
 | `no default route found` | No usable network yet. Connect, then re-run. |
 | Re-running `install` changes nothing | `wg0` already exists; the task is recreated and restarted. Use `remove` first for a clean slate. |
 | Everything dies after switching networks (WiFi to Ethernet, dock, roam) | The supervisor re-pins on change, fails over across all default routes while probes fail, and engages the fallback on the first failed probe after a change. Give it ~60s after a flip before disabling. |
+
+## Support bundle
+
+`egress support` writes `egress-support-<timestamp>.zip` to the Desktop, or to
+`--out <dir>`. It holds a summary (version, platform, install path, split state,
+device address and public key), the full `diagnose` output and the last 400 log
+lines. Credential-shaped values are replaced before anything is written: labelled
+secrets, and bare 44-character WireGuard keys. The device private key is never
+included because the bundle reads state, not config files.
+
+## App icon
+
+`assets/egress.ico` is the shield from the site favicon, recoloured to the Bread
+palette: `#eab672` stroke on a `#0c0c0c` rounded square with a `#1a1a1a` edge.
+It is compiled into the Windows binary through `rsrc_windows_amd64.syso` and
+`rsrc_windows_arm64.syso` (generate with `rsrc -ico assets/egress.ico -o
+rsrc_windows_<arch>.syso`), which gives Explorer and the taskbar the icon and the
+tray loads the same resource instead of the stock application icon.
 
 ## Signing Windows builds
 
