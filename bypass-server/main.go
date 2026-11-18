@@ -186,6 +186,7 @@ func main() {
 	s.mux.HandleFunc("/admin/api/users", s.adminAddUser)
 	s.mux.HandleFunc("/admin/api/link", s.adminLink)
 	s.mux.HandleFunc("/api/report", s.apiReport)
+	s.mux.HandleFunc("/api/support", s.apiSupport)
 	s.mux.HandleFunc("/api/blocked-report", s.apiBlockedReport)
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
 	s.mux.HandleFunc("/api/enroll", s.apiEnroll)
