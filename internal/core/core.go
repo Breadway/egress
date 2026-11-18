@@ -51,6 +51,10 @@ type TunnelConfig struct {
 	// ReportPubkey identifies the device in install reports when the
 	// invocation has no private key.
 	ReportPubkey string
+	// NoTunnel means this install runs without a WireGuard interface at all:
+	// Windows split mode serves DNS and relays blocked destinations through
+	// the proxy instead. Verification must not ask for a tunnel then.
+	NoTunnel bool
 }
 
 func (c TunnelConfig) DirectEndpoint() string { return AegisIPv4 + ":" + AegisWGPort }
