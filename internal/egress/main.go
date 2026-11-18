@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -296,6 +297,14 @@ func runInstall(plat platform, args []string) (err error) {
 		_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: creds.IP})
 		if creds.hasRelay() {
 			enrollRelayUser, enrollRelayPass = creds.RelayUser, creds.RelayPass
+			// Persist immediately. A failure later in the install used to lose
+			// the credential the device had just earned, and the next enable
+			// dead-ended on "no SOCKS relay credentials in this build" with no
+			// token left to enrol again.
+			if werr := writeSocksAuth(filepath.Join(core.InstallDir(), "socks-auth"),
+				creds.RelayUser, creds.RelayPass); werr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not save the relay credential: %v\n", werr)
+			}
 		}
 		fmt.Printf("enrolled as %s at %s\n", creds.Device, creds.IP)
 	}

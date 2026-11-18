@@ -75,7 +75,10 @@ func applyUserSplit(exe, relayUser, relayPass string) error {
 		user, pass = resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
 	}
 	if user == "" || pass == "" {
-		return errors.New("no SOCKS relay credentials in this build; rebuild with --socks-user and --socks-pass")
+		return fmt.Errorf("this device has no relay credential yet: neither %s nor %s exists. "+
+			"Re-run install with a fresh enrollment token, or ask the administrator for the "+
+			"device's relay user and password and write \"user:password\" to %s",
+			authPath, filepath.Join(core.InstallDir(), "socks-auth"), authPath)
 	}
 	if err := writeSocksAuth(authPath, user, pass); err != nil {
 		return err
