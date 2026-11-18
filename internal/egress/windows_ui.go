@@ -63,6 +63,7 @@ var (
 	procPostQuitMessage     = user32.NewProc("PostQuitMessage")
 	procPostMessageW        = user32.NewProc("PostMessageW")
 	procLoadIconW           = user32.NewProc("LoadIconW")
+	procLoadImageW          = user32.NewProc("LoadImageW")
 	procCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
 	procAppendMenuW         = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
@@ -81,6 +82,9 @@ const (
 	wmCommand   = 0x0111
 	wmRButtonUp = 0x0205
 	idiApp      = 32512
+	imageIcon   = 1      // LoadImageW resource type
+	lrShared    = 0x8000 // LoadImageW: share one handle
+	trayIconID  = 1      // icon group id from rsrc_windows_*.syso
 
 	nimAdd    = 0
 	nimModify = 1
@@ -187,7 +191,12 @@ func runTray(ctx context.Context, p *split.Proxy) error {
 	}
 	trayHWND = hwnd
 
-	icon, _, _ := procLoadIconW.Call(0, idiApp)
+	// The icon group comes from the resource embedded by rsrc_windows_*.syso.
+	// Fall back to the stock application icon if a build was made without one.
+	icon, _, _ := procLoadImageW.Call(instance, trayIconID, imageIcon, 0, 0, lrShared)
+	if icon == 0 {
+		icon, _, _ = procLoadIconW.Call(0, idiApp)
+	}
 	trayMu.Lock()
 	trayNID = notifyIconData{
 		Wnd:             hwnd,
