@@ -256,7 +256,7 @@ func runInstall(plat platform, args []string) (err error) {
 		return fmt.Errorf("find the default route: %w", err)
 	}
 
-	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort}
+	tcfg := tunnelConfig{ClientIP: defaultClientIP, Endpoint: aegisIPv4 + ":" + aegisWGPort, NoTunnel: *noTunnel}
 	if validIPv4(embeddedClientIP) {
 		tcfg.ClientIP = embeddedClientIP
 	}

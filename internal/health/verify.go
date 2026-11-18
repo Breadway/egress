@@ -207,7 +207,7 @@ func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) er
 		}
 	}
 
-	if tcfg.PrivateKey != "" {
+	if tcfg.PrivateKey != "" && !tcfg.NoTunnel {
 		if r.Tunnel == "up" {
 			fmt.Println("[ok]   wireguard tunnel is up")
 		} else {

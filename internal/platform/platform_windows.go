@@ -688,13 +688,30 @@ func (windowsPlatform) WstunnelPath() (string, error) { return wstunnel.Find() }
 // GitHub before the tunnel has come up.
 func (windowsPlatform) InstallWstunnel() (string, error) {
 	dest := filepath.Join(winProgramData, wstunnel.ExeName())
+	// Exclude before writing, not after. The extraction writes a new
+	// executable into ProgramData, which is the exact shape Defender reacts
+	// to; asking for the exclusion afterwards means the scan can win the race
+	// and delete the file we just verified.
+	ensureDefenderExclusions(dest)
 	if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelWindowsSHA256); err != nil {
 		return "", fmt.Errorf("extract bundled wstunnel: %w", err)
 	}
-	// Defender flags the Go tunneler as a heuristic hit often enough that a
-	// real-time scan can quarantine it after install, which silently kills the
-	// relay. Exclude the exact files, not the directory, and say so.
-	ensureDefenderExclusions(dest)
+	// A scan can still remove it a moment later. One retry after the exclusion
+	// is in place, then report honestly instead of claiming the relay works.
+	for attempt := 0; attempt < 2; attempt++ {
+		if info, err := os.Stat(dest); err == nil && info.Size() > 0 {
+			return dest, nil
+		}
+		if attempt == 0 {
+			logx.Logger().Printf("the tunneler disappeared after extraction; retrying with the exclusion in place")
+			if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelWindowsSHA256); err != nil {
+				return "", fmt.Errorf("extract bundled wstunnel: %w", err)
+			}
+		}
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return "", fmt.Errorf("the tunneler was removed after extraction (%v); add an exclusion with `egress allow-defender` or install a signed build", err)
+	}
 	return dest, nil
 }
 
