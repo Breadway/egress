@@ -173,7 +173,11 @@ func writePAC() (string, error) {
 // runningAsSystem reports whether this process was started by the task
 // scheduler as SYSTEM rather than by a person in an elevated prompt.
 func runningAsSystem() bool {
-	return strings.EqualFold(os.Getenv("USERNAME"), "SYSTEM")
+	// USERNAME is not reliably "SYSTEM" in a service context: for a machine
+	// account it can be the computer name. Ask the token for its SID instead,
+	// because everything below turns on knowing whether HKCU is a person's.
+	out, err := exec.Command("whoami", "/user").Output()
+	return err == nil && strings.Contains(strings.ToUpper(string(out)), "S-1-5-18")
 }
 
 // consoleUser returns the account logged on at the console, or an empty string
