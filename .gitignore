@@ -1,5 +1,5 @@
-egress
-egress.exe
+/egress
+/egress.exe
 dist/
 *.log
 # Pinned vendor binaries embedded into delivery builds. Fetch locally;
