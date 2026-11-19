@@ -245,6 +245,11 @@ func (p windowsPlatform) SecureInstallDir() error {
 	if err := logx.RunLogged("icacls", installDirACLArgs(winProgramData)...); err != nil {
 		return err
 	}
+	// Children created by an earlier broken install keep their own empty DACLs,
+	// one per file, and each one this install still reads (device.json, the
+	// split profile, the relay credential) then fails with access denied. Reset
+	// every child to inherit the directory's grants instead of chasing them.
+	_ = logx.RunLogged("icacls", winProgramData+`\*`, "/reset", "/T", "/C")
 	// The permissive-ACE check below cannot tell a hardened directory from an
 	// empty one: an empty DACL has no bad entries and passes, then nothing can
 	// be written, which is how an install got as far as "installed to ..." and
