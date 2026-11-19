@@ -562,11 +562,22 @@ func (windowsPlatform) ServiceActive() bool {
 }
 
 func (p windowsPlatform) Enable() error {
-	if _, err := logx.ExecLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
+	exe := InstalledBinaryPath()
+	launcher := filepath.Join(winProgramData, "start-egress.cmd")
+	// A zero-byte launcher is not a working install: cmd.exe runs it, prints
+	// nothing and exits, the task reports Ready, and the resolver stays down
+	// with no visible cause. A failed install can leave exactly that, so treat
+	// it the same as a missing task and rebuild from the installed binary.
+	broken := false
+	if fi, err := os.Stat(launcher); err != nil || fi.Size() == 0 {
+		broken = true
+	} else if _, err := logx.ExecLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
 		// The task is gone when a failed install cleaned up, or when someone
 		// deleted it while the binary stayed installed. Recreate it from the
 		// installed binary instead of refusing to start a working install.
-		exe := InstalledBinaryPath()
+		broken = true
+	}
+	if broken {
 		if _, serr := os.Stat(exe); serr != nil {
 			return errors.New("egress is not installed; run install first")
 		}
@@ -578,7 +589,13 @@ func (p windowsPlatform) Enable() error {
 		return err
 	}
 	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
-	return logx.RunLogged("schtasks", "/run", "/tn", winTaskName)
+	if err := logx.RunLogged("schtasks", "/run", "/tn", winTaskName); err != nil {
+		return err
+	}
+	// The boot task starts once, so a supervisor that exits later is not
+	// replaced by anything. Enable promises a working install, so make sure
+	// the thing that restarts it is registered too.
+	return installWatchdog()
 }
 
 // Disable stops the resolver and the tunnel now, disables the boot task, and

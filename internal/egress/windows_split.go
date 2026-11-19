@@ -23,19 +23,19 @@ func configureWindowsSplit() error {
 	// Starting that file would take the network away from the machine.
 	if c, ok := newPlatform().(interface{ ClampRelayConfig() error }); ok {
 		if err := c.ClampRelayConfig(); err != nil {
-			return err
+			return fmt.Errorf("clamp relay config: %w", err)
 		}
 	}
 	exe, err := installedExePath()
 	if err != nil {
-		return err
+		return fmt.Errorf("locate the installed binary: %w", err)
 	}
 	// The install directory is SYSTEM/Administrators only, and the tray runs
 	// with the user's own token, so grant read and execute on what it needs.
 	// The directory stays locked; write access is unchanged.
 	for _, path := range []string{exe, filepath.Join(filepath.Dir(exe), "wstunnel.exe")} {
 		if err := grantUserExecute(path); err != nil {
-			return err
+			return fmt.Errorf("grant user execute on %s: %w", path, err)
 		}
 	}
 	// The proxy, its PAC and its login entry belong to the logged-in user, so
@@ -45,13 +45,16 @@ func configureWindowsSplit() error {
 	if runningAsSystem() {
 		console, err := consoleUser()
 		if err != nil {
-			return err
+			return fmt.Errorf("find the console user: %w", err)
 		}
 		if console == "" {
 			fmt.Println("no interactive user is logged on; the proxy and PAC will be applied by the next install")
 			return nil
 		}
-		return runSplitUserTask(console, exe, enrollRelayUser, enrollRelayPass)
+		if err := runSplitUserTask(console, exe, enrollRelayUser, enrollRelayPass); err != nil {
+			return fmt.Errorf("apply the per-user half for %s: %w", console, err)
+		}
+		return nil
 	}
 	return applyUserSplit(exe, enrollRelayUser, enrollRelayPass)
 }
