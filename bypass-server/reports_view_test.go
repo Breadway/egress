@@ -63,6 +63,16 @@ func TestAdminPagesRender(t *testing.T) {
 	if w := postReport(t, s, peer); w.Code != http.StatusAccepted {
 		t.Fatalf("seed report = %d", w.Code)
 	}
+	// The overview lists the device registry now, not the legacy login rows.
+	if err := saveDevices(s.devicesPath(), deviceRegistry{
+		Version: 1,
+		Devices: []device{{
+			ID: "d-12345678", Label: "auser", TokenHash: "x", Status: "bound",
+			Created: "2026-01-01T00:00:00Z", PubKey: peer, IP: "10.88.0.20",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	nonce := "0123456789abcdef0123456789abcdef"
 	exp := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)

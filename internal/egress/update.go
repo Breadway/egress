@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -54,6 +55,10 @@ func cmdUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The update check runs every minute. Its heartbeat is the only signal that
+	// says "this machine is alive and polling", which a report cannot: reports
+	// only happen on install, update or a manual command.
+	sendHeartbeat(m.Version)
 	current := buildVersion
 	if current == "" {
 		current = "0.0.0"
@@ -484,4 +489,36 @@ func recordAppliedRelease(sha string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// sendHeartbeat tells the fleet that this device checked for an update. Best
+// effort: a missed heartbeat must never fail the check.
+func sendHeartbeat(latest string) {
+	id, err := loadDeviceIdentity()
+	if err != nil || id.Pubkey == "" {
+		return
+	}
+	payload, err := json.Marshal(map[string]string{
+		"pubkey":  id.Pubkey,
+		"version": buildVersion,
+		"latest":  latest,
+		"os":      runtime.GOOS,
+		"arch":    runtime.GOARCH,
+	})
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost,
+		strings.TrimRight(defaultEnrollServer, "/")+"/api/heartbeat", bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+	_ = resp.Body.Close()
 }

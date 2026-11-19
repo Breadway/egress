@@ -187,6 +187,7 @@ func main() {
 	s.mux.HandleFunc("/admin/api/link", s.adminLink)
 	s.mux.HandleFunc("/api/report", s.apiReport)
 	s.mux.HandleFunc("/api/support", s.apiSupport)
+	s.mux.HandleFunc("/api/heartbeat", s.apiHeartbeat)
 	s.mux.HandleFunc("/api/blocked-report", s.apiBlockedReport)
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
 	s.mux.HandleFunc("/api/enroll", s.apiEnroll)
@@ -720,7 +721,7 @@ func adminSubnav(active string) string {
 	return `<div class="subnav">` +
 		item("/admin", "Overview", "overview") +
 		item("/admin/applications", "Applications", "applications") +
-		item("/admin/users", "Logins", "users") +
+		item("/admin/users", "Download logins", "users") +
 		item("/admin/relay", "Relay", "relay") +
 		item("/admin/devices", "Devices", "devices") +
 		item("/admin/split", "Split feed", "split") +
@@ -1566,7 +1567,7 @@ func (s *server) adminUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeHTML string) {
 	var b strings.Builder
-	b.WriteString(`<div class="admin-head"><h1>Logins</h1></div>`)
+	b.WriteString(`<div class="admin-head"><h1>Download logins</h1></div>`)
 	b.WriteString(adminSubnav("users"))
 	b.WriteString(`<p class="muted">Logins are the per-device installers from before token enrolment. Machines that installed since 17 Nov appear under <a href="/admin/devices">Devices</a>.</p>`)
 	if noticeHTML != "" {
