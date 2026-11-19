@@ -426,6 +426,13 @@ type Proxy struct {
 
 	direct  atomic.Int64
 	relayed atomic.Int64
+
+	// tunnelUp reports whether the WireGuard relay tunnel is running. It is
+	// injected because this process may not be the one that manages it. When
+	// it is up, a blocked destination dialled directly is carried by the
+	// tunnel, so the SOCKS relay must not be used: the whole point of the
+	// tunnel is that the interceptor sees ciphertext.
+	tunnelUp func() bool
 }
 
 func NewProxy(network, dir, listen, relay, user, pass string, logger *log.Logger) *Proxy {
@@ -451,6 +458,13 @@ func NewProxy(network, dir, listen, relay, user, pass string, logger *log.Logger
 	p.probe = ProbeDomain
 	p.socksDial = socksConnect
 	return p
+}
+
+// SetTunnelUp tells the proxy how to ask whether the relay tunnel is running.
+func (p *Proxy) SetTunnelUp(fn func() bool) { p.tunnelUp = fn }
+
+func (p *Proxy) tunnelReady() bool {
+	return p.tunnelUp != nil && p.tunnelUp()
 }
 
 // ListenAddr is where the proxy accepts CONNECT and serves the PAC.
@@ -611,6 +625,15 @@ func (p *Proxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if mode == StateBlocked && p.tunnelReady() {
+				// The tunnel holds a route for this destination, so a direct
+				// dial is the encrypted path.
+				if conn, err := p.dial(ctx, network, addr); err == nil {
+					p.relayed.Add(1)
+					return conn, nil
+				}
+				p.log.Printf("proxy: tunnel dial failed for %s; falling back to the relay", addr)
+			}
 			if mode == StateBlocked {
 				if conn, err := p.socksDial(ctx, p.relayAddr, p.user, p.pass, addr); err == nil {
 					return conn, nil
@@ -658,7 +681,16 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 
 	mode := p.decide(ctx, host)
 	var upstream net.Conn
-	if mode == StateBlocked {
+	if mode == StateBlocked && p.tunnelReady() {
+		// Routed into the tunnel: dial directly and let WireGuard carry it.
+		upstream, err = p.dial(ctx, "tcp", r.Host)
+		if err == nil {
+			p.relayed.Add(1)
+		} else {
+			p.log.Printf("proxy: tunnel dial failed for %s (%v); falling back to the relay", r.Host, err)
+		}
+	}
+	if upstream == nil && mode == StateBlocked {
 		upstream, err = p.socksDial(ctx, p.relayAddr, p.user, p.pass, r.Host)
 		if err != nil {
 			// A dead relay must not take a working site down. Try the direct
