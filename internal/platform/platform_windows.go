@@ -438,8 +438,32 @@ func (windowsPlatform) InstallService(exePath string, args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = powershell(script)
-	return err
+	if _, err := powershell(script); err != nil {
+		return err
+	}
+	// The boot task starts once. If the supervisor exits during the day,
+	// nothing brings it back and DNS keeps pointing at a listener that is not
+	// there, which looks like a broken network. Watch the listener instead of
+	// trusting the process to stay up.
+	return installWatchdog()
+}
+
+// installWatchdog registers a one-minute task that starts the supervisor when
+// nothing holds the resolver port. It is deliberately a separate task: the
+// thing being watched cannot be the only thing that restarts it.
+func installWatchdog() error {
+	path := filepath.Join(winProgramData, "watchdog.ps1")
+	body := `$ErrorActionPreference = 'SilentlyContinue'
+if (-not (Get-NetUDPEndpoint -LocalPort 7103 -ErrorAction SilentlyContinue)) {
+    schtasks /run /tn egress | Out-Null
+}
+`
+	if err := os.WriteFile(path, []byte(body), 0755); err != nil {
+		return fmt.Errorf("write watchdog: %w", err)
+	}
+	tr := `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "` + path + `"`
+	return logx.RunLogged("schtasks", "/create", "/tn", "egress-watchdog", "/tr", tr,
+		"/sc", "minute", "/mo", "1", "/ru", "SYSTEM", "/rl", "HIGHEST", "/f")
 }
 
 // writeStartLauncher writes the fail-open start script next to the binary. It
@@ -564,6 +588,7 @@ func (p windowsPlatform) Disable() error {
 	_ = logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/disable")
 	_ = logx.RunLogged("schtasks", "/delete", "/tn", "egress-update-check", "/f")
 	_ = logx.RunLogged("schtasks", "/delete", "/tn", "egress-update-apply", "/f")
+	_ = logx.RunLogged("schtasks", "/delete", "/tn", "egress-watchdog", "/f")
 	RemoveProxyAutostart()
 	ClearUserPAC()
 	StopUserProxy()
@@ -583,6 +608,7 @@ func (p windowsPlatform) Disable() error {
 // except for a running binary, which Windows will not let us unlink.
 func (p windowsPlatform) Remove() error {
 	_ = p.Disable()
+	_ = logx.RunLogged("schtasks", "/delete", "/tn", "egress-watchdog", "/f")
 	_ = logx.RunLogged("schtasks", "/delete", "/tn", winTaskName, "/f")
 
 	// Decide restores before the wipe and apply them after: the backups
