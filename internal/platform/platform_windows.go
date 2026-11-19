@@ -537,9 +537,18 @@ func (windowsPlatform) ServiceActive() bool {
 	return false
 }
 
-func (windowsPlatform) Enable() error {
+func (p windowsPlatform) Enable() error {
 	if _, err := logx.ExecLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
-		return errors.New("egress is not installed; run install first")
+		// The task is gone when a failed install cleaned up, or when someone
+		// deleted it while the binary stayed installed. Recreate it from the
+		// installed binary instead of refusing to start a working install.
+		exe := InstalledBinaryPath()
+		if _, serr := os.Stat(exe); serr != nil {
+			return errors.New("egress is not installed; run install first")
+		}
+		if ierr := p.InstallService(exe, []string{"supervise", "--no-tunnel"}); ierr != nil {
+			return fmt.Errorf("recreate the boot task: %w", ierr)
+		}
 	}
 	if err := logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/enable"); err != nil {
 		return err
