@@ -137,3 +137,25 @@ func (f *fleet) deviceStatusMap() map[string]string {
 	}
 	return out
 }
+
+// fleetTableHTML is the Overview's device list. It comes from the device
+// registry, not from the legacy login rows, so the number in the stat above it
+// and the rows below it always describe the same machines.
+func (s *server) fleetTableHTML(f *fleet) string {
+	if len(f.devices) == 0 {
+		return `<div class="table-wrap"><div class="empty"><strong>No devices yet.</strong>Approve an application to create an invite.</div></div>`
+	}
+	var b []byte
+	b = append(b, `<div class="table-wrap compact"><table><thead><tr><th>Device</th><th>Label</th><th>Address</th><th>Status</th><th>Report</th><th>Application</th></tr></thead><tbody>`...)
+	for _, d := range f.devices {
+		app := `<span class="muted">&mdash;</span>`
+		if a, ok := f.deviceApp(d); ok {
+			app = `<a href="/admin/applications/` + esc(a.ID) + `">` + esc(a.Name) + `</a>`
+		}
+		b = append(b, `<tr><td><a href="/admin/devices/`+esc(d.ID)+`"><code>`+esc(d.ID)+`</code></a></td><td>`+
+			esc(d.Label)+`</td><td>`+esc(d.IP)+`</td><td>`+esc(d.Status)+`</td><td>`+
+			s.deviceReportCell(d.PubKey)+`</td><td>`+app+`</td></tr>`...)
+	}
+	b = append(b, `</tbody></table></div>`...)
+	return string(b)
+}
