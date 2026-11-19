@@ -474,6 +474,10 @@ type RouteManager struct {
 	list   func(dev string) []string
 	routes map[string]time.Time
 	order  []string
+	// onChange is told the routed set whenever it changes. Windows needs this:
+	// WireGuard only carries destinations named in the peer's AllowedIPs, so a
+	// route the driver does not know about blackholes silently.
+	onChange func([]string)
 }
 
 func NewRouteManager(dev string, logger *log.Logger) *RouteManager {
@@ -503,6 +507,7 @@ func (m *RouteManager) Reset() {
 	}
 	m.routes = map[string]time.Time{}
 	m.order = nil
+	m.notifyLocked()
 	if removed > 0 {
 		log.Printf("split: cleared %d stale tunnel routes", removed)
 	}
@@ -510,14 +515,25 @@ func (m *RouteManager) Reset() {
 
 // kernelRoutesOn lists the destination routes the kernel holds on dev.
 func kernelRoutesOn(dev string) []string {
-	if runtime.GOOS != "linux" || dev == "" {
+	if dev == "" {
 		return nil
 	}
-	out, err := exec.Command("ip", "route", "show", "dev", dev).Output()
-	if err != nil {
-		return nil
+	switch runtime.GOOS {
+	case "windows":
+		out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+			"Get-NetRoute -InterfaceAlias '"+dev+"' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.DestinationPrefix }").Output()
+		if err != nil {
+			return nil
+		}
+		return parseTunnelRoutes(string(out))
+	case "linux":
+		out, err := exec.Command("ip", "route", "show", "dev", dev).Output()
+		if err != nil {
+			return nil
+		}
+		return parseTunnelRoutes(string(out))
 	}
-	return parseTunnelRoutes(string(out))
+	return nil
 }
 
 // parseTunnelRoutes returns the destinations of the routes on the tunnel,
@@ -558,6 +574,20 @@ func routeCommands(dev string) routeRunner {
 			return fmt.Errorf("unsupported route command %q", args)
 		}
 	}
+	if runtime.GOOS == "windows" {
+		return func(args ...string) error {
+			prefix := args[1] + "/32"
+			switch args[0] {
+			case "replace":
+				return routeExec("powershell", "-NoProfile", "-NonInteractive", "-Command",
+					"New-NetRoute -DestinationPrefix '"+prefix+"' -InterfaceAlias '"+dev+"' -PolicyStore ActiveStore -ErrorAction Stop | Out-Null").Run()
+			case "del":
+				return routeExec("powershell", "-NoProfile", "-NonInteractive", "-Command",
+					"Remove-NetRoute -DestinationPrefix '"+prefix+"' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null").Run()
+			}
+			return fmt.Errorf("unsupported route command %q", args)
+		}
+	}
 	return func(args ...string) error {
 		switch args[0] {
 		case "replace":
@@ -567,6 +597,47 @@ func routeCommands(dev string) routeRunner {
 		}
 		return fmt.Errorf("unsupported route command %q", args)
 	}
+}
+
+// OnChange registers a callback for routed-set changes.
+func (m *RouteManager) OnChange(fn func([]string)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onChange = fn
+}
+
+// notifyLocked hands the current routed set to the callback. The caller holds
+// the lock; the callback is expected to be quick (one wg set).
+func (m *RouteManager) notifyLocked() {
+	if m.onChange == nil {
+		return
+	}
+	out := make([]string, 0, len(m.order))
+	for _, key := range m.order {
+		if _, ok := m.routes[key]; ok {
+			out = append(out, key)
+		}
+	}
+	m.onChange(out)
+}
+
+// Prefixes reports the current routed set, for callers that need to resend it.
+func (m *RouteManager) Prefixes() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, 0, len(m.order))
+	for _, key := range m.order {
+		if _, ok := m.routes[key]; ok {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 func (m *RouteManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
@@ -607,6 +678,7 @@ func (m *RouteManager) Add(ips []net.IP, ttl time.Duration, now time.Time) {
 		m.order = append(m.order, key)
 		log.Printf("split: routed %s via %s until %s", key, m.dev, expiry.Format(time.RFC3339))
 	}
+	m.notifyLocked()
 }
 
 func (m *RouteManager) Cleanup(now time.Time) {
@@ -628,6 +700,11 @@ func (m *RouteManager) Cleanup(now time.Time) {
 		}
 		kept = append(kept, key)
 	}
+	if len(kept) != len(m.order) {
+		m.order = kept
+		m.notifyLocked()
+		return
+	}
 	m.order = kept
 }
 
@@ -646,6 +723,7 @@ func (m *RouteManager) Remove(keys []string) {
 		_ = m.run("del", key)
 		delete(m.routes, key)
 	}
+	m.notifyLocked()
 }
 
 // Clear removes every route this manager added, for a network change.
@@ -660,6 +738,7 @@ func (m *RouteManager) Clear() {
 	}
 	m.routes = map[string]time.Time{}
 	m.order = nil
+	m.notifyLocked()
 }
 
 func (m *RouteManager) Count() int {

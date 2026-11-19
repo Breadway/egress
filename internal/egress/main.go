@@ -562,6 +562,12 @@ func runInstall(plat platform, args []string) (err error) {
 	serviceArgs := []string{"supervise"}
 	if *noTunnel {
 		serviceArgs = append(serviceArgs, "--no-tunnel")
+		// Split mode on Windows still owns a tunnel: learned-blocked
+		// destinations ride the WebSocket relay, which keeps the interceptor
+		// looking at ciphertext instead of a SOCKS session.
+		if runtime.GOOS == "windows" {
+			serviceArgs = append(serviceArgs, "--relay-tunnel")
+		}
 	}
 	if *noFallback {
 		serviceArgs = append(serviceArgs, "--no-fallback")
@@ -675,6 +681,7 @@ func parkInstall(plat platform, tcfg tunnelConfig, results checkResults, cause e
 func cmdSupervise(args []string) error {
 	fs := newFlagSet("supervise")
 	noTunnel := fs.Bool("no-tunnel", false, "do not manage the tunnel")
+	relayTunnel := fs.Bool("relay-tunnel", false, "carry learned-blocked destinations over the WebSocket relay")
 	noFallback := fs.Bool("no-fallback", false, "never use the WebSocket fallback")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
@@ -706,7 +713,7 @@ func cmdSupervise(args []string) error {
 	resolver.NotReady = removeReadyMarker
 
 	wstPath := ""
-	if !*noTunnel && !*noFallback {
+	if (!*noTunnel || *relayTunnel) && !*noFallback {
 		if path, err := plat.WstunnelPath(); err == nil {
 			wstPath = path
 		} else {
@@ -715,16 +722,39 @@ func cmdSupervise(args []string) error {
 	}
 	wst := newWstunnelProc(wstPath, appLogger())
 
+	// Split installs on Windows route learned-blocked destinations through the
+	// relay tunnel. The device name differs from the direct tunnel because the
+	// two are separate services and only one is ever installed.
+	splitDev := wgInterface
+	if *relayTunnel {
+		splitDev = "wg0ws"
+	}
 	var splitter *split.Controller
-	if !*noTunnel {
-		splitter = split.NewController(split.NetworkKey("", gateway), iface,
-			split.NewRouteManager(wgInterface, appLogger()), appLogger())
+	if !*noTunnel || *relayTunnel {
+		routes := split.NewRouteManager(splitDev, appLogger())
+		if runtime.GOOS == "windows" {
+			// The driver drops destinations missing from AllowedIPs, so the
+			// routed set and the peer's allowed set must move together.
+			routes.OnChange(func(prefixes []string) {
+				w, ok := plat.(interface {
+					SetPeerAllowedIPs(string, []string) error
+				})
+				if !ok {
+					return
+				}
+				if err := w.SetPeerAllowedIPs(splitDev, prefixes); err != nil {
+					appLogger().Printf("split: allowed ips: %v", err)
+				}
+			})
+		}
+		splitter = split.NewController(split.NetworkKey("", gateway), iface, routes, appLogger())
 		if runtime.GOOS == "linux" {
 			// Bind the 403/451 comparison to the tunnel; split mode keeps the
 			// default route direct.
 			splitter.SetTunnelDevice(wgInterface)
 		}
 	}
+
 	sup := supervisor.New(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
 	sup.Iface, sup.Gateway = iface, gateway
 	// A protocol picture shared by another device on this network may already
@@ -734,6 +764,35 @@ func cmdSupervise(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *relayTunnel {
+		// The relay tunnel is the path for learned-blocked destinations on
+		// Windows split installs. It is ensured here and re-checked, because a
+		// quarantined or crashed tunnel service otherwise leaves routes
+		// pointing at an interface that is not there.
+		ensure := func() error {
+			if err := wst.Ensure(ctx); err != nil {
+				return err
+			}
+			return plat.EnsureEndpoint(core.RelayHost + ":" + core.RelayPort)
+		}
+		if err := ensure(); err != nil {
+			appLogger().Printf("relay tunnel: %v", err)
+		}
+		go func() {
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := ensure(); err != nil {
+						appLogger().Printf("relay tunnel: %v", err)
+					}
+				}
+			}
+		}()
+	}
 	go func() {
 		snap := func() portal.Snapshot {
 			out := portal.Snapshot{Generated: time.Now(), Version: reportVersion(), Online: plat.TunnelUp() || aegisReachable()}

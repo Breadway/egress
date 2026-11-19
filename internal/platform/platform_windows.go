@@ -581,7 +581,14 @@ func (p windowsPlatform) Enable() error {
 		if _, serr := os.Stat(exe); serr != nil {
 			return errors.New("egress is not installed; run install first")
 		}
-		if ierr := p.InstallService(exe, []string{"supervise", "--no-tunnel"}); ierr != nil {
+		args := []string{"supervise", "--no-tunnel"}
+		// A split install also owns the relay tunnel, and a rebuilt launcher
+		// that drops the flag would silently stop routing blocked
+		// destinations through it.
+		if splitInstalled() {
+			args = append(args, "--relay-tunnel")
+		}
+		if ierr := p.InstallService(exe, args); ierr != nil {
 			return fmt.Errorf("recreate the boot task: %w", ierr)
 		}
 	}
@@ -817,6 +824,46 @@ func wireguardExe() string {
 		return path
 	}
 	return ""
+}
+
+// wgExe finds the command-line control for the installed tunnel service.
+func wgExe() string {
+	if exe := wireguardExe(); exe != "" {
+		candidate := filepath.Join(filepath.Dir(exe), "wg.exe")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath("wg.exe"); err == nil {
+		return path
+	}
+	return ""
+}
+
+// SetPeerAllowedIPs rewrites the peer's AllowedIPs so the driver carries the
+// destinations the split controller routes into the interface. WireGuard for
+// Windows treats AllowedIPs as cryptokey routing and drops anything else, so a
+// route without a matching allowed IP is a silent blackhole.
+func (p windowsPlatform) SetPeerAllowedIPs(dev string, prefixes []string) error {
+	exe := wgExe()
+	if exe == "" {
+		return errors.New("wg.exe not found")
+	}
+	list := core.TunnelSubnet
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		if !strings.Contains(prefix, "/") {
+			prefix += "/32"
+		}
+		list += ", " + prefix
+	}
+	out, err := logx.ExecLogged(exe, "set", dev, "peer", core.AegisPublicKey, "allowed-ips", list)
+	if err != nil {
+		return fmt.Errorf("wg set allowed-ips: %v (%s)", err, logx.Truncate(string(out), 300))
+	}
+	return nil
 }
 
 func tunnelServiceUp(name string) bool {
@@ -1087,4 +1134,14 @@ func (p windowsPlatform) ClampRelayConfig() error {
 		return fmt.Errorf("clamp relay config: %w", err)
 	}
 	return p.SecureInstallDir()
+}
+
+// splitInstalled reports whether this installation is the Windows split client:
+// it holds the relay config and no direct one.
+func splitInstalled() bool {
+	if _, err := os.Stat(filepath.Join(winProgramData, "wg0ws.conf")); err != nil {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(winProgramData, "wg0.conf"))
+	return err != nil
 }

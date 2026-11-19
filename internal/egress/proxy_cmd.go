@@ -82,6 +82,18 @@ func cmdProxy(args []string) (err error) {
 		appLogger().Printf("proxy: no default route yet (%v)", err)
 	}
 	p := split.NewProxy(split.NetworkKey("", gateway), split.ProfileDir(), *listen, *relay, user, pass, appLogger())
+	// The tunnel service query costs a process spawn, so do not repeat it per
+	// connection; five seconds is far below the time a tunnel stays down.
+	var tunnelChecked time.Time
+	var tunnelWas bool
+	p.SetTunnelUp(func() bool {
+		if time.Since(tunnelChecked) < 5*time.Second {
+			return tunnelWas
+		}
+		tunnelWas = plat.TunnelUp()
+		tunnelChecked = time.Now()
+		return tunnelWas
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
