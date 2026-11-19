@@ -563,34 +563,22 @@ func (windowsPlatform) ServiceActive() bool {
 
 func (p windowsPlatform) Enable() error {
 	exe := InstalledBinaryPath()
-	launcher := filepath.Join(winProgramData, "start-egress.cmd")
-	// A zero-byte launcher is not a working install: cmd.exe runs it, prints
-	// nothing and exits, the task reports Ready, and the resolver stays down
-	// with no visible cause. A failed install can leave exactly that, so treat
-	// it the same as a missing task and rebuild from the installed binary.
-	broken := false
-	if fi, err := os.Stat(launcher); err != nil || fi.Size() == 0 {
-		broken = true
-	} else if _, err := logx.ExecLogged("schtasks", "/query", "/tn", winTaskName); err != nil {
-		// The task is gone when a failed install cleaned up, or when someone
-		// deleted it while the binary stayed installed. Recreate it from the
-		// installed binary instead of refusing to start a working install.
-		broken = true
+	// Always converge the service definition, not only when it is missing.
+	// The launcher carries the mode flags, and a binary replaced in place (by
+	// an updater or by hand) leaves the old arguments behind: a split install
+	// then keeps starting without its relay tunnel, or a zero-byte launcher
+	// runs and exits while the task reports Ready.
+	if _, serr := os.Stat(exe); serr != nil {
+		return errors.New("egress is not installed; run install first")
 	}
-	if broken {
-		if _, serr := os.Stat(exe); serr != nil {
-			return errors.New("egress is not installed; run install first")
-		}
-		args := []string{"supervise", "--no-tunnel"}
-		// A split install also owns the relay tunnel, and a rebuilt launcher
-		// that drops the flag would silently stop routing blocked
-		// destinations through it.
-		if splitInstalled() {
-			args = append(args, "--relay-tunnel")
-		}
-		if ierr := p.InstallService(exe, args); ierr != nil {
-			return fmt.Errorf("recreate the boot task: %w", ierr)
-		}
+	args := []string{"supervise", "--no-tunnel"}
+	// A split install also owns the relay tunnel, and a launcher that drops
+	// the flag would silently stop routing blocked destinations through it.
+	if splitInstalled() {
+		args = append(args, "--relay-tunnel")
+	}
+	if ierr := p.InstallService(exe, args); ierr != nil {
+		return fmt.Errorf("recreate the boot task: %w", ierr)
 	}
 	if err := logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/enable"); err != nil {
 		return err

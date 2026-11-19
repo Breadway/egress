@@ -916,3 +916,37 @@ func TestRecordScanSkipsWeakConnectStall(t *testing.T) {
 		t.Error("a TLS stall was not recorded")
 	}
 }
+
+// The Windows driver only carries destinations listed in the peer's
+// AllowedIPs, so every route change must reach the platform hook. Dropping a
+// notification leaves a route the tunnel silently blackholes.
+func TestRouteManagerNotifiesOnChange(t *testing.T) {
+	var got []string
+	rm := &RouteManager{
+		dev:    "wg0ws",
+		log:    log.New(testWriter{t}, "", 0),
+		routes: map[string]time.Time{},
+		run:    func(args ...string) error { return nil },
+	}
+	rm.OnChange(func(prefixes []string) {
+		got = append([]string(nil), prefixes...)
+	})
+	now := time.Now()
+	rm.Add([]net.IP{net.IPv4(1, 2, 3, 4)}, time.Hour, now)
+	if len(got) != 1 || got[0] != "1.2.3.4" {
+		t.Fatalf("after add: %v", got)
+	}
+	rm.Add([]net.IP{net.IPv4(1, 2, 3, 5)}, time.Hour, now)
+	if len(got) != 2 {
+		t.Fatalf("after second add: %v", got)
+	}
+	rm.Cleanup(now.Add(2 * time.Hour))
+	if len(got) != 0 {
+		t.Fatalf("after cleanup: %v", got)
+	}
+	rm.Add([]net.IP{net.IPv4(9, 9, 9, 9)}, time.Hour, now)
+	rm.Clear()
+	if len(got) != 0 {
+		t.Fatalf("after clear: %v", got)
+	}
+}
