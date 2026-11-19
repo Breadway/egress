@@ -1277,15 +1277,9 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	apps := s.loadApplications()
-	bound, invited := s.deviceCounts()
-	deviceStatus := s.deviceStatuses()
-	ready := 0
-	for _, a := range apps {
-		if a.DeviceID != "" && deviceStatus[a.DeviceID] != "bound" {
-			ready++
-		}
-	}
+	fl := s.loadFleet()
+	bound, invited := fl.boundDevices()
+	_, ready, _, _ := fl.counts()
 	body := fmt.Sprintf(`<div class="admin-head"><h1>Overview</h1>
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="%s">
 <button class="btn ghost small" type="submit">Log out</button></form></div>
@@ -1303,7 +1297,7 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 		s.csrfToken(r), adminSubnav("overview"),
 		pending, ready, bound, invited,
 		attentionAlert(failed, parked, stale),
-		recentApplicationsHTML(apps, deviceStatus),
+		recentApplicationsHTML(fl.apps, fl.deviceStatusMap()),
 		deviceTable(rows))
 	s.renderNav(w, true, "admin", "Admin", body)
 }
@@ -1418,21 +1412,9 @@ func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b strings.Builder
-	apps := s.loadApplications()
-	deviceStatus := s.deviceStatuses()
-	pending, ready, installed, errored := 0, 0, 0, 0
-	for _, a := range apps {
-		switch {
-		case a.ProvisionError != "":
-			errored++
-		case a.DeviceID != "" && deviceStatus[a.DeviceID] == "bound":
-			installed++
-		case a.DeviceID != "":
-			ready++
-		case !a.Reviewed:
-			pending++
-		}
-	}
+	f := s.loadFleet()
+	apps := f.apps
+	pending, ready, installed, errored := f.counts()
 	b.WriteString(`<div class="admin-head"><h1>Applications</h1></div>`)
 	b.WriteString(adminSubnav("applications"))
 	b.WriteString(`<div class="stats compact">`)
@@ -1444,31 +1426,30 @@ func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
 	if len(apps) == 0 {
 		b.WriteString(`<div class="table-wrap"><div class="empty"><strong>No applications yet.</strong>Share the apply page.</div></div>`)
 	} else {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Applicant</th><th>Status</th><th>Reason</th><th>Installer</th><th></th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Applicant</th><th>Status</th><th>Report</th><th>Reason</th><th>Installer</th><th></th></tr></thead><tbody>`)
 		for _, a := range apps {
-			chip, chipClass := "waiting", "new"
+			chip, chipClass := f.appState(a)
 			installer := `<span class="muted">&mdash;</span>`
 			switch {
 			case a.ProvisionError != "":
-				chip, chipClass = "failed", "bad"
 				installer = fmt.Sprintf(`<span class="err-snip">%s</span>`, esc(a.ProvisionError))
-			case a.DeviceID != "" && deviceStatus[a.DeviceID] == "bound":
-				chip, chipClass = "installed", "ok"
+			case chip == "installed":
 				installer = `<span class="muted">installed</span>`
 			case a.DeviceID != "":
-				chip, chipClass = "ready", "ok"
 				installer = fmt.Sprintf(`<code>%s</code> <button type="button" class="btn ghost small" data-copy="%s">Copy token</button>`, esc(a.DeviceID), esc(a.EnrollToken))
 				if a.SetupDownloads > 0 {
 					installer += fmt.Sprintf(`<span class="cell-sub">fetched %d&times; &middot; %s</span>`, a.SetupDownloads, esc(displayTime(a.SetupDownloaded)))
 				} else {
 					installer += `<span class="cell-sub">not fetched yet</span>`
 				}
-			case a.Reviewed:
-				chip, chipClass = "approved", ""
+			}
+			report := `<span class="muted">&mdash;</span>`
+			if d, ok := f.appDevice(a); ok {
+				report = s.deviceReportCell(d.PubKey)
 			}
 			why := a.Why
-			fmt.Fprintf(&b, `<tr><td><a href="/admin/applications/%s"><strong>%s</strong></a><span class="cell-sub">%s &middot; %s</span></td><td><span class="pill %s">%s</span></td><td class="why"><div class="why-clamp" title="%s">%s</div></td><td>%s</td><td><div class="row-actions">`,
-				esc(a.ID), esc(a.Name), esc(osLabel(a.OS, a.Arch)), esc(a.ID), chipClass, chip, esc(why), esc(why), installer)
+			fmt.Fprintf(&b, `<tr><td><a href="/admin/applications/%s"><strong>%s</strong></a><span class="cell-sub">%s &middot; %s</span></td><td><span class="pill %s">%s</span></td><td>%s</td><td class="why"><div class="why-clamp" title="%s">%s</div></td><td>%s</td><td><div class="row-actions">`,
+				esc(a.ID), esc(a.Name), esc(osLabel(a.OS, a.Arch)), esc(a.ID), chipClass, chip, report, esc(why), esc(why), installer)
 			if !a.Reviewed || (a.DeviceID == "" && a.ProvisionError == "") {
 				fmt.Fprintf(&b, `<form method="post" action="/admin/applications"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="action" value="approve"><button class="btn small" type="submit">Approve</button></form>`, s.csrfToken(r), a.ID)
 			}
@@ -1587,10 +1568,12 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 	var b strings.Builder
 	b.WriteString(`<div class="admin-head"><h1>Logins</h1></div>`)
 	b.WriteString(adminSubnav("users"))
+	b.WriteString(`<p class="muted">Logins are the per-device installers from before token enrolment. Machines that installed since 17 Nov appear under <a href="/admin/devices">Devices</a>.</p>`)
 	if noticeHTML != "" {
 		fmt.Fprintf(&b, `<div class="alert ok">%s</div>`, noticeHTML)
 	}
 	rows := s.deviceRows()
+	fl := s.loadFleet()
 	if len(rows) == 0 {
 		b.WriteString(`<div class="table-wrap"><div class="empty"><strong>No logins.</strong></div></div>`)
 	} else {
@@ -1605,6 +1588,11 @@ func (s *server) renderUsersPage(w http.ResponseWriter, r *http.Request, noticeH
 			device += fmt.Sprintf(`<span class="cell-sub">created %s</span>`, esc(displayTime(u.Created)))
 
 			status := reportPill(row.Stored)
+			// A login from the pre-token era can share its key with a device
+			// that enrolled later; point at that device so the two pages agree.
+			if d, ok := fl.devByPub[u.Peer]; ok {
+				status += fmt.Sprintf(`<span class="cell-sub">tracked as <a href="/admin/devices/%s">%s</a></span>`, esc(d.ID), esc(d.ID))
+			}
 			if row.Stored != nil {
 				if v := row.Stored.Report.Version; v != "" {
 					status += fmt.Sprintf(`<span class="cell-sub">build %s</span>`, esc(v))
