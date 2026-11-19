@@ -330,6 +330,46 @@ evidence, the hashes and the submission text. On a machine that has already
 quarantined the file, `egress allow-defender` adds an exclusion for the install
 directory and prints what it changed; `remove` undoes it.
 
+## DNS fallbacks
+
+The resolver tries the Aegis DoH endpoint first. If it fails, it can fall back
+to public resolvers, which keeps lookups working when the Aegis resolver is
+blocked or down. That is a privacy trade: whoever runs the fallback sees the
+queries, so it is off unless configured, each server is skipped for two minutes
+after a failure, and the log says `doh: answered through fallback <host>` when
+it is used.
+
+Configure the chain in a profile or with `--doh-fallbacks` when signing one,
+using `host=ip` entries so the fallback does not depend on the system resolver:
+
+```
+egress profile sign --key-file K --name laptop --relay-user dev-... \
+  --relay-pass ... --doh-fallbacks 'cloudflare-dns.com=1.1.1.1,dns.quad9.net=9.9.9.9' \
+  --out laptop.profile
+```
+
+## Signed profiles
+
+A profile carries a device's relay credential and resolver list in one file,
+signed with the release key. It provisions a machine without calling the
+enrollment server:
+
+```
+egress profile sign   --key-file ~/.keys/egress-update-signing.key --in p.json --out p.signed
+egress profile verify --in p.signed
+egress install --no-tunnel --profile p.signed
+```
+
+`install` verifies the signature against the public key compiled into the
+binary and refuses an unsigned, tampered or wrong-version file. It then writes
+`profile.json` beside the installed binary, which the supervisor reads for its
+fallback list, and stores the relay credential the same way enrollment does.
+Profiles provision split mode; a full tunnel still needs a WireGuard keypair
+that the server knows.
+
+The file can hold a secret, so it is written 0600 and the signature is the
+trust anchor: it may be mailed, hosted or copied on a USB stick.
+
 ## Support bundle
 
 `egress support` writes `egress-support-<timestamp>.zip` to the Desktop, or to
