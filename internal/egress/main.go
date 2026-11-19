@@ -162,6 +162,8 @@ func realMain() error {
 		return cmdRepair(args)
 	case "profile":
 		return cmdProfile(args)
+	case "wg-probe":
+		return cmdWGProbe(args)
 	case "allow-defender":
 		return cmdDefender(args)
 	case "remove", "uninstall":
@@ -192,6 +194,7 @@ Commands:
   update-sign  sign a release manifest (publisher side)
   update-keygen make an Ed25519 update signing key
   profile      sign or verify a signed device profile
+  wg-probe     prove a WireGuard tunnel over the WebSocket relay (Windows split)
   repair       reinstall the installed build over the existing config
   allow-defender  exclude the install directory from Defender (--remove undoes it)
   support      write one archive with version, diagnose and log for sending
