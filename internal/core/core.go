@@ -6,9 +6,12 @@ package core
 import "time"
 
 const (
-	DoHURL        = "https://dns.breadway.dev/dns-query"
-	DoHHost       = "dns.breadway.dev"
-	DoHListenAddr = "127.0.0.1:7103"
+	DoHURL  = "https://dns.breadway.dev/dns-query"
+	DoHHost = "dns.breadway.dev"
+	// DoHFallbackBootstrap maps public DoH servers to an address that works
+	// without the system resolver. Order matters: the first healthy one answers.
+	DoHFallbackBootstrap = "cloudflare-dns.com=1.1.1.1,dns.quad9.net=9.9.9.9"
+	DoHListenAddr        = "127.0.0.1:7103"
 
 	AegisIPv4 = "152.69.174.7"
 	// PortalListenAddr is the local page that explains blocked sites. It is

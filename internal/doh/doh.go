@@ -37,8 +37,9 @@ type Resolver struct {
 	gateway string
 	addrs   []string
 
-	client *http.Client
-	log    *log.Logger
+	client    *http.Client
+	fallbacks []*fallback
+	log       *log.Logger
 	// failures counts consecutive failed lookups across queries. The
 	// supervisor uses it to notice a wedged client that is still serving a
 	// listening socket.
@@ -68,6 +69,7 @@ func New(gateway string, logger *log.Logger) *Resolver {
 	}
 	transport := r.newTransport()
 	r.client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	r.fallbacks = parseFallbacks(core.DoHFallbackBootstrap)
 	r.lookup = r.exchange
 	return r
 }
@@ -295,6 +297,13 @@ func (r *Resolver) exchange(ctx context.Context, query []byte) ([]byte, error) {
 			return body, nil
 		}
 		err = retryErr
+	}
+	// The primary path is dead for this query. Try a public resolver rather
+	// than handing the application a failure: on a blocked network the
+	// difference is "no internet" versus "works, unfiltered".
+	if body, ferr := r.exchangeFallbacks(ctx, query); ferr == nil {
+		r.failures.Store(0)
+		return body, nil
 	}
 	failures := r.failures.Add(1)
 	if failures >= core.DoHResetAfterFailures {
@@ -596,4 +605,13 @@ func (r *Resolver) handleTCP(conn net.Conn) {
 			return
 		}
 	}
+}
+
+// SetFallbackSpec replaces the public fallback chain, for a signed profile that
+// names its own resolvers. An empty spec disables fallbacks.
+func (r *Resolver) SetFallbackSpec(spec string) {
+	fbs := parseFallbacks(spec)
+	r.mu.Lock()
+	r.fallbacks = fbs
+	r.mu.Unlock()
 }

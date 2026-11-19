@@ -5,9 +5,12 @@ import (
 	"egress/internal/core"
 	"egress/internal/doh"
 	"egress/internal/health"
+	"egress/internal/logx"
 	"egress/internal/portal"
+	"egress/internal/profile"
 	"egress/internal/split"
 	"egress/internal/supervisor"
+	"egress/internal/update"
 	"egress/internal/winlog"
 	"errors"
 	"flag"
@@ -157,6 +160,8 @@ func realMain() error {
 		return cmdSupport(args)
 	case "repair":
 		return cmdRepair(args)
+	case "profile":
+		return cmdProfile(args)
 	case "allow-defender":
 		return cmdDefender(args)
 	case "remove", "uninstall":
@@ -186,6 +191,7 @@ Commands:
   update       check for or apply a signed update over the tunnel
   update-sign  sign a release manifest (publisher side)
   update-keygen make an Ed25519 update signing key
+  profile      sign or verify a signed device profile
   repair       reinstall the installed build over the existing config
   allow-defender  exclude the install directory from Defender (--remove undoes it)
   support      write one archive with version, diagnose and log for sending
@@ -226,6 +232,7 @@ func runInstall(plat platform, args []string) (err error) {
 	_ = fs.Bool("split", false, "deprecated: split mode is always on")
 	keepConfig := fs.Bool("keep-config", false, "reuse the existing tunnel key and address (upgrade)")
 	enrollToken := fs.String("enroll-token", "", "bind this device with a one-time enrollment token")
+	profileFile := fs.String("profile", "", "instal from a signed profile instead of enrolling")
 	enrollServer := fs.String("enroll-server", defaultEnrollServer, "enrollment service base URL")
 	debug := fs.Bool("debug", false, "trace commands and log to a file")
 	if err := fs.Parse(args); err != nil {
@@ -318,6 +325,40 @@ func runInstall(plat platform, args []string) (err error) {
 			}
 		}
 		fmt.Printf("enrolled as %s at %s\n", creds.Device, creds.IP)
+	}
+
+	// A signed profile provisions the device without calling the enrollment
+	// server: the relay credential and the resolver list arrive in one file
+	// that this build can verify offline.
+	if *profileFile != "" {
+		if *enrollToken != "" {
+			return errors.New("use either --profile or --enroll-token, not both")
+		}
+		prof, err := profile.Load(*profileFile)
+		if err != nil {
+			return err
+		}
+		updatePub, err := update.PublicKeyBytes()
+		if err != nil {
+			return err
+		}
+		if err := profile.Verify(prof, updatePub); err != nil {
+			return fmt.Errorf("profile: %w", err)
+		}
+		if !*noTunnel {
+			return errors.New("a signed profile provisions split mode; add --no-tunnel")
+		}
+		if prof.Relay.User == "" || prof.Relay.Pass == "" {
+			return errors.New("profile carries no relay credential")
+		}
+		enrollRelayUser, enrollRelayPass = prof.Relay.User, prof.Relay.Pass
+		if err := os.MkdirAll(core.InstallDir(), 0700); err != nil {
+			return err
+		}
+		if err := profile.Save(filepath.Join(core.InstallDir(), "profile.json"), prof); err != nil {
+			return fmt.Errorf("save profile: %w", err)
+		}
+		fmt.Printf("profile %q verified; relay credential and resolvers taken from it\n", prof.Name)
 	}
 
 	tcfg.Split = true
@@ -638,6 +679,13 @@ func cmdSupervise(args []string) error {
 	}
 
 	resolver := doh.New(gateway, appLogger())
+	if prof, err := profile.Load(filepath.Join(core.InstallDir(), "profile.json")); err == nil {
+		if pub, perr := update.PublicKeyBytes(); perr == nil && profile.Verify(prof, pub) == nil {
+			resolver.SetFallbackSpec(prof.DoH.Fallbacks)
+		} else {
+			logx.Logger().Printf("profile.json did not verify; using built-in resolvers")
+		}
+	}
 	// The resolver serves the readiness marker's lifetime: install proves the
 	// process answering on the DNS port is the one it started.
 	resolver.Ready = writeReadyMarker
