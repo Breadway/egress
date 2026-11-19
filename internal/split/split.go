@@ -576,7 +576,13 @@ func routeCommands(dev string) routeRunner {
 	}
 	if runtime.GOOS == "windows" {
 		return func(args ...string) error {
-			prefix := args[1] + "/32"
+			// Reset replays prefixes read back from the routing table, which
+			// already carry /32; Add passes a bare address. Accept both, or
+			// cleanup asks for 1.2.3.4/32/32 and silently leaves the route.
+			prefix := args[1]
+			if !strings.Contains(prefix, "/") {
+				prefix += "/32"
+			}
 			switch args[0] {
 			case "replace":
 				return routeExec("powershell", "-NoProfile", "-NonInteractive", "-Command",
