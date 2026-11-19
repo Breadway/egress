@@ -148,6 +148,7 @@ func (s *server) adminDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(adminSubnav("devices"))
 	pairs := []string{
 		"Device", `<code>` + esc(dev.ID) + `</code>`,
+		"Last report", s.reportCell(dev.PubKey),
 		"Status", esc(dev.Status),
 		"Address", esc(dev.IP),
 		"Created", esc(dev.Created),
