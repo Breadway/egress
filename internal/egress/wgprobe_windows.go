@@ -92,13 +92,21 @@ PersistentKeepalive = 25
 	if err := startProbeClient(); err != nil {
 		return err
 	}
-	// Wait for the local UDP forward the tunnel points at.
+	// Wait for the local UDP forward the tunnel points at. A tunnel whose
+	// endpoint nobody listens on sends handshakes into the void and looks
+	// exactly like a blocked network, so fail with the real reason.
 	deadline := time.Now().Add(20 * time.Second)
+	held := false
 	for time.Now().Before(deadline) {
 		if udpListening(core.RelayHost, core.RelayPort) {
+			held = true
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	if !held {
+		return fmt.Errorf("the probe tunneler is not listening on %s; see the log for its output",
+			net.JoinHostPort(core.RelayHost, core.RelayPort))
 	}
 
 	exe := wireguardExeFor()
@@ -114,6 +122,22 @@ PersistentKeepalive = 25
 	}
 	if out, err := exec.Command(exe, "/installtunnelservice", confPath).CombinedOutput(); err != nil {
 		return fmt.Errorf("install probe tunnel: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	// WireGuard removes the service again when it cannot start, which looks
+	// like a missing service a second later. Wait for RUNNING and say so.
+	running := false
+	for i := 0; i < 30; i++ {
+		if tunnelServiceRunning(service) {
+			running = true
+			break
+		}
+		if !tunnelServiceExists(service) {
+			return fmt.Errorf("the tunnel service %s was removed immediately after install; WireGuard could not start it", service)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !running {
+		return fmt.Errorf("the tunnel service %s did not reach RUNNING", service)
 	}
 
 	fmt.Println("probing", *allowed, "through the WebSocket tunnel")
@@ -242,4 +266,13 @@ func probeHandshaked(iface string) bool {
 		}
 	}
 	return false
+}
+
+// tunnelServiceRunning reports whether the tunnel service is in RUNNING state.
+func tunnelServiceRunning(name string) bool {
+	out, err := exec.Command("sc.exe", "query", "WireGuardTunnel$"+name).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "RUNNING")
 }
