@@ -19,6 +19,13 @@ import (
 // supervisor stays DNS-only, a per-user proxy and tray start at login, and the
 // system PAC points at the local proxy.
 func configureWindowsSplit() error {
+	// An older build may have left a config that claims every destination.
+	// Starting that file would take the network away from the machine.
+	if c, ok := newPlatform().(interface{ ClampRelayConfig() error }); ok {
+		if err := c.ClampRelayConfig(); err != nil {
+			return err
+		}
+	}
 	exe, err := installedExePath()
 	if err != nil {
 		return err

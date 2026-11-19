@@ -1034,9 +1034,40 @@ func (p windowsPlatform) WriteRelayConfig(c core.TunnelConfig) error {
 		return err
 	}
 	c.Endpoint = c.RelayEndpoint()
+	c.Split = true
+	// Only the tunnel subnet may be claimed. Windows applies AllowedIPs as
+	// routes and enforces them, so 0.0.0.0/0 here takes the LAN away from the
+	// machine, including the host this device enrolled through.
+	c.AllowedIPs = core.TunnelSubnet
 	path := filepath.Join(winProgramData, "wg0ws.conf")
 	if err := os.WriteFile(path, []byte(core.RenderWGConfig(c)), 0600); err != nil {
 		return err
+	}
+	return p.SecureInstallDir()
+}
+
+// ClampRelayConfig rewrites an existing wg0ws.conf so its peer claims only the
+// tunnel subnet. Installations before 0.4.67 wrote 0.0.0.0/0 there, which
+// silently blackholes the LAN the moment the tunnel service starts.
+func (p windowsPlatform) ClampRelayConfig() error {
+	path := filepath.Join(winProgramData, "wg0ws.conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil // nothing written yet
+	}
+	lines := strings.Split(string(data), "\n")
+	changed := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "AllowedIPs") {
+			lines[i] = "AllowedIPs = " + core.TunnelSubnet
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		return fmt.Errorf("clamp relay config: %w", err)
 	}
 	return p.SecureInstallDir()
 }
