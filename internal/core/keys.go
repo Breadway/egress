@@ -93,7 +93,11 @@ func RenderWGConfig(c TunnelConfig) string {
 	// host route itself before installing the AllowedIPs routes.
 	b.WriteString("\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", AegisPublicKey)
-	b.WriteString("AllowedIPs = 0.0.0.0/0\n")
+	allowed := c.AllowedIPs
+	if allowed == "" {
+		allowed = "0.0.0.0/0"
+	}
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowed)
 	fmt.Fprintf(&b, "Endpoint = %s\n", c.Endpoint)
 	b.WriteString("PersistentKeepalive = 25\n")
 	return b.String()

@@ -54,6 +54,11 @@ type TunnelConfig struct {
 	// ReportPubkey identifies the device in install reports when the
 	// invocation has no private key.
 	ReportPubkey string
+	// AllowedIPs overrides the peer's AllowedIPs. Empty means 0.0.0.0/0.
+	// WireGuard for Windows turns AllowedIPs into routes and blocks what is
+	// not listed while the tunnel is up, so a split install that inherits the
+	// default blackholes the LAN, including the host it enrolled with.
+	AllowedIPs string
 	// NoTunnel means this install runs without a WireGuard interface at all:
 	// Windows split mode serves DNS and relays blocked destinations through
 	// the proxy instead. Verification must not ask for a tunnel then.
