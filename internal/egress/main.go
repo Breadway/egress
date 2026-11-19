@@ -529,6 +529,15 @@ func runInstall(plat platform, args []string) (err error) {
 			}
 		}
 	}
+	// Split mode used to keep the enrolled key in memory only, so nothing could
+	// bring a WireGuard tunnel up later. Write the config now, after the
+	// directory is hardened: stage two routes blocked destinations through this
+	// interface instead of the SOCKS relay.
+	if runtime.GOOS == "windows" && *noTunnel && tcfg.PrivateKey != "" {
+		if _, werr := plat.WriteTunnelConfig(tcfg); werr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write the relay tunnel config: %v\n", werr)
+		}
+	}
 	// A previous failed install can leave files inside the directory that the
 	// new install is about to write: the relay credential and the start
 	// launcher. One left with an unusable ACL makes those writes fail with
