@@ -469,8 +469,11 @@ func (s *server) deviceState(d device) (label, class, build, reportCell, pollCel
 		return "degraded", "warn", build, reportCell, pollCell
 	case hasHeartbeat && within(hb.Last, 10*time.Minute):
 		return "polling", "warn", build, reportCell, pollCell
-	case hasReport && within(rep.Received, 30*time.Minute):
-		return "no updater", "warn", build, reportCell, pollCell
+	case hasReport && within(rep.Received, 24*time.Hour):
+		// No heartbeat, but a recent report: either the build predates
+		// heartbeats or its updater is not running. Either way the machine was
+		// seen today, so it is not off.
+		return "no heartbeat", "warn", build, reportCell, pollCell
 	default:
 		return "off", "bad", build, reportCell, pollCell
 	}

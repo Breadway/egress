@@ -56,6 +56,17 @@ func cmdUpdateApply(args []string) error {
 		time.Sleep(*delay)
 	}
 
+	// Whichever path this returns on, never leave the service stopped: the
+	// install below stops it, and a crash or a refused swap used to leave the
+	// machine with no resolver until someone noticed.
+	defer func() {
+		if !newPlatform().ServiceActive() {
+			if err := newPlatform().StartService(); err != nil {
+				winlog.Notify("error", "update left the service stopped: "+err.Error())
+			}
+		}
+	}()
+
 	installed, err := installedExePath()
 	if err != nil {
 		return err
