@@ -27,4 +27,11 @@ func TestApplyDNSScriptKeepsFallback(t *testing.T) {
 	if strings.Contains(got, "-ServerAddress '127.0.0.1'") {
 		t.Error("script still sets the listener as the only server")
 	}
+	// The law: a locked fallback file may not stop DNS from being applied.
+	if !strings.Contains(got, "try { $dhcp | Set-Content") {
+		t.Error("fallback write is not wrapped; a denied write would abort ApplyDNS")
+	}
+	if strings.Contains(got, "try { Set-DnsClientServerAddress") {
+		t.Error("the DNS apply itself is optional")
+	}
 }
