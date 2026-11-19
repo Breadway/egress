@@ -534,8 +534,10 @@ func runInstall(plat platform, args []string) (err error) {
 	// directory is hardened: stage two routes blocked destinations through this
 	// interface instead of the SOCKS relay.
 	if runtime.GOOS == "windows" && *noTunnel && tcfg.PrivateKey != "" {
-		if _, werr := plat.WriteTunnelConfig(tcfg); werr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write the relay tunnel config: %v\n", werr)
+		if w, ok := plat.(interface{ WriteRelayConfig(core.TunnelConfig) error }); ok {
+			if werr := w.WriteRelayConfig(tcfg); werr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write the relay tunnel config: %v\n", werr)
+			}
 		}
 	}
 	// A previous failed install can leave files inside the directory that the

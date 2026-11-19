@@ -1025,3 +1025,18 @@ func (p windowsPlatform) PrepareInstall() error {
 	}
 	return nil
 }
+
+// WriteRelayConfig writes only wg0ws.conf, the relay-endpoint variant. Split
+// mode never uses the direct endpoint, and writing wg0.conf made verification
+// read a private key and demand a tunnel that split does not run.
+func (p windowsPlatform) WriteRelayConfig(c core.TunnelConfig) error {
+	if err := os.MkdirAll(winProgramData, 0700); err != nil {
+		return err
+	}
+	c.Endpoint = c.RelayEndpoint()
+	path := filepath.Join(winProgramData, "wg0ws.conf")
+	if err := os.WriteFile(path, []byte(core.RenderWGConfig(c)), 0600); err != nil {
+		return err
+	}
+	return p.SecureInstallDir()
+}
