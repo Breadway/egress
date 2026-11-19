@@ -34,16 +34,20 @@ func ProxyDir() string {
 	return "."
 }
 
+// The Reg* family returns its error code directly and does not set the thread
+// last error, so the third return of Call is 0 even on failure. Using it made
+// a missing key report "The operation completed successfully.", which named
+// neither the key nor the problem.
 func RegSetString(subkey, name, value string) error {
 	sub, err := syscall.UTF16PtrFromString(subkey)
 	if err != nil {
 		return err
 	}
 	var key syscall.Handle
-	res, _, callErr := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(sub)),
+	res, _, _ := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(sub)),
 		0, keySetValue, uintptr(unsafe.Pointer(&key)))
 	if res != 0 {
-		return callErr
+		return syscall.Errno(res)
 	}
 	defer procRegCloseKey.Call(uintptr(key))
 	n, _ := syscall.UTF16PtrFromString(name)
@@ -51,10 +55,10 @@ func RegSetString(subkey, name, value string) error {
 	if err != nil {
 		return err
 	}
-	res, _, callErr = procRegSetValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(n)),
+	res, _, _ = procRegSetValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(n)),
 		0, regSZ, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)*2))
 	if res != 0 {
-		return callErr
+		return syscall.Errno(res)
 	}
 	return nil
 }
@@ -65,18 +69,18 @@ func RegSetDWORD(subkey, name string, value uint32) error {
 		return err
 	}
 	var key syscall.Handle
-	res, _, callErr := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(sub)),
+	res, _, _ := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(sub)),
 		0, keySetValue, uintptr(unsafe.Pointer(&key)))
 	if res != 0 {
-		return callErr
+		return syscall.Errno(res)
 	}
 	defer procRegCloseKey.Call(uintptr(key))
 	n, _ := syscall.UTF16PtrFromString(name)
 	v := value
-	res, _, callErr = procRegSetValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(n)),
+	res, _, _ = procRegSetValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(n)),
 		0, regDWORD, uintptr(unsafe.Pointer(&v)), 4)
 	if res != 0 {
-		return callErr
+		return syscall.Errno(res)
 	}
 	return nil
 }
@@ -87,10 +91,10 @@ func RegDeleteValue(subkey, name string) error {
 		return err
 	}
 	var key syscall.Handle
-	res, _, callErr := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(sub)),
+	res, _, _ := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(sub)),
 		0, keySetValue, uintptr(unsafe.Pointer(&key)))
 	if res != 0 {
-		return callErr
+		return syscall.Errno(res)
 	}
 	defer procRegCloseKey.Call(uintptr(key))
 	n, _ := syscall.UTF16PtrFromString(name)
