@@ -265,8 +265,22 @@ func SaveDeviceIdentity(id DeviceIdentity) error {
 	if err := os.WriteFile(tmp, append(data, '\n'), 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		// A file left by an earlier install can carry an ACL that refuses the
+		// replace. Clear it through the platform hook and try once more, or the
+		// device ends up bound with no identity and every upload is refused.
+		RemoveStale(path)
+		if err2 := os.Rename(tmp, path); err2 != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	return nil
 }
+
+// RemoveStale clears a path the current process may not touch. The egress
+// package points this at the platform helper, which resets the ACL on Windows.
+var RemoveStale = func(path string) { _ = os.Remove(path) }
 
 // SendState reports a device that was disabled or enabled outside install.
 // Best effort: a report must never fail the command.
