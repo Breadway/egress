@@ -1298,7 +1298,7 @@ func (s *server) adminDash(w http.ResponseWriter, r *http.Request) {
 		pending, ready, bound, invited,
 		attentionAlert(failed, parked, stale),
 		recentApplicationsHTML(fl.apps, fl.deviceStatusMap()),
-		deviceTable(rows))
+		s.fleetTableHTML(fl))
 	s.renderNav(w, true, "admin", "Admin", body)
 }
 
