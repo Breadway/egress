@@ -246,6 +246,15 @@ func runInstall(plat platform, args []string) (err error) {
 	}
 	// Register the Application log source once, while we hold the rights.
 	winlog.EnsureSource()
+	// Repair what an earlier interrupted or damaged install left behind, before
+	// this one writes anything: tasks and processes holding the binaries, DNS
+	// pointing at a dead listener, a directory whose ACLs are broken, and the
+	// files this install regenerates anyway.
+	if prep, ok := plat.(interface{ PrepareInstall() error }); ok {
+		if err := prep.PrepareInstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not repair the previous install: %v\n", err)
+		}
+	}
 
 	// Validate everything that can fail without touching the system before
 	// stopping the running supervisor: while the old service is up, DNS

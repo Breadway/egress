@@ -915,3 +915,80 @@ func (windowsPlatform) checkInstallDirWritable() error {
 	_ = f.Close()
 	return os.Remove(name)
 }
+
+// PrepareInstall repairs what a previous, interrupted or damaged install left
+// behind, before this one writes anything.
+//
+// Every failure that cost a day of debugging was the same shape: a file from
+// an earlier run that this install then had to read or overwrite. Rather than
+// handle them one at a time where they surfaced, do the whole set up front:
+// stop what holds the binaries, put the resolver back so enrolment can reach
+// the network, repair the directory and every file in it, and remove the
+// leftovers that are regenerated anyway.
+//
+// Best effort throughout. Whatever cannot be cleaned is reported and the
+// install continues, because a stale file is not a reason to refuse to install.
+func (p windowsPlatform) PrepareInstall() error {
+	var notes []string
+
+	// 1. Nothing may be running from the directory we are about to touch.
+	for _, task := range []string{winTaskName, "egress-update-check", "egress-update-apply", "egress-split-user"} {
+		_ = logx.RunLogged("schtasks", "/end", "/tn", task)
+	}
+	StopUserProxy()
+	stopWstunnel()
+	for _, svc := range []string{"WireGuardTunnel$wg0", "WireGuardTunnel$wg0ws"} {
+		_ = logx.RunLogged("sc", "stop", svc)
+		_ = logx.RunLogged("sc", "delete", svc)
+	}
+	removeHostRoute()
+
+	// 2. A half-installed machine often has no working resolver: install
+	// pointed it at a listener that is not running, and enrolment cannot reach
+	// the network until that is undone.
+	if err := p.restoreDNS(); err != nil {
+		notes = append(notes, "dns: "+err.Error())
+	}
+	RemoveProxyAutostart()
+	ClearUserPAC()
+	_ = logx.RunLogged("netsh", "winhttp", "reset", "proxy")
+	_ = logx.RunLogged("ipconfig", "/flushdns")
+
+	if _, err := os.Stat(winProgramData); err != nil {
+		if len(notes) > 0 {
+			logx.Logger().Printf("prepare install: %s", strings.Join(notes, "; "))
+		}
+		return nil
+	}
+
+	// 3. Ownership and ACLs for the directory and every file under it.
+	_ = logx.RunLogged("takeown", "/f", winProgramData, "/r", "/d", "y")
+	_ = logx.RunLogged("icacls", winProgramData, "/reset", "/t", "/c", "/q")
+	_ = logx.RunLogged("icacls", winProgramData,
+		"/grant", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/t", "/c")
+	if err := p.checkInstallDirWritable(); err != nil {
+		notes = append(notes, "directory not writable: "+err.Error())
+	}
+
+	// 4. Files this install writes again from scratch.
+	for _, name := range []string{
+		"socks-auth", "start-egress.cmd", "dns-fallback.txt",
+		"egress.exe.new", "egress.exe.tmp", "proxy.pac",
+	} {
+		RemoveStaleFile(filepath.Join(winProgramData, name))
+	}
+	// A split profile written by a broken run is unreadable and blocks the
+	// proxy; it is reseeded from the feed on first use.
+	profiles, _ := filepath.Glob(filepath.Join(winProgramData, "split-*.json"))
+	for _, path := range profiles {
+		RemoveStaleFile(path)
+	}
+	if len(profiles) > 0 {
+		notes = append(notes, fmt.Sprintf("dropped %d stale split profile(s)", len(profiles)))
+	}
+
+	if len(notes) > 0 {
+		logx.Logger().Printf("prepare install: %s", strings.Join(notes, "; "))
+	}
+	return nil
+}
