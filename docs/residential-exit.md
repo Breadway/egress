@@ -117,3 +117,19 @@ There is no certificate authority in this design: the browser still shows its
 own error page for an unserved HTTPS site, and this page is where the
 explanation lives. A browser-injected page would require a device-local CA and
 is deliberately not implemented.
+
+## Relay credentials and the admin page
+
+Per-device relay credentials live in `/etc/egress-socks/auth`. The relay runs as
+`egress-socks` and the admin server runs as `bypass`, so the directory has to be
+traversable by the server even though the file is not:
+
+```
+/etc/egress-socks        0751 root:egress-socks
+/etc/egress-socks/auth   0640 bypass:egress-socks
+```
+
+With the directory at `0750` the Relay page reports `permission denied` on a
+file whose own mode looks correct, because the server cannot traverse the
+directory to reach it. Rotating or revoking from the page writes the file as
+`bypass`, which is why the server owns it.
