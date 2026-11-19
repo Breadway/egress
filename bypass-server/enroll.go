@@ -401,29 +401,86 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	if len(reg.Devices) == 0 {
 		b.WriteString(`<p class="muted">No invites yet.</p>`)
 	} else {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>Label</th><th>Application</th><th>Status</th><th>Report</th><th>Address</th><th>Key</th><th>Created</th><th>Expires</th><th></th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>State</th><th>Build</th><th>Last report</th><th>Update check</th><th>Address</th><th></th></tr></thead><tbody>`)
 		fl := s.loadFleet()
 		for _, d := range reg.Devices {
-			appCell := `<span class="muted">&mdash;</span>`
+			appCell := ""
 			if a, ok := fl.deviceApp(d); ok {
-				appCell = fmt.Sprintf(`<a href="/admin/applications/%s">%s</a>`, template.HTMLEscapeString(a.ID), template.HTMLEscapeString(a.Name))
+				appCell = ` &middot; <a href="/admin/applications/` + template.HTMLEscapeString(a.ID) + `">` + template.HTMLEscapeString(a.Name) + `</a>`
 			}
-			key := ""
-			if d.PubKey != "" {
-				key = fingerprint(d.PubKey)
+			deviceCell := fmt.Sprintf(`<a href="/admin/devices/%s"><strong>%s</strong></a><span class="cell-sub"><code>%s</code>%s</span>`,
+				template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.Label), template.HTMLEscapeString(d.ID), appCell)
+
+			state, class, build, reportCell, pollCell := s.deviceState(d)
+			if build == "" {
+				build = "&mdash;"
 			}
 			action := ""
 			if d.Status == "issued" {
 				action = `<form method="post" action="/admin/devices"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><button class="btn ghost small" type="submit">Revoke</button></form>`
 			}
-			fmt.Fprintf(&b, `<tr><td><a href="/admin/devices/%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-				template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.ID),
-				template.HTMLEscapeString(d.Label), appCell,
-				template.HTMLEscapeString(d.Status), s.reportCell(d.PubKey),
-				template.HTMLEscapeString(d.IP), template.HTMLEscapeString(key),
-				template.HTMLEscapeString(d.Created), template.HTMLEscapeString(d.Expires), action)
+			addr := template.HTMLEscapeString(d.IP)
+			if addr == "" {
+				addr = `<span class="muted">unassigned</span>`
+			}
+			fmt.Fprintf(&b, `<tr><td>%s</td><td><span class="pill %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+				deviceCell, class, esc(state), build, reportCell, pollCell, addr, action)
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
 	s.renderNav(w, true, "devices", "Devices", b.String())
+}
+
+// deviceState is the one place that decides how healthy a device looks.
+//
+// The update check runs every minute and heartbeats, so its recency says
+// whether the machine is alive at all. The report says whether what is running
+// actually works. Together they answer the three questions an operator has:
+// is it off, is it polling but broken, or is it fine.
+func (s *server) deviceState(d device) (label, class, build, reportCell, pollCell string) {
+	reportCell = `<span class="muted">never</span>`
+	pollCell = `<span class="muted">never</span>`
+
+	rep, hasReport := s.latestReport(d.PubKey)
+	hb, hasHeartbeat := s.latestHeartbeat(d.PubKey)
+
+	if hasReport {
+		l, c := effectiveStatus(rep.Report)
+		reportCell = fmt.Sprintf(`<span class="pill %s">%s</span><span class="cell-sub">%s</span>`,
+			c, esc(l), esc(timeAgo(rep.Received)))
+		build = rep.Report.Version
+	}
+	if hasHeartbeat {
+		pollCell = esc(timeAgo(hb.Last))
+		if build == "" {
+			build = hb.Version
+		}
+	}
+
+	switch {
+	case d.Status != "bound":
+		return "invite", "", build, reportCell, pollCell
+	case !hasReport && !hasHeartbeat:
+		return "never installed", "warn", build, reportCell, pollCell
+	case hasHeartbeat && within(hb.Last, 10*time.Minute) && hasReport && within(rep.Received, 30*time.Minute):
+		if rep.Report.Status == "functional" {
+			return "healthy", "ok", build, reportCell, pollCell
+		}
+		return "degraded", "warn", build, reportCell, pollCell
+	case hasHeartbeat && within(hb.Last, 10*time.Minute):
+		return "polling", "warn", build, reportCell, pollCell
+	case hasReport && within(rep.Received, 30*time.Minute):
+		return "no updater", "warn", build, reportCell, pollCell
+	default:
+		return "off", "bad", build, reportCell, pollCell
+	}
+}
+
+// within reports whether a timestamp is newer than age.
+func within(ts string, age time.Duration) bool {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return false
+	}
+	return time.Since(t) <= age
 }
