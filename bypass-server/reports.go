@@ -501,3 +501,39 @@ func reportHistory(history []reportRecord) string {
 	b.WriteString(`</tbody></table></div></details>`)
 	return b.String()
 }
+
+// latestReport returns the newest stored report for a device, if any. Reports
+// are keyed by public key, so this works for token-enrolled devices that have
+// no entry in users.json.
+func (s *server) latestReport(pubkey string) (storedReport, bool) {
+	if pubkey == "" {
+		return storedReport{}, false
+	}
+	data, err := os.ReadFile(filepath.Join(s.state, "reports", reportSlug(pubkey)+".json"))
+	if err != nil {
+		return storedReport{}, false
+	}
+	var r storedReport
+	if json.Unmarshal(data, &r) != nil {
+		return storedReport{}, false
+	}
+	return r, true
+}
+
+// reportCell renders the last report for a device as a status pill plus build
+// and time, or a dash when the device has never called in.
+func (s *server) reportCell(pubkey string) string {
+	if pubkey == "" {
+		return `<span class="muted">&mdash;</span>`
+	}
+	rep, ok := s.latestReport(pubkey)
+	if !ok {
+		return `<span class="muted">none</span>`
+	}
+	class := "ok"
+	if rep.Report.Status != "functional" {
+		class = "bad"
+	}
+	return fmt.Sprintf(`<span class="pill %s">%s</span><span class="cell-sub">%s &middot; %s</span>`,
+		class, esc(rep.Report.Status), esc(displayTime(rep.Received)), esc(rep.Report.Version))
+}

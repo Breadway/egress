@@ -401,7 +401,7 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	if len(reg.Devices) == 0 {
 		b.WriteString(`<p class="muted">No invites yet.</p>`)
 	} else {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>Label</th><th>Status</th><th>Address</th><th>Key</th><th>Created</th><th>Expires</th><th></th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>Label</th><th>Status</th><th>Report</th><th>Address</th><th>Key</th><th>Created</th><th>Expires</th><th></th></tr></thead><tbody>`)
 		for _, d := range reg.Devices {
 			key := ""
 			if d.PubKey != "" {
@@ -411,8 +411,9 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			if d.Status == "issued" {
 				action = `<form method="post" action="/admin/devices"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><button class="btn ghost small" type="submit">Revoke</button></form>`
 			}
-			fmt.Fprintf(&b, `<tr><td><a href="/admin/devices/%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+			fmt.Fprintf(&b, `<tr><td><a href="/admin/devices/%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>`,
 				template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.ID), template.HTMLEscapeString(d.Label), template.HTMLEscapeString(d.Status),
+				s.reportCell(d.PubKey),
 				template.HTMLEscapeString(d.IP), template.HTMLEscapeString(key),
 				template.HTMLEscapeString(d.Created), template.HTMLEscapeString(d.Expires), action)
 		}
