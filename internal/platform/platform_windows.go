@@ -726,6 +726,13 @@ func (windowsPlatform) InstallWstunnel() (string, error) {
 	if _, err := os.Stat(dest); err != nil {
 		return "", fmt.Errorf("the tunneler was removed after extraction (%v); add an exclusion with `egress allow-defender` or install a signed build", err)
 	}
+	// The tunneler is a Rust build and needs the Visual C++ runtime. Without
+	// it the process exits with no output and no error, which looks exactly
+	// like a blocked network and cost a day to identify. Prove it starts.
+	if out, err := exec.Command(dest, "--version").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("the tunneler cannot start (%v); install the Microsoft Visual C++ redistributable (vc_redist.x64.exe) and retry: %s",
+			err, logx.Truncate(strings.TrimSpace(string(out)), 200))
+	}
 	return dest, nil
 }
 
