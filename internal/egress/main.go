@@ -327,7 +327,7 @@ func runInstall(plat platform, args []string) (err error) {
 			// the credential the device had just earned, and the next enable
 			// dead-ended on "no SOCKS relay credentials in this build" with no
 			// token left to enrol again.
-			if werr := writeSocksAuth(filepath.Join(core.InstallDir(), "socks-auth"),
+			if werr := writeSocksAuth(core.CredentialPath(),
 				creds.RelayUser, creds.RelayPass); werr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save the relay credential: %v\n", werr)
 			}
@@ -527,7 +527,7 @@ func runInstall(plat platform, args []string) (err error) {
 			fmt.Fprintf(os.Stderr, "warning: could not save the device identity: %v\n", err)
 		}
 		if enrollRelayUser != "" && enrollRelayPass != "" {
-			if err := writeSocksAuth(filepath.Join(core.InstallDir(), "socks-auth"), enrollRelayUser, enrollRelayPass); err != nil {
+			if err := writeSocksAuth(core.CredentialPath(), enrollRelayUser, enrollRelayPass); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save the relay credential: %v\n", err)
 			}
 		}
@@ -770,6 +770,9 @@ func cmdSupervise(args []string) error {
 	defer stop()
 	if direct != nil {
 		go direct.Run(ctx)
+	}
+	if peers, ok := plat.(peerPlatform); ok && !*noTunnel {
+		go newPeerManager(peers, splitDev, appLogger()).Run(ctx)
 	}
 	if *relayTunnel {
 		// The relay tunnel is the path for learned-blocked destinations on

@@ -226,19 +226,7 @@ type DeviceIdentity struct {
 	IP     string `json:"ip,omitempty"`
 }
 
-func DeviceIdentityPath() string {
-	switch runtime.GOOS {
-	case "windows":
-		return `C:\ProgramData\egress\device.json`
-	case "linux":
-		return "/var/lib/egress/device.json"
-	default:
-		if dir, err := os.UserConfigDir(); err == nil {
-			return filepath.Join(dir, "egress", "device.json")
-		}
-		return "device.json"
-	}
-}
+func DeviceIdentityPath() string { return core.DeviceIdentityPath() }
 
 func LoadDeviceIdentity() (DeviceIdentity, error) {
 	var id DeviceIdentity
