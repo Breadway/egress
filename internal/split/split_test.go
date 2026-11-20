@@ -1029,3 +1029,36 @@ func TestLoadProfileDropsStaleAllowedVerdicts(t *testing.T) {
 		t.Errorf("probe version %d, want %d", p.ProbeVersion, probeVersion)
 	}
 }
+
+// A TLS stall is also what a host without HTTPS looks like, so it must not be
+// spread to the fleet; a rejected status or an identified block page can only
+// come from something on the path.
+func TestStrongBlockEvidence(t *testing.T) {
+	strong := []Evidence{EvidenceIPRejected, EvidenceCertSubstitution, EvidenceFeed,
+		Evidence(EvidenceInterceptPage + ":fortigate")}
+	weak := []Evidence{EvidenceConnectStall, EvidenceTLSStall, EvidenceNone}
+	for _, e := range strong {
+		if !strongBlockEvidence(e) {
+			t.Errorf("%q should be shareable", e)
+		}
+	}
+	for _, e := range weak {
+		if strongBlockEvidence(e) {
+			t.Errorf("%q must not be shareable", e)
+		}
+	}
+}
+
+func TestShareableBlocks(t *testing.T) {
+	p := NewProfile("n")
+	p.Entries["keep.test"] = DomainEntry{State: StateBlocked, Evidence: EvidenceIPRejected}
+	p.Entries["keep2.test"] = DomainEntry{State: StateBlocked, Evidence: Evidence(EvidenceInterceptPage + ":fortigate")}
+	p.Entries["stall.test"] = DomainEntry{State: StateBlocked, Evidence: EvidenceTLSStall}
+	p.Entries["allowed.test"] = DomainEntry{State: StateAllowed}
+	p.Entries["pinned.test"] = DomainEntry{State: StateBlocked, Evidence: EvidenceIPRejected}
+	ov := Overrides{Allow: map[string]bool{"pinned.test": true}}
+	got := shareableBlocks(p, ov)
+	if len(got) != 2 || got[0].domain != "keep.test" || got[1].domain != "keep2.test" {
+		t.Fatalf("shareable blocks = %+v", got)
+	}
+}

@@ -196,7 +196,12 @@ func (c *Controller) probe(domain string) {
 	delete(c.probing, domain)
 	reporter := c.reporter
 	c.mu.Unlock()
-	if res.State == StateBlocked && before != StateBlocked && reporter != nil {
+	// Only a verdict strong enough to mean a filter is shared. A TLS stall is
+	// also what a host without an HTTPS service looks like: this profile holds
+	// 0.arch.pool.ntp.org and CDN hosts for that reason, and routing those into
+	// the tunnel on every device would be worse than learning them locally.
+	if res.State == StateBlocked && before != StateBlocked && reporter != nil &&
+		strongBlockEvidence(res.Evidence) {
 		reporter.Report(domain, res.Evidence)
 	}
 
@@ -207,6 +212,75 @@ func (c *Controller) probe(domain string) {
 		c.routes.Remove(remove)
 	}
 	log.Printf("split: probe %s", res.String())
+}
+
+// strongBlockEvidence reports whether a block verdict is specific enough to
+// share with other devices. A TCP or TLS stall is not: dead hosts and services
+// without HTTPS produce the same result as a filter. A rejected status, a
+// substituted certificate or an identified block page can only come from
+// something acting on the path.
+func strongBlockEvidence(e Evidence) bool {
+	switch e {
+	case EvidenceIPRejected, EvidenceCertSubstitution, EvidenceFeed:
+		return true
+	}
+	return strings.HasPrefix(string(e), string(EvidenceInterceptPage))
+}
+
+type sharedBlock struct {
+	domain   string
+	evidence Evidence
+}
+
+// shareableBlocks selects the local blocked set worth sharing, deterministically.
+func shareableBlocks(p *Profile, overrides Overrides) []sharedBlock {
+	out := make([]sharedBlock, 0, len(p.Entries))
+	for domain, entry := range p.Entries {
+		if entry.State != StateBlocked || !strongBlockEvidence(entry.Evidence) {
+			continue
+		}
+		if overrides.Allowed(domain) {
+			continue
+		}
+		out = append(out, sharedBlock{domain: domain, evidence: entry.Evidence})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].domain < out[j].domain })
+	return out
+}
+
+// shareKnownBlocks sends the blocked set this device already holds, in batches,
+// so the shared table catches up with reality after a failed report or an
+// upgrade that started sharing later.
+func (c *Controller) shareKnownBlocks(ctx context.Context) {
+	c.mu.Lock()
+	blocks := shareableBlocks(c.profile, c.overrides)
+	network := c.network
+	reporter := c.reporter
+	c.mu.Unlock()
+	if reporter == nil || len(blocks) == 0 {
+		return
+	}
+	shared := 0
+	for start := 0; start < len(blocks); start += splitReportBatch {
+		end := start + splitReportBatch
+		if end > len(blocks) {
+			end = len(blocks)
+		}
+		for _, b := range blocks[start:end] {
+			reporter.Report(b.domain, b.evidence)
+		}
+		if err := reporter.flush(ctx); err != nil {
+			c.log.Printf("split: shared %d of %d known blocks, then stopped: %v", shared, len(blocks), err)
+			return
+		}
+		shared += end - start
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	c.log.Printf("split: shared %d known blocks for %s", shared, network)
 }
 
 // Sweep probes seed candidates that have not been tested recently, so common
@@ -225,6 +299,12 @@ func (c *Controller) Run(ctx context.Context) {
 	defer sweep.Stop()
 
 	go c.reporter.Run(ctx)
+	// The transition above is edge triggered. A report that failed once, or a
+	// verdict from before the share existed, otherwise stays on this device
+	// forever, and the shared table never converges with what the machine
+	// knows. Replaying the blocked set on start is safe because the server
+	// merges observations idempotently.
+	go c.shareKnownBlocks(ctx)
 	c.Sweep()
 	for {
 		select {
