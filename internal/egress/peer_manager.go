@@ -74,8 +74,9 @@ type peerManager struct {
 	// live WireGuard interface.
 	handshake func(dev, pubkey string) (time.Duration, bool)
 
-	mu    sync.Mutex
-	links map[string]*peerLink
+	mu        sync.Mutex
+	links     map[string]*peerLink
+	lastCount int
 }
 
 func newPeerManager(plat peerPlatform, dev string, logger *log.Logger) *peerManager {
@@ -128,6 +129,14 @@ func (m *peerManager) refresh(ctx context.Context) {
 		return
 	}
 	m.setDesired(peers)
+	m.mu.Lock()
+	count := len(m.links)
+	changed := count != m.lastCount
+	m.lastCount = count
+	m.mu.Unlock()
+	if changed {
+		m.log.Printf("peers: %d direct candidate(s)", count)
+	}
 }
 
 // setDesired is the part of refresh that does not touch the network, split out
