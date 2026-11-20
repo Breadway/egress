@@ -54,11 +54,24 @@ type feedProtocol struct {
 	Count    int    `json:"count"`
 }
 
+// DirectExit is an exit a client dials itself. The endpoint is host:port of
+// the TLS listener that carries the WebSocket upgrade, and Path is where the
+// relay answers.
+type DirectExit struct {
+	ID       string `json:"id"`
+	Label    string `json:"label,omitempty"`
+	Endpoint string `json:"endpoint"`
+	Path     string `json:"path,omitempty"`
+	PubKey   string `json:"pubkey"`
+	Priority int    `json:"priority,omitempty"`
+}
+
 type feedResponse struct {
 	Version   int            `json:"version"`
 	NetworkID string         `json:"network_id"`
 	Domains   []feedDomain   `json:"domains"`
 	Protocols []feedProtocol `json:"protocols,omitempty"`
+	Exits     []DirectExit   `json:"exits,omitempty"`
 	// Refresh lists due sites this client has been leased to re-verify.
 	Refresh []feedDomain `json:"refresh,omitempty"`
 }
@@ -108,6 +121,7 @@ type splitReporter struct {
 	seedURL   string
 	reportURL string
 	mergeFunc func([]feedDomain, []feedProtocol)
+	exitsFunc func([]DirectExit)
 }
 
 func newSplitReporter(network, dir string, logger *log.Logger) *splitReporter {
@@ -308,8 +322,20 @@ func (r *splitReporter) fetchFeed(ctx context.Context) error {
 	}
 	log.Printf("split: feed has %d domains and %d protocol notes", len(feed.Domains), len(feed.Protocols))
 	r.merge(feed.Domains, feed.Protocols)
+	r.mergeExits(feed.Exits)
 	r.refreshDue(feed.Refresh)
 	return nil
+}
+
+// mergeExits hands the direct exit list to the controller. Exits are optional
+// and may be absent on an older server, which simply means none.
+func (r *splitReporter) mergeExits(exits []DirectExit) {
+	r.mu.Lock()
+	cb := r.exitsFunc
+	r.mu.Unlock()
+	if cb != nil {
+		cb(exits)
+	}
 }
 
 // merge writes feed entries into the profile as blocked. It is called from the
@@ -325,6 +351,13 @@ func (r *splitReporter) merge(domains []feedDomain, protocols []feedProtocol) {
 }
 
 // mergeFunc is installed by the split controller.
+// SetExitsFunc receives the direct exits published with the feed.
+func (r *splitReporter) SetExitsFunc(fn func([]DirectExit)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.exitsFunc = fn
+}
+
 func (r *splitReporter) SetMergeFunc(fn func([]feedDomain, []feedProtocol)) {
 	r.mu.Lock()
 	r.mergeFunc = fn

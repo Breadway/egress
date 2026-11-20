@@ -426,13 +426,42 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 		State    string `json:"state"`
 		Count    int    `json:"count"`
 	}
+	// Direct exits travel with the feed: the client needs an endpoint and a
+	// public key to dial one itself, and the hub router never sees them.
+	type seedExit struct {
+		ID       string `json:"id"`
+		Label    string `json:"label,omitempty"`
+		Endpoint string `json:"endpoint"`
+		Path     string `json:"path,omitempty"`
+		PubKey   string `json:"pubkey"`
+		Priority int    `json:"priority,omitempty"`
+	}
 	out := struct {
 		Version   int            `json:"version"`
 		NetworkID string         `json:"network_id"`
 		Domains   []seedDomain   `json:"domains"`
 		Protocols []seedProtocol `json:"protocols,omitempty"`
+		Exits     []seedExit     `json:"exits,omitempty"`
 		Refresh   []seedDomain   `json:"refresh,omitempty"`
 	}{Version: splitFeedVersion, NetworkID: id}
+
+	if reg, rerr := loadExitRegistry(exitRegistryPath()); rerr == nil {
+		for _, e := range reg.Exits {
+			if !e.Enabled || !e.Direct || e.Endpoint == "" || e.PubKey == "" {
+				continue
+			}
+			out.Exits = append(out.Exits, seedExit{
+				ID: e.ID, Label: e.Label, Endpoint: e.Endpoint,
+				Path: e.Path, PubKey: e.PubKey, Priority: e.Priority,
+			})
+		}
+		sort.Slice(out.Exits, func(i, j int) bool {
+			if out.Exits[i].Priority != out.Exits[j].Priority {
+				return out.Exits[i].Priority < out.Exits[j].Priority
+			}
+			return out.Exits[i].ID < out.Exits[j].ID
+		})
+	}
 
 	names := make([]string, 0, len(feed.Domains))
 	for domain := range feed.Domains {

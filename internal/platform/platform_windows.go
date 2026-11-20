@@ -860,6 +860,41 @@ func (p windowsPlatform) SetPeerAllowedIPs(dev string, prefixes []string) error 
 	return nil
 }
 
+// SetPeer adds or updates a WireGuard peer. An empty endpoint leaves the
+// configured one alone, which is what the Aegis peer needs: it must keep the
+// relay endpoint from the config file.
+func (p windowsPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string) error {
+	exe := wgExe()
+	if exe == "" {
+		return errors.New("wg.exe not found")
+	}
+	args := []string{"set", dev, "peer", pubkey}
+	if endpoint != "" {
+		args = append(args, "endpoint", endpoint, "persistent-keepalive", "25")
+	}
+	if len(allowed) > 0 {
+		args = append(args, "allowed-ips", strings.Join(allowed, ","))
+	}
+	out, err := logx.ExecLogged(exe, args...)
+	if err != nil {
+		return fmt.Errorf("wg set %s peer: %v (%s)", dev, err, logx.Truncate(string(out), 300))
+	}
+	return nil
+}
+
+// RemovePeer drops a peer, which also removes the destinations it carried.
+func (p windowsPlatform) RemovePeer(dev, pubkey string) error {
+	exe := wgExe()
+	if exe == "" {
+		return errors.New("wg.exe not found")
+	}
+	out, err := logx.ExecLogged(exe, "set", dev, "peer", pubkey, "remove")
+	if err != nil {
+		return fmt.Errorf("wg set %s peer remove: %v (%s)", dev, err, logx.Truncate(string(out), 300))
+	}
+	return nil
+}
+
 func tunnelServiceUp(name string) bool {
 	out, err := logx.ExecLogged("sc", "query", "WireGuardTunnel$"+name)
 	return err == nil && strings.Contains(string(out), "RUNNING")
