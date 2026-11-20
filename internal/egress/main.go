@@ -123,6 +123,8 @@ func realMain() error {
 	switch command {
 	case "install":
 		return cmdInstall(args)
+	case "peers":
+		return cmdPeers(args)
 	case "tray":
 		return cmdTray(args)
 	case "supervise":
