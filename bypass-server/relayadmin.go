@@ -65,7 +65,15 @@ func writeRelayAuth(path string, users map[string]string) error {
 	}
 	// Write in place so the file keeps its owner and group: the relay runs as
 	// a different user and reads it through group permission.
-	return os.WriteFile(path, []byte(b.String()), 0640)
+	if err := os.WriteFile(path, []byte(b.String()), 0640); err != nil {
+		return err
+	}
+	// WriteFile only applies the mode when it creates the file. A file that
+	// already exists with 0600 keeps it, the relay then fails to read it, and
+	// every split client loses its blocked path while the server looks fine.
+	// This happened after an enrollment rewrote a file that predated the group
+	// grant, and went unnoticed for hours.
+	return os.Chmod(path, 0640)
 }
 
 func readRelayUsage(path string) map[string]int64 {
