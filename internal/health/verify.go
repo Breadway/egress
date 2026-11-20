@@ -227,6 +227,13 @@ func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) er
 
 		if r.Probe == "ok" {
 			fmt.Printf("[ok]   %s answers through the tunnel\n", core.AegisTunnelIP)
+		} else if tcfg.Split {
+			// A split client only routes learned destinations into the tunnel,
+			// and some networks drop ICMP at the exit. A fresh handshake and
+			// moving counters prove the tunnel carries traffic; failing here
+			// said "broken" on a device that was working.
+			fmt.Printf("[warn] %s did not answer a ping; the tunnel handshake is the authority for split mode\n",
+				core.AegisTunnelIP)
 		} else {
 			fmt.Printf("[FAIL] %s does not answer through the tunnel\n", core.AegisTunnelIP)
 			failed = true
