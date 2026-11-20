@@ -53,6 +53,10 @@ type device struct {
 	// visible inside a circle; an empty value is the original "bread" circle,
 	// so existing devices keep working unchanged.
 	Circle string `json:"circle,omitempty"`
+	// DerpPubKey is the device's relay identity. It is separate from the
+	// WireGuard key on purpose: the relay learns this key, and it must not be
+	// the key that protects the tunnel.
+	DerpPubKey string `json:"derp_pubkey,omitempty"`
 }
 
 type deviceRegistry struct {

@@ -191,6 +191,7 @@ func main() {
 	s.mux.HandleFunc("/api/blocked-report", s.apiBlockedReport)
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
 	s.mux.HandleFunc("/api/peers", s.apiPeers)
+	s.mux.HandleFunc("/api/derp-key", s.apiDerpKey)
 	s.mux.HandleFunc("/api/peer-exits", s.apiPeerExits)
 	s.mux.HandleFunc("/api/exit/announce", s.apiExitAnnounce)
 	s.mux.HandleFunc("/api/exit/use", s.apiExitUse)

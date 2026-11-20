@@ -60,11 +60,12 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 
 	endpoints := loadEndpoints()
 	type peer struct {
-		Label    string `json:"label"`
-		PubKey   string `json:"pubkey"`
-		IP       string `json:"ip"`
-		Endpoint string `json:"endpoint,omitempty"`
-		Circle   string `json:"circle"`
+		Label      string `json:"label"`
+		PubKey     string `json:"pubkey"`
+		IP         string `json:"ip"`
+		Endpoint   string `json:"endpoint,omitempty"`
+		DerpPubKey string `json:"derp_pubkey,omitempty"`
+		Circle     string `json:"circle"`
 	}
 	peers := make([]peer, 0, len(reg.Devices))
 	for _, d := range reg.Devices {
@@ -75,11 +76,12 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		peers = append(peers, peer{
-			Label:    d.Label,
-			PubKey:   d.PubKey,
-			IP:       d.IP,
-			Endpoint: endpoints[d.PubKey],
-			Circle:   circleOf(d),
+			Label:      d.Label,
+			PubKey:     d.PubKey,
+			IP:         d.IP,
+			Endpoint:   endpoints[d.PubKey],
+			DerpPubKey: d.DerpPubKey,
+			Circle:     circleOf(d),
 		})
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].IP < peers[j].IP })

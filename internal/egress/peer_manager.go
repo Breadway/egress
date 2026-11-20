@@ -32,14 +32,16 @@ type peerConfigPlatform interface {
 }
 
 type apiPeer struct {
-	Label    string `json:"label"`
-	PubKey   string `json:"pubkey"`
-	IP       string `json:"ip"`
-	Endpoint string `json:"endpoint"`
+	Label      string `json:"label"`
+	PubKey     string `json:"pubkey"`
+	IP         string `json:"ip"`
+	Endpoint   string `json:"endpoint"`
+	DerpPubKey string `json:"derp_pubkey"`
 }
 
 type peerLink struct {
 	pubkey   string
+	derpKey  string
 	ip       string
 	endpoint string
 	dialable bool
@@ -52,6 +54,8 @@ type peerLink struct {
 	dialing   bool
 	dialStart time.Time
 	direct    bool
+	derping   bool
+	derped    bool
 	failures  int
 
 	backoffUntil time.Time
@@ -95,16 +99,19 @@ type peerManager struct {
 	handshake func(dev, pubkey string) (time.Duration, bool)
 	// exclude names a peer another manager owns, currently the active exit.
 	exclude func() string
+	// relay carries peers that cannot be reached directly. Nil disables the
+	// DERP fallback and leaves the Aegis star as the only alternative.
+	relay *derpTransport
 
 	mu        sync.Mutex
 	links     map[string]*peerLink
 	lastCount int
 }
 
-func newPeerManager(plat peerPlatform, dev string, logger *log.Logger, exclude func() string) *peerManager {
+func newPeerManager(plat peerPlatform, dev string, logger *log.Logger, exclude func() string, relay *derpTransport) *peerManager {
 	m := &peerManager{
 		plat: plat, dev: dev, log: logger, links: map[string]*peerLink{},
-		self: devicePubkey(), handshake: handshakeAge, exclude: exclude,
+		self: devicePubkey(), handshake: handshakeAge, exclude: exclude, relay: relay,
 	}
 	return m
 }
@@ -209,6 +216,7 @@ func (m *peerManager) setDesired(peers []apiPeer) {
 			link.failures = 0
 		}
 		link.ip, link.endpoint = p.IP, p.Endpoint
+		link.derpKey = p.DerpPubKey
 		link.dialable = dialable(p.Endpoint)
 	}
 }
@@ -247,36 +255,25 @@ func (m *peerManager) reconcile() {
 			}
 			link.present = true
 			budget--
-			if !link.dialable {
-				continue
-			}
 		}
 		switch {
 		case link.direct:
 			if age, ok := m.handshake(m.dev, link.pubkey); !ok || age > peerHandshakeStale {
-				// Keep the peer and its learned endpoint, drop the route, and
-				// let the star carry traffic until a dial succeeds again.
-				if err := m.configure(link, "", []string{}); err != nil {
-					m.log.Printf("peers: demote %s: %v", link.ip, err)
+				m.log.Printf("peers: %s lost its direct link; trying DERP", link.ip)
+				if m.startDERP(link, now) {
+					continue
 				}
-				link.direct = false
-				link.failures++
-				link.backoffUntil = now.Add(peerBackoff(link.failures))
-				m.log.Printf("peers: %s lost its direct link; back on Aegis", link.ip)
+				m.demote(link, now, "lost its direct link")
 			}
 		case link.dialing:
 			if now.Sub(link.dialStart) < peerAttemptWindow {
 				continue
 			}
-			if age, ok := m.handshake(m.dev, link.pubkey); ok && age < 2*time.Minute {
+			if m.handshakeFresh(link) {
 				link.dialing = false
 				link.direct = true
 				link.failures = 0
-				promoteEndpoint := ""
-				if link.dialable {
-					promoteEndpoint = link.endpoint
-				}
-				if err := m.configure(link, promoteEndpoint, []string{link.ip + "/32"}); err != nil {
+				if err := m.configure(link, link.endpoint, []string{link.ip + "/32"}); err != nil {
 					m.log.Printf("peers: activate %s: %v", link.ip, err)
 					link.direct = false
 				} else {
@@ -284,29 +281,115 @@ func (m *peerManager) reconcile() {
 				}
 				continue
 			}
-			if err := m.configure(link, "", []string{}); err != nil {
-				m.log.Printf("peers: demote %s: %v", link.ip, err)
+			// A direct attempt that does not answer is exactly what DERP is
+			// for; the star remains the last resort.
+			if m.startDERP(link, now) {
+				continue
 			}
-			link.dialing = false
-			link.failures++
-			link.backoffUntil = now.Add(peerBackoff(link.failures))
-			m.log.Printf("peers: %s did not answer directly; back on Aegis", link.ip)
+			m.demote(link, now, "did not answer directly")
+		case link.derped:
+			if age, ok := m.handshake(m.dev, link.pubkey); !ok || age > peerHandshakeStale {
+				m.log.Printf("peers: %s lost its DERP link", link.ip)
+				m.demote(link, now, "lost its DERP link")
+			}
+		case link.derping:
+			if now.Sub(link.dialStart) < peerAttemptWindow {
+				continue
+			}
+			if m.handshakeFresh(link) {
+				link.derping = false
+				link.derped = true
+				link.failures = 0
+				m.log.Printf("peers: DERP link to %s (%s)", link.ip, m.relayName())
+				continue
+			}
+			m.demote(link, now, "DERP did not answer")
 		default:
-			if !link.dialable || budget == 0 || now.Before(link.backoffUntil) {
+			if now.Before(link.backoffUntil) {
 				continue
 			}
-			if err := m.configure(link, link.endpoint, []string{link.ip + "/32"}); err != nil {
-				m.log.Printf("peers: dial %s: %v", link.ip, err)
-				link.failures++
-				link.backoffUntil = now.Add(peerBackoff(link.failures))
+			if link.dialable {
+				if budget == 0 {
+					continue
+				}
+				if err := m.configure(link, link.endpoint, []string{link.ip + "/32"}); err != nil {
+					m.log.Printf("peers: dial %s: %v", link.ip, err)
+					link.failures++
+					link.backoffUntil = now.Add(peerBackoff(link.failures))
+					continue
+				}
+				link.dialing = true
+				link.dialStart = now
+				budget--
+				m.log.Printf("peers: trying a direct link to %s (%s)", link.ip, link.endpoint)
 				continue
 			}
-			link.dialing = true
-			link.dialStart = now
-			budget--
-			m.log.Printf("peers: trying a direct link to %s (%s)", link.ip, link.endpoint)
+			// A peer behind the relay has no dialable address of its own, so
+			// DERP is the preferred path for it, ahead of the star.
+			m.startDERP(link, now)
 		}
 	}
+}
+
+// handshakeFresh reports whether the peer's WireGuard session came up during
+// the current attempt window rather than surviving from an earlier path.
+func (m *peerManager) handshakeFresh(link *peerLink) bool {
+	age, ok := m.handshake(m.dev, link.pubkey)
+	return ok && age < 2*time.Minute
+}
+
+// startDERP moves the peer onto the relay. It returns false when DERP is not
+// available or cannot be set up, so the caller can fall back to the star.
+func (m *peerManager) startDERP(link *peerLink, now time.Time) bool {
+	if m.relay == nil || link.derpKey == "" {
+		return false
+	}
+	endpoint, err := m.relay.Endpoint(link.pubkey, link.derpKey)
+	if err != nil {
+		m.log.Printf("peers: derp endpoint for %s: %v", link.ip, err)
+		return false
+	}
+	if err := m.configure(link, endpoint, []string{link.ip + "/32"}); err != nil {
+		m.log.Printf("peers: derp %s: %v", link.ip, err)
+		return false
+	}
+	link.dialing = false
+	link.direct = false
+	link.derping = true
+	link.dialStart = now
+	m.log.Printf("peers: trying DERP for %s", link.ip)
+	return true
+}
+
+// demote clears the peer's routes and returns it to the star, keeping the peer
+// itself so the next attempt does not have to recreate it.
+func (m *peerManager) demote(link *peerLink, now time.Time, reason string) {
+	if err := m.configure(link, "", []string{}); err != nil {
+		m.log.Printf("peers: demote %s: %v", link.ip, err)
+	}
+	if m.relay != nil {
+		m.relay.Release(link.pubkey)
+	}
+	link.dialing = false
+	link.direct = false
+	link.derping = false
+	link.derped = false
+	link.failures++
+	link.backoffUntil = now.Add(peerBackoff(link.failures))
+	if reason != "" {
+		m.log.Printf("peers: %s %s; back on Aegis", link.ip, reason)
+	}
+}
+
+func (m *peerManager) relayName() string {
+	if m.relay == nil {
+		return "DERP"
+	}
+	_, relay, _ := m.relay.Status()
+	if relay == "" {
+		return "DERP"
+	}
+	return relay
 }
 
 // configure applies a peer state. An empty endpoint leaves the current one
@@ -327,9 +410,14 @@ func (m *peerManager) removeLocked(link *peerLink) {
 	if cfg, ok := m.plat.(peerConfigPlatform); ok {
 		_ = cfg.RemoveRelayPeer(m.dev, link.pubkey)
 	}
+	if m.relay != nil {
+		m.relay.Release(link.pubkey)
+	}
 	link.present = false
 	link.direct = false
 	link.dialing = false
+	link.derping = false
+	link.derped = false
 }
 
 func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {

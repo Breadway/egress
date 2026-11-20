@@ -1,8 +1,11 @@
 package egress
 
 import (
+	"bytes"
+	"encoding/base64"
 	"io"
 	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -242,5 +245,93 @@ func TestPeerManagerLeavesTheActiveExitAlone(t *testing.T) {
 	m.setDesired(nil)
 	if len(plat.calls) != 0 {
 		t.Fatalf("calls = %+v, want no removal of an owned peer", plat.calls)
+	}
+}
+
+func b64Key(fill byte) string {
+	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))
+}
+
+func newTestRelay() *derpTransport {
+	return &derpTransport{
+		log:    log.New(io.Discard, "", 0),
+		peers:  map[[32]byte]*derpPeer{},
+		byDerp: map[[32]byte]*derpPeer{},
+	}
+}
+
+// A peer with no dialable address is exactly the case DERP exists for: it
+// should reach the relay ahead of the star.
+func TestPeerManagerRelayedPeerUsesDERP(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	m := newTestManager(plat)
+	m.relay = newTestRelay()
+	key := b64Key(1)
+	relayKey := b64Key(2)
+	m.setDesired([]apiPeer{{PubKey: key, DerpPubKey: relayKey, IP: "10.88.0.20", Endpoint: "127.0.0.1:55751"}})
+	m.reconcile()
+	link := m.links[key]
+	if !link.present || !link.derping {
+		t.Fatalf("peer should be trying DERP: %+v", link)
+	}
+	last := plat.calls[len(plat.calls)-1]
+	if last.endpoint == "" || !strings.HasPrefix(last.endpoint, "127.0.0.1:") {
+		t.Fatalf("DERP endpoint = %q", last.endpoint)
+	}
+	if !last.allowedN || len(last.allowed) != 1 || last.allowed[0] != "10.88.0.20/32" {
+		t.Fatalf("DERP routes = %+v", last.allowed)
+	}
+	// The relay address is the peer's relay key, not its WireGuard key.
+	derpRaw, _ := decodeKey(relayKey)
+	wgRaw, _ := decodeKey(key)
+	if m.relay.byDerp[derpRaw] == nil {
+		t.Fatal("relay key is not mapped to the peer socket")
+	}
+	if m.relay.byDerp[wgRaw] != nil {
+		t.Fatal("WireGuard key must not be used as the relay address")
+	}
+
+	m.handshake = func(dev, pubkey string) (time.Duration, bool) { return 5 * time.Second, true }
+	link.dialStart = time.Now().Add(-peerAttemptWindow - time.Second)
+	m.reconcile()
+	if !link.derped || link.derping {
+		t.Fatalf("peer should be on DERP: %+v", link)
+	}
+
+	m.handshake = func(dev, pubkey string) (time.Duration, bool) {
+		return peerHandshakeStale + time.Minute, true
+	}
+	m.reconcile()
+	if link.derped || !link.present {
+		t.Fatalf("stale DERP link should be demoted: %+v", link)
+	}
+	last = plat.calls[len(plat.calls)-1]
+	if last.endpoint != "" || !last.allowedN || len(last.allowed) != 0 {
+		t.Fatalf("demotion = %+v, want routes cleared", last)
+	}
+}
+
+// A direct attempt that does not answer moves to DERP, not straight to the
+// star.
+func TestPeerManagerDirectFailureFallsBackToDERP(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	m := newTestManager(plat)
+	m.relay = newTestRelay()
+	key := b64Key(1)
+	m.setDesired([]apiPeer{{PubKey: key, DerpPubKey: b64Key(2), IP: "10.88.0.20", Endpoint: "203.0.113.9:51820"}})
+	m.reconcile()
+	m.reconcile()
+	link := m.links[key]
+	if !link.dialing {
+		t.Fatalf("peer should be dialling directly first: %+v", link)
+	}
+	link.dialStart = time.Now().Add(-peerAttemptWindow - time.Second)
+	m.reconcile()
+	if !link.derping || link.dialing {
+		t.Fatalf("peer should try DERP after a failed dial: %+v", link)
+	}
+	last := plat.calls[len(plat.calls)-1]
+	if !strings.HasPrefix(last.endpoint, "127.0.0.1:") {
+		t.Fatalf("DERP endpoint = %q", last.endpoint)
 	}
 }

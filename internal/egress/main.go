@@ -783,7 +783,16 @@ func cmdSupervise(args []string) error {
 		if direct != nil {
 			exitOwner = direct.ExitPubkey
 		}
-		go newPeerManager(peers, splitDev, appLogger(), exitOwner).Run(ctx)
+		// DERP is preferred over the Aegis star for peer links that cannot be
+		// dialled directly. It is a fallback only; a direct path always wins.
+		var relay *derpTransport
+		if t, derr := newDERPTransport(appLogger()); derr == nil {
+			relay = t
+			go t.Run(ctx)
+		} else {
+			appLogger().Printf("derp: unavailable: %v", derr)
+		}
+		go newPeerManager(peers, splitDev, appLogger(), exitOwner, relay).Run(ctx)
 	}
 	if *relayTunnel {
 		// The relay tunnel is the path for learned-blocked destinations on
