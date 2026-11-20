@@ -873,7 +873,9 @@ func (p windowsPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string)
 	if endpoint != "" {
 		args = append(args, "endpoint", endpoint, "persistent-keepalive", "25")
 	}
-	if len(allowed) > 0 {
+	if allowed != nil {
+		// Non-nil but empty means clear the routes, which is how a direct link
+		// is demoted without losing the peer or its learned endpoint.
 		args = append(args, "allowed-ips", strings.Join(allowed, ","))
 	}
 	out, err := logx.ExecLogged(exe, args...)
@@ -896,9 +898,6 @@ func (p windowsPlatform) EnsureRelayPeer(dev, pubkey, endpoint string, allowed [
 	// read-modify-write so one cannot drop the other's peer.
 	relayConfigMu.Lock()
 	defer relayConfigMu.Unlock()
-	if len(allowed) == 0 {
-		return false, nil
-	}
 	path := filepath.Join(winProgramData, dev+".conf")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -956,10 +955,15 @@ func hasPeer(conf, pubkey string) bool {
 
 func renderRelayPeer(conf, pubkey, endpoint string, allowed []string) (string, bool) {
 	prelude, peers := splitPeerBlocks(conf)
-	exitBlock := "[Peer]\nPublicKey = " + pubkey +
-		"\nAllowedIPs = " + strings.Join(allowed, ",") +
-		"\nEndpoint = " + endpoint +
-		"\nPersistentKeepalive = 25"
+	// A passive peer carries no routes and no endpoint: it exists only so an
+	// inbound handshake from the other side is accepted and its address learned.
+	exitBlock := "[Peer]\nPublicKey = " + pubkey
+	if len(allowed) > 0 {
+		exitBlock += "\nAllowedIPs = " + strings.Join(allowed, ",")
+	}
+	if endpoint != "" {
+		exitBlock += "\nEndpoint = " + endpoint + "\nPersistentKeepalive = 25"
+	}
 	var out []string
 	if strings.TrimSpace(prelude) != "" {
 		out = append(out, strings.TrimRight(prelude, "\n"))
