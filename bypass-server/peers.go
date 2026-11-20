@@ -5,56 +5,56 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
 
+// circleOf is the group a device belongs to. Devices created before circles
+// existed have no field and are in "bread", so nothing has to be migrated.
+func circleOf(d device) string {
+	if d.Circle == "" {
+		return "bread"
+	}
+	return d.Circle
+}
+
+var circleRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// normalizeCircle keeps circle names to one readable form. An empty or invalid
+// value falls back to the original circle rather than failing the save.
+func normalizeCircle(raw string) string {
+	c := strings.ToLower(strings.TrimSpace(raw))
+	if c == "" {
+		return "bread"
+	}
+	if !circleRe.MatchString(c) {
+		return "bread"
+	}
+	return c
+}
+
 // apiPeers returns the devices a client may reach over the tunnel.
 //
-// It is authenticated with the device's relay credential rather than left
-// public: the response names every peer's tunnel address, which is not
-// something to hand to an unauthenticated caller. The relationship model is
-// deliberately minimal for now, a single circle, and a device without a circle
-// is in it.
+// It is authenticated: either with the device's relay credential, or with a
+// bound device's public key for devices that do not hold a credential. The
+// response names every peer's tunnel address and observed endpoint, so it is
+// never anonymous. Peers are limited to the caller's circle.
 func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	user, pass, ok := r.BasicAuth()
-	authorized := ok && validRelayCredential(user, pass)
-	if !authorized {
-		// Older installs and Linux devices do not always hold a relay
-		// credential. A bound device's public key is enough to identify it;
-		// it is not published anywhere, and the list is still not anonymous.
-		if k := strings.TrimSpace(r.URL.Query().Get("k")); k != "" && isBoundDevice(s.state, k) {
-			authorized = true
-		}
-	}
-	if !authorized {
+	circle, ok := s.callerCircle(r)
+	if !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="egress"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	type device struct {
-		Label  string `json:"label"`
-		PubKey string `json:"pubkey"`
-		IP     string `json:"ip"`
-		Status string `json:"status"`
-		Circle string `json:"circle"`
-	}
-	var state struct {
-		Devices []device `json:"devices"`
-	}
-	data, err := os.ReadFile(filepath.Join(s.state, "devices.json"))
+	reg, err := loadDevices(s.devicesPath())
 	if err != nil {
 		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		http.Error(w, "device registry unreadable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -64,24 +64,62 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		PubKey   string `json:"pubkey"`
 		IP       string `json:"ip"`
 		Endpoint string `json:"endpoint,omitempty"`
+		Circle   string `json:"circle"`
 	}
-	peers := make([]peer, 0, len(state.Devices))
-	for _, d := range state.Devices {
+	peers := make([]peer, 0, len(reg.Devices))
+	for _, d := range reg.Devices {
 		if d.Status != "bound" || d.PubKey == "" || d.IP == "" {
 			continue
 		}
-		if d.Circle != "" && d.Circle != "bread" {
+		if circleOf(d) != circle {
 			continue
 		}
-		peers = append(peers, peer{Label: d.Label, PubKey: d.PubKey, IP: d.IP, Endpoint: endpoints[d.PubKey]})
+		peers = append(peers, peer{
+			Label:    d.Label,
+			PubKey:   d.PubKey,
+			IP:       d.IP,
+			Endpoint: endpoints[d.PubKey],
+			Circle:   circleOf(d),
+		})
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].IP < peers[j].IP })
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
-		Peers []peer `json:"peers"`
-	}{Peers: peers})
+		Peers  []peer `json:"peers"`
+		Circle string `json:"circle"`
+	}{Peers: peers, Circle: circle})
+}
+
+// callerCircle authenticates the request and resolves the caller's circle. A
+// valid relay credential whose device cannot be matched still counts as
+// authenticated, in the default circle; the credential only ever exists for a
+// bound device.
+func (s *server) callerCircle(r *http.Request) (string, bool) {
+	reg, err := loadDevices(s.devicesPath())
+	if err != nil {
+		return "", false
+	}
+	user, pass, ok := r.BasicAuth()
+	if ok && validRelayCredential(user, pass) {
+		for _, d := range reg.Devices {
+			if d.Status == "bound" && d.RelayUser == user {
+				return circleOf(d), true
+			}
+		}
+		return "bread", true
+	}
+	key := strings.TrimSpace(r.URL.Query().Get("k"))
+	if key == "" {
+		return "", false
+	}
+	for _, d := range reg.Devices {
+		if d.Status == "bound" && d.PubKey == key {
+			return circleOf(d), true
+		}
+	}
+	return "", false
 }
 
 // loadEndpoints reads the map Aegis publishes from the live WireGuard
@@ -94,28 +132,6 @@ func loadEndpoints() map[string]string {
 	}
 	_ = json.Unmarshal(data, &out)
 	return out
-}
-
-func isBoundDevice(stateDir, pubkey string) bool {
-	var state struct {
-		Devices []struct {
-			PubKey string `json:"pubkey"`
-			Status string `json:"status"`
-		} `json:"devices"`
-	}
-	data, err := os.ReadFile(filepath.Join(stateDir, "devices.json"))
-	if err != nil {
-		return false
-	}
-	if json.Unmarshal(data, &state) != nil {
-		return false
-	}
-	for _, d := range state.Devices {
-		if d.Status == "bound" && d.PubKey == pubkey {
-			return true
-		}
-	}
-	return false
 }
 
 func validRelayCredential(user, pass string) bool {
