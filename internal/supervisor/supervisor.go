@@ -9,7 +9,6 @@ import (
 	"egress/internal/platform"
 	"egress/internal/split"
 	"egress/internal/winlog"
-	"egress/internal/wstunnel"
 	"fmt"
 	"log"
 	"net"
@@ -35,7 +34,7 @@ type Supervisor struct {
 	plat     platform.Interface
 	resolver *doh.Resolver
 	tcfg     core.TunnelConfig
-	wst      *wstunnel.Proc
+	wst      Tunneler
 	log      *log.Logger
 
 	manageTunnel   bool
@@ -85,7 +84,15 @@ const (
 	tunnelerRestorePause = time.Hour
 )
 
-func New(plat platform.Interface, resolver *doh.Resolver, wst *wstunnel.Proc, logger *log.Logger, manageTunnel, manageFallback bool) *Supervisor {
+// Tunneler is the transport that carries WireGuard over the relay. The
+// implementation is in-process Go; the interface stays because tests inject a
+// fake and the direct path needs no transport at all.
+type Tunneler interface {
+	Ensure(context.Context) error
+	Stop()
+}
+
+func New(plat platform.Interface, resolver *doh.Resolver, wst Tunneler, logger *log.Logger, manageTunnel, manageFallback bool) *Supervisor {
 	return &Supervisor{
 		plat:           plat,
 		resolver:       resolver,
