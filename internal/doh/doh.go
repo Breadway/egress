@@ -512,6 +512,32 @@ func (r *Resolver) Serve(ctx context.Context) error {
 		tcp.Close()
 	}()
 
+	// The adapter is pointed at 127.0.0.1, which is port 53. Serving only the
+	// internal port left every application on the DHCP secondary, which on a
+	// filtered network is the resolver this tool exists to avoid. Bind the
+	// system port too; failure is not fatal, because 7103 still serves the
+	// components that dial it by name.
+	if host, _, herr := net.SplitHostPort(r.listenAddr); herr == nil && host != "" {
+		systemAddr := net.JoinHostPort(host, "53")
+		if sysUDP, uerr := net.ListenPacket("udp", systemAddr); uerr == nil {
+			go func() {
+				<-ctx.Done()
+				sysUDP.Close()
+			}()
+			go r.serveUDP(sysUDP)
+			r.log.Printf("DoH resolver also answering system DNS on %s", systemAddr)
+		} else {
+			r.log.Printf("could not take %s (%v); system DNS will use the fallback", systemAddr, uerr)
+		}
+		if sysTCP, terr := net.Listen("tcp", systemAddr); terr == nil {
+			go func() {
+				<-ctx.Done()
+				sysTCP.Close()
+			}()
+			go r.serveTCP(sysTCP)
+		}
+	}
+
 	go r.serveTCP(tcp)
 	r.log.Printf("DoH resolver listening on %s", r.listenAddr)
 	if r.Ready != nil {
