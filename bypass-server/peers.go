@@ -48,10 +48,12 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	endpoints := loadEndpoints()
 	type peer struct {
-		Label  string `json:"label"`
-		PubKey string `json:"pubkey"`
-		IP     string `json:"ip"`
+		Label    string `json:"label"`
+		PubKey   string `json:"pubkey"`
+		IP       string `json:"ip"`
+		Endpoint string `json:"endpoint,omitempty"`
 	}
 	peers := make([]peer, 0, len(state.Devices))
 	for _, d := range state.Devices {
@@ -61,7 +63,7 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		if d.Circle != "" && d.Circle != "bread" {
 			continue
 		}
-		peers = append(peers, peer{Label: d.Label, PubKey: d.PubKey, IP: d.IP})
+		peers = append(peers, peer{Label: d.Label, PubKey: d.PubKey, IP: d.IP, Endpoint: endpoints[d.PubKey]})
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].IP < peers[j].IP })
 
@@ -70,6 +72,18 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(struct {
 		Peers []peer `json:"peers"`
 	}{Peers: peers})
+}
+
+// loadEndpoints reads the map Aegis publishes from the live WireGuard
+// endpoints. Missing or stale data simply means no direct attempt is offered.
+func loadEndpoints() map[string]string {
+	out := map[string]string{}
+	data, err := os.ReadFile("/var/lib/bypass/endpoints.json")
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(data, &out)
+	return out
 }
 
 func validRelayCredential(user, pass string) bool {
