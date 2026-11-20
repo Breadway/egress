@@ -163,7 +163,7 @@ func RecordScan(network string, results []ScanResult) (int, error) {
 func ReportScan(ctx context.Context, network string, results []ScanResult) {
 	reporter := newSplitReporter(network, ProfileDir(), log.New(os.Stderr, "", 0))
 	for _, r := range results {
-		if r.State == StateBlocked {
+		if r.State == StateBlocked && strongBlockEvidence(r.Evidence) {
 			reporter.Report(r.Domain, r.Evidence)
 		}
 	}
