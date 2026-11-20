@@ -23,6 +23,9 @@ type exitEntry struct {
 	Host        string `json:"host,omitempty"`
 	Network     string `json:"network,omitempty"`
 	Note        string `json:"note,omitempty"`
+	Direct      bool   `json:"direct,omitempty"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	Path        string `json:"path,omitempty"`
 }
 
 type exitRegistry struct {

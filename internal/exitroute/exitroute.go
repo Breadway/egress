@@ -40,6 +40,12 @@ type Exit struct {
 	// The learner skips it for domains that network reports blocked.
 	Network string `json:"network,omitempty"`
 	Note    string `json:"note,omitempty"`
+	// Direct marks an exit that clients reach themselves rather than through
+	// Aegis. It is not a peer of wg0, so the hub router must never assign
+	// prefixes to it; the fleet learns its endpoint from the feed instead.
+	Direct   bool   `json:"direct,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 // Registry is the operator's exit list.
@@ -105,7 +111,9 @@ func SaveRegistry(path string, reg Registry) error {
 func EnabledExits(reg Registry) []Exit {
 	out := make([]Exit, 0, len(reg.Exits))
 	for _, e := range reg.Exits {
-		if e.Enabled {
+		// A direct exit is reached by clients, not by this router: it has no
+		// wg0 peer here, so assigning prefixes to it would blackhole them.
+		if e.Enabled && !e.Direct {
 			out = append(out, e)
 		}
 	}

@@ -736,24 +736,20 @@ func cmdSupervise(args []string) error {
 		splitDev = "wg0ws"
 	}
 	var splitter *split.Controller
+	var direct *directExit
 	if !*noTunnel || *relayTunnel {
 		routes := split.NewRouteManager(splitDev, appLogger())
-		if runtime.GOOS == "windows" {
-			// The driver drops destinations missing from AllowedIPs, so the
-			// routed set and the peer's allowed set must move together.
-			routes.OnChange(func(prefixes []string) {
-				w, ok := plat.(interface {
-					SetPeerAllowedIPs(string, []string) error
-				})
-				if !ok {
-					return
-				}
-				if err := w.SetPeerAllowedIPs(splitDev, prefixes); err != nil {
-					appLogger().Printf("split: allowed ips: %v", err)
-				}
-			})
+		if ps, ok := plat.(peerSetter); ok {
+			// Direct exits carry blocked traffic themselves; this owns the peer
+			// set for both the exit and Aegis, so the routed destinations and
+			// the peer allowed-ips move together.
+			direct = newDirectExit(ps, splitDev, appLogger())
+			routes.OnChange(direct.SetPrefixes)
 		}
 		splitter = split.NewController(split.NetworkKey("", gateway), iface, routes, appLogger())
+		if direct != nil {
+			splitter.SetExitsHandler(direct.SetExits)
+		}
 		if runtime.GOOS == "linux" {
 			// Bind the 403/451 comparison to the tunnel; split mode keeps the
 			// default route direct.
@@ -770,6 +766,9 @@ func cmdSupervise(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if direct != nil {
+		go direct.Run(ctx)
+	}
 	if *relayTunnel {
 		// The relay tunnel is the path for learned-blocked destinations on
 		// Windows split installs. It is ensured here and re-checked, because a

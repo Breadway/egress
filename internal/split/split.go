@@ -40,6 +40,8 @@ type Controller struct {
 	// blockedIPs remembers which addresses were routed for each domain, so an
 	// allowed verdict can remove exactly those routes.
 	blockedIPs map[string][]string
+	// exits are the direct exits published with the feed.
+	exits []DirectExit
 }
 
 func NewController(network, iface string, routes *RouteManager, logger *log.Logger) *Controller {
@@ -62,6 +64,33 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	c.reporter.SetRefreshFunc(c.refreshSites)
 	go c.refreshProtocols()
 	return c
+}
+
+// SetExitsHandler receives the direct exits published with the feed, and gets
+// the current list immediately so a handler installed after the first fetch
+// still sees it.
+func (c *Controller) SetExitsHandler(fn func([]DirectExit)) {
+	c.reporter.SetExitsFunc(func(list []DirectExit) {
+		c.mu.Lock()
+		c.exits = append([]DirectExit(nil), list...)
+		c.mu.Unlock()
+		if fn != nil {
+			fn(list)
+		}
+	})
+	c.mu.Lock()
+	current := append([]DirectExit(nil), c.exits...)
+	c.mu.Unlock()
+	if fn != nil && len(current) > 0 {
+		fn(current)
+	}
+}
+
+// Exits returns the direct exits the feed last published.
+func (c *Controller) Exits() []DirectExit {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]DirectExit(nil), c.exits...)
 }
 
 // SetTunnelDevice names the interface a 403 or 451 comparison is sent over.
