@@ -6,7 +6,9 @@ import (
 	"context"
 	"egress/internal/core"
 	"egress/internal/split"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -218,7 +220,7 @@ func runTray(ctx context.Context, p *split.Proxy) error {
 	go func() {
 		refresh := time.NewTicker(5 * time.Second)
 		defer refresh.Stop()
-		refreshPings()
+		refreshStatus()
 		procPostMessageW.Call(hwnd, wmUpdate, 0, 0)
 		for {
 			select {
@@ -227,7 +229,7 @@ func runTray(ctx context.Context, p *split.Proxy) error {
 				return
 			case <-refresh.C:
 				resumeIfExpired()
-				refreshPings()
+				refreshStatus()
 				procPostMessageW.Call(hwnd, wmUpdate, 0, 0)
 			}
 		}
@@ -314,15 +316,28 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 	return res
 }
 
-func refreshPings() {
-	lines := make([]string, 0, 2)
-	for _, target := range []string{"1.1.1.1", "example.com"} {
-		rtt, err := pingHost(target, 1500*time.Millisecond)
-		if err != nil {
-			lines = append(lines, target+": no reply")
-			continue
+// refreshStatus asks the supervisor's portal, not a ping. ICMP is blocked on
+// the networks this runs on, so a ping said "no reply" while everything worked.
+func refreshStatus() {
+	lines := []string{"tunnel: unknown"}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + core.PortalListenAddr + "/status.json")
+	if err == nil {
+		defer resp.Body.Close()
+		var st struct {
+			Online  bool `json:"online"`
+			Blocked int  `json:"blocked"`
 		}
-		lines = append(lines, fmt.Sprintf("%s: %d ms", target, rtt.Milliseconds()))
+		if json.NewDecoder(resp.Body).Decode(&st) == nil {
+			state := "offline"
+			if st.Online {
+				state = "connected"
+			}
+			lines = []string{"tunnel: " + state}
+			if st.Blocked > 0 {
+				lines = append(lines, fmt.Sprintf("blocked: %d domains", st.Blocked))
+			}
+		}
 	}
 	trayMu.Lock()
 	trayPing = lines
@@ -434,12 +449,10 @@ func showTrayMenu(hwnd uintptr) {
 		addGray(line)
 	}
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
-	addItem(1, "Open PAC")
+	addItem(12, "Open portal")
 	addItem(3, "Open log")
 	addItem(4, "Open data folder")
-	addItem(5, "Reload allow/block lists")
 	addItem(6, "Run diagnose")
-	addItem(12, "Why is this blocked?")
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	addItem(7, "Start at boot")
 	addItem(8, "Do not start at boot")

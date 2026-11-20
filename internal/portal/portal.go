@@ -9,6 +9,7 @@ package portal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -71,6 +72,18 @@ func newHandler(snap func() Snapshot) http.Handler {
 			return
 		}
 		render(w, snap())
+	})
+	// The tray has no proxy to ask any more; this is its status source.
+	mux.HandleFunc("/status.json", func(w http.ResponseWriter, r *http.Request) {
+		s := snap()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(struct {
+			Version string `json:"version"`
+			Network string `json:"network"`
+			Online  bool   `json:"online"`
+			Blocked int    `json:"blocked"`
+		}{Version: s.Version, Network: s.Network, Online: s.Online, Blocked: len(s.Domains)})
 	})
 	return mux
 }
