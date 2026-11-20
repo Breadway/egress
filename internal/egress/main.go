@@ -11,6 +11,7 @@ import (
 	"egress/internal/split"
 	"egress/internal/supervisor"
 	"egress/internal/update"
+	"egress/internal/wgtunnel"
 	"egress/internal/winlog"
 	"errors"
 	"flag"
@@ -712,15 +713,10 @@ func cmdSupervise(args []string) error {
 	resolver.Ready = writeReadyMarker
 	resolver.NotReady = removeReadyMarker
 
-	wstPath := ""
-	if (!*noTunnel || *relayTunnel) && !*noFallback {
-		if path, err := plat.WstunnelPath(); err == nil {
-			wstPath = path
-		} else {
-			appLogger().Printf("wstunnel not found, the fallback is unavailable: %v", err)
-		}
-	}
-	wst := newWstunnelProc(wstPath, appLogger())
+	// The relay leg is now carried in-process, so a missing or unloadable
+	// tunneler executable can no longer take the tunnel down. wstunnel is still
+	// used by the per-user proxy for its SOCKS leg until that is retired.
+	wst := wgtunnel.New(appLogger())
 
 	// Split installs on Windows route learned-blocked destinations through the
 	// relay tunnel. The device name differs from the direct tunnel because the
