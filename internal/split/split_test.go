@@ -957,18 +957,50 @@ func TestRouteManagerNotifiesOnChange(t *testing.T) {
 // A school appliance that intercepts TLS answers 200 with its own block page.
 // Status alone cannot tell that from the real site, which is how a blocked
 // destination ended up classified as allowed and dialled directly.
-func TestLooksIntercepted(t *testing.T) {
-	cases := map[string]bool{
-		"<html><title>FortiGuard Intrusion Prevention</title>": true,
-		"Access Blocked. Fortinet Unified Threat Management":   true,
-		"<h1>Web Page Blocked</h1>":                            true,
-		"<html><body>Welcome to Poki, free games</body>":       false,
-		"": false,
+// The fixture is the shape of the page a real FortiGate served for a blocked
+// site over a trusted enterprise CA: 403, a block-page title, and a rating
+// link that only exists on that appliance's block pages.
+const fortigateBlockPage = `<html><head><title>Web Filter Violation</title></head>` +
+	`<body><div class="message-container"><div class="logo"></div>` +
+	`<h1>FortiGuard Intrusion Prevention - Access Blocked</h1>` +
+	`<h3>Web Page Blocked</h3>` +
+	`<p>You have tried to access a web page that is in violation of your Internet usage policy.</p>` +
+	`<table><tr><td>Category</td><td>Global Block</td></tr></table>` +
+	`<p>To have the rating of this web page re-evaluated ` +
+	`<a href="https://globalurl.fortinet.net/rate/submit.php?id=abc&cat=C0">please click here</a>.</p>` +
+	`</div></body></html>`
+
+func TestBlockPageSignature(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		title  string
+		body   string
+		want   string
+	}{
+		{"real fortigate page", 403, "Web Filter Violation", fortigateBlockPage, "fortigate"},
+		{"title alone", 200, "Web Filter Violation", "<html></html>", "fortigate"},
+		{"vendor url alone", 200, "", `<a href="https://globalurl.fortinet.net/rate/submit.php?id=1">x</a>`, "fortigate"},
+		{"refusal with vendor name", 403, "", "<p>Fortinet Unified Threat Management</p>", "fortigate"},
+		// A security site discussing the appliance is not a block page.
+		{"article about fortinet", 200, "Why FortiGuard blocks sites", "<p>Fortinet and FortiGuard explained.</p>", ""},
+		{"ordinary site", 200, "Poki - Free Online Games", "<p>Play free games.</p>", ""},
+		{"ordinary 403", 403, "Access denied", "<p>Cloudflare Ray ID: abc</p>", ""},
+		{"empty", 0, "", "", ""},
 	}
-	for body, want := range cases {
-		if got := looksIntercepted(body); got != want {
-			t.Errorf("looksIntercepted(%.40q) = %v, want %v", body, got, want)
+	for _, c := range cases {
+		if got := blockPageSignature(c.status, c.title, c.body); got != c.want {
+			t.Errorf("%s: signature = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestHTMLTitle(t *testing.T) {
+	if got := htmlTitle("<html><head><TITLE>  Web   Filter\nViolation </TITLE></head>"); got != "Web Filter Violation" {
+		t.Errorf("title %q", got)
+	}
+	if got := htmlTitle("no title here"); got != "" {
+		t.Errorf("title %q, want empty", got)
 	}
 }
 
