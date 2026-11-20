@@ -1062,3 +1062,49 @@ func TestShareableBlocks(t *testing.T) {
 		t.Fatalf("shareable blocks = %+v", got)
 	}
 }
+
+// split-block.txt must route through the tunnel even when the profile says the
+// domain is allowed, which is the case for a site the probe cannot classify.
+func TestForcedBlockOverrideRoutes(t *testing.T) {
+	var calls [][]string
+	rm := &RouteManager{
+		dev:    "wg0",
+		log:    log.New(testWriter{t}, "", 0),
+		routes: map[string]time.Time{},
+		run: func(args ...string) error {
+			calls = append(calls, args)
+			return nil
+		},
+	}
+	c := NewController("testnet", "wlan0", rm, log.New(testWriter{t}, "", 0))
+	c.profile = NewProfile("testnet")
+	c.profile.RecordProbe("wonderhop.io", EvidenceNone, false, time.Now())
+	c.overrides = Overrides{Allow: map[string]bool{}, Block: map[string]bool{"wonderhop.io": true}}
+
+	c.HandleAnswer("wonderhop.io", []net.IP{net.IPv4(13, 35, 147, 66)}, 2*time.Minute)
+	if rm.Count() != 1 || len(calls) != 1 || calls[0][0] != "replace" {
+		t.Fatalf("forced block did not route: count=%d calls=%v", rm.Count(), calls)
+	}
+}
+
+func TestForcedAllowOverrideDoesNotRoute(t *testing.T) {
+	var calls [][]string
+	rm := &RouteManager{
+		dev:    "wg0",
+		log:    log.New(testWriter{t}, "", 0),
+		routes: map[string]time.Time{},
+		run: func(args ...string) error {
+			calls = append(calls, args)
+			return nil
+		},
+	}
+	c := NewController("testnet", "wlan0", rm, log.New(testWriter{t}, "", 0))
+	c.profile = NewProfile("testnet")
+	c.profile.AddBlocked("example.com", EvidenceSeed, time.Now())
+	c.overrides = Overrides{Allow: map[string]bool{"example.com": true}, Block: map[string]bool{}}
+
+	c.HandleAnswer("example.com", []net.IP{net.IPv4(93, 184, 216, 34)}, 2*time.Minute)
+	if rm.Count() != 0 {
+		t.Fatalf("forced allow still routed: %v", calls)
+	}
+}
