@@ -93,17 +93,27 @@ type peerManager struct {
 	// handshake is a variable so tests can drive the state machine without a
 	// live WireGuard interface.
 	handshake func(dev, pubkey string) (time.Duration, bool)
+	// exclude names a peer another manager owns, currently the active exit.
+	exclude func() string
 
 	mu        sync.Mutex
 	links     map[string]*peerLink
 	lastCount int
 }
 
-func newPeerManager(plat peerPlatform, dev string, logger *log.Logger) *peerManager {
-	return &peerManager{
+func newPeerManager(plat peerPlatform, dev string, logger *log.Logger, exclude func() string) *peerManager {
+	m := &peerManager{
 		plat: plat, dev: dev, log: logger, links: map[string]*peerLink{},
-		self: devicePubkey(), handshake: handshakeAge,
+		self: devicePubkey(), handshake: handshakeAge, exclude: exclude,
 	}
+	return m
+}
+
+// owned reports whether another manager controls this peer. The exit manager
+// and the P2P manager address the same WireGuard identity, so the exit has to
+// win while it is active or the two undo each other every tick.
+func (m *peerManager) owned(pubkey string) bool {
+	return m.exclude != nil && m.exclude() == pubkey
 }
 
 func (m *peerManager) Run(ctx context.Context) {
@@ -178,7 +188,9 @@ func (m *peerManager) setDesired(peers []apiPeer) {
 	defer m.mu.Unlock()
 	for key, link := range m.links {
 		if _, ok := desired[key]; !ok {
-			if link.present {
+			// Never remove a peer the exit manager owns: the peer is the same
+			// identity, and it will clean up after itself.
+			if link.present && !m.owned(key) {
 				m.removeLocked(link)
 			}
 			delete(m.links, key)
@@ -221,6 +233,9 @@ func (m *peerManager) reconcile() {
 	// tunnel service, and several at once would restart it repeatedly.
 	budget := 1
 	for _, link := range m.links {
+		if m.owned(link.pubkey) {
+			continue
+		}
 		if !link.present {
 			if budget == 0 {
 				continue
@@ -323,15 +338,7 @@ func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if user, pass, ok := relayCredential(); ok {
-		req.SetBasicAuth(user, pass)
-	} else {
-		// A bound device's public key identifies it when the device has no
-		// relay credential, which older installs may not.
-		q := req.URL.Query()
-		q.Set("k", self)
-		req.URL.RawQuery = q.Encode()
-	}
+	applyPeerAuth(req, self)
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
@@ -347,6 +354,19 @@ func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {
 		return nil, err
 	}
 	return out.Peers, nil
+}
+
+// applyPeerAuth authenticates a peer API request. The relay credential is
+// preferred; a bound device's public key identifies devices that do not hold
+// one, which older installs may not.
+func applyPeerAuth(req *http.Request, self string) {
+	if user, pass, ok := relayCredential(); ok {
+		req.SetBasicAuth(user, pass)
+		return
+	}
+	q := req.URL.Query()
+	q.Set("k", self)
+	req.URL.RawQuery = q.Encode()
 }
 
 // relayCredential reads the relay credential, preferring the state directory
