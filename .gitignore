@@ -1,4 +1,5 @@
 /egress
+/wgtunnel-server
 /egress.exe
 dist/
 *.log
