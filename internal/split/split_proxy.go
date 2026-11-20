@@ -58,7 +58,10 @@ type ProbeResult struct {
 	Confirmed bool
 	Transient bool
 	Latency   time.Duration
-	Err       error
+	// Title is the document title of the direct response, used to recognise a
+	// block page whose wording differs but whose title does not.
+	Title string
+	Err   error
 }
 
 // ProbeConfirmed probes once, and when the result is a weak connect timeout it
@@ -206,6 +209,14 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 	return res
 }
 
+const (
+	// probeHeadBytes is enough to see a normal site's title and framing.
+	probeHeadBytes = 8 << 10
+	// probeBlockBytes covers an appliance block page, which can carry a large
+	// inline stylesheet ahead of the text that identifies it.
+	probeBlockBytes = 64 << 10
+)
+
 func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua string, opts ProbeOptions) ProbeResult {
 	res := ProbeResult{Domain: domain, IP: ip, Transient: true}
 	dialer := &net.Dialer{Timeout: timeout, Control: deviceControl(opts.Interface)}
@@ -245,8 +256,9 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 		return res
 	}
 	res.Status = status
-	if looksIntercepted(body) {
-		res.State, res.Evidence = StateBlocked, EvidenceInterceptPage
+	res.Title = htmlTitle(body)
+	if sig := blockPageSignature(status, res.Title, body); sig != "" {
+		res.State, res.Evidence = StateBlocked, Evidence(string(EvidenceInterceptPage)+":"+sig)
 		res.Transient = false
 		return res
 	}
@@ -290,7 +302,7 @@ func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, st
 		return 0, "", err
 	}
 	req := "GET / HTTP/1.1\r\nHost: " + domain + "\r\nUser-Agent: " + ua +
-		"\r\nAccept: text/html,*/*\r\nRange: bytes=0-8191\r\nConnection: close\r\n\r\n"
+		"\r\nAccept: text/html,*/*\r\nRange: bytes=0-65535\r\nConnection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, req); err != nil {
 		return 0, "", err
 	}
@@ -313,9 +325,17 @@ func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, st
 			break
 		}
 	}
+	// A real page only needs its head to be judged, so stop early. A refusal
+	// needs more: an appliance's block page can put tens of kilobytes of inline
+	// CSS before its title, and a title found at 34 KB is what turned a 403
+	// into a false "allowed" here.
+	limit := probeHeadBytes
+	if status >= 400 {
+		limit = probeBlockBytes
+	}
 	body := make([]byte, 0, 4096)
-	buf := make([]byte, 2048)
-	for len(body) < 8192 {
+	buf := make([]byte, 4096)
+	for len(body) < limit {
 		n, rerr := br.Read(buf)
 		if n > 0 {
 			body = append(body, buf[:n]...)
@@ -327,32 +347,85 @@ func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, st
 	return status, string(body), nil
 }
 
-// interceptionMarkers appear in a filter's block page and effectively never in
-// the first kilobytes of a real site. Forcing the traffic through the relay
-// would also work, but a marker check costs one response we already fetch.
-var interceptionMarkers = []string{
-	"fortiguard",
-	"fortinet",
-	"web page blocked",
-	"intrusion prevention",
-	"blocked by your organization",
-	"bluecoat",
-	"sonicwall",
-	"untangle",
+// Block pages are identified by structure, not prose. A school appliance can
+// localise its wording, but the links it generates and the titles it uses stay
+// the same. These signatures come from a real FortiGate page captured on an
+// intercepting network: title "Web Filter Violation", heading "FortiGuard
+// Intrusion Prevention - Access Blocked", a rating link to
+// globalurl.fortinet.net, and a 403 over a trusted enterprise CA.
+//
+// A vendor name alone is not enough: a security site's front page can discuss
+// FortiGuard. A signature therefore needs a block-page-only URL, a block-page
+// title, or a refusal status together with the vendor name.
+var blockPageURLs = []struct{ name, marker string }{
+	{"fortigate", "fortinet.net/rate/submit"},
+	{"fortigate", "blocked.fortinet.com"},
+	{"cisco-umbrella", "policy.cisco.com"},
 }
 
-// looksIntercepted reports whether a response body is a filter block page.
-// This is what a TLS-intercepting school network needs: it presents a valid
-// certificate, so a status-only probe calls the block page "allowed", and the
-// browser then goes direct and shows the page.
-func looksIntercepted(body string) bool {
+var blockPageTitles = []struct{ name, marker string }{
+	{"fortigate", "web filter violation"},
+	{"fortigate", "web page blocked"},
+	{"fortigate", "intrusion prevention"},
+	{"cisco-umbrella", "blocked by umbrella"},
+}
+
+var blockPageVendors = []struct{ name, marker string }{
+	{"fortigate", "fortiguard"},
+	{"fortigate", "fortinet"},
+	{"bluecoat", "bluecoat"},
+	{"sonicwall", "sonicwall"},
+	{"untangle", "untangle"},
+	{"palo-alto", "palo alto networks"},
+}
+
+// blockPageSignature names the appliance whose block page this is, or "" when
+// the response does not look like one. The name is recorded as evidence, so a
+// report says which filter produced the page.
+func blockPageSignature(status int, title, body string) string {
 	lower := strings.ToLower(body)
-	for _, marker := range interceptionMarkers {
-		if strings.Contains(lower, marker) {
-			return true
+	for _, sig := range blockPageURLs {
+		if strings.Contains(lower, sig.marker) {
+			return sig.name
 		}
 	}
-	return false
+	titleLower := normalizeTitle(title)
+	for _, sig := range blockPageTitles {
+		if strings.Contains(titleLower, sig.marker) {
+			return sig.name
+		}
+	}
+	if status >= 400 {
+		for _, sig := range blockPageVendors {
+			if strings.Contains(lower, sig.marker) {
+				return sig.name
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeTitle(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// htmlTitle returns the document title, trimmed.
+func htmlTitle(body string) string {
+	lower := strings.ToLower(body)
+	open := strings.Index(lower, "<title")
+	if open < 0 {
+		return ""
+	}
+	gt := strings.Index(lower[open:], ">")
+	if gt < 0 {
+		return ""
+	}
+	start := open + gt + 1
+	end := strings.Index(lower[start:], "</title>")
+	if end < 0 {
+		return ""
+	}
+	return strings.Join(strings.Fields(body[start:start+end]), " ")
 }
 
 // classifyDialError turns a TCP connect error into a verdict. A timeout is the
