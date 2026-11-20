@@ -49,6 +49,10 @@ type device struct {
 	BoundAt   string `json:"bound_at,omitempty"`
 	Platform  string `json:"platform,omitempty"`
 	Arch      string `json:"arch,omitempty"`
+	// Circle is the relationship group a device belongs to. Peers are only
+	// visible inside a circle; an empty value is the original "bread" circle,
+	// so existing devices keep working unchanged.
+	Circle string `json:"circle,omitempty"`
 }
 
 type deviceRegistry struct {
@@ -366,6 +370,22 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			created = token
+		case "circle":
+			id := r.FormValue("id")
+			circle := normalizeCircle(r.FormValue("circle"))
+			s.devicesMu.Lock()
+			changed := false
+			for i := range reg.Devices {
+				if reg.Devices[i].ID == id {
+					reg.Devices[i].Circle = circle
+					changed = true
+					break
+				}
+			}
+			if changed {
+				_ = saveDevices(s.devicesPath(), reg)
+			}
+			s.devicesMu.Unlock()
 		case "revoke":
 			id := r.FormValue("id")
 			s.devicesMu.Lock()
@@ -401,7 +421,7 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	if len(reg.Devices) == 0 {
 		b.WriteString(`<p class="muted">No invites yet.</p>`)
 	} else {
-		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>State</th><th>Build</th><th>Last report</th><th>Update check</th><th>Address</th><th></th></tr></thead><tbody>`)
+		b.WriteString(`<div class="table-wrap"><table><thead><tr><th>Device</th><th>Circle</th><th>State</th><th>Build</th><th>Last report</th><th>Update check</th><th>Address</th><th></th></tr></thead><tbody>`)
 		fl := s.loadFleet()
 		for _, d := range reg.Devices {
 			appCell := ""
@@ -423,8 +443,9 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			if addr == "" {
 				addr = `<span class="muted">unassigned</span>`
 			}
-			fmt.Fprintf(&b, `<tr><td>%s</td><td><span class="pill %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-				deviceCell, class, esc(state), build, reportCell, pollCell, addr, action)
+			circle := `<form method="post" action="/admin/devices"><input type="hidden" name="action" value="circle"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><input name="circle" value="` + template.HTMLEscapeString(circleOf(d)) + `" size="8"><button class="btn ghost small" type="submit">Set</button></form>`
+			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td><span class="pill %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+				deviceCell, circle, class, esc(state), build, reportCell, pollCell, addr, action)
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
