@@ -21,6 +21,14 @@ type peerSetter interface {
 	RemovePeer(dev, pubkey string) error
 }
 
+// relayPeerConfigurer is implemented by platforms whose tunnel service owns
+// its peer list (Windows). The peer has to be in the config at service start,
+// or inbound packets can be filtered even though the handshake works.
+type relayPeerConfigurer interface {
+	EnsureRelayPeer(dev, pubkey, endpoint string, allowed []string) (bool, error)
+	RemoveRelayPeer(dev, pubkey string) error
+}
+
 // directExit carries learned-blocked destinations over the client's own tunnel
 // to an exit, so that traffic never passes through Aegis. Aegis stays the
 // fallback: when the exit is not connected, or nothing is routed yet, the same
@@ -152,6 +160,17 @@ func (d *directExit) reconcile(ctx context.Context) {
 	for _, p := range prefixes {
 		allowed = append(allowed, p+"/32")
 	}
+	if cfg, ok := d.plat.(relayPeerConfigurer); ok {
+		restarted, err := cfg.EnsureRelayPeer(d.dev, ex.PubKey, directExitLocal, allowed)
+		if err != nil {
+			d.noteError("exit config: %v", err)
+			d.fallback()
+			return
+		}
+		if restarted {
+			d.log.Printf("split: tunnel restarted with the exit peer in its config")
+		}
+	}
 	if err := d.plat.SetPeer(d.dev, ex.PubKey, directExitLocal, allowed); err != nil {
 		d.noteError("exit peer: %v", err)
 		d.fallback()
@@ -185,6 +204,9 @@ func (d *directExit) fallback() {
 	if was && pub != "" {
 		if err := d.plat.RemovePeer(d.dev, pub); err != nil {
 			d.noteError("exit peer removal: %v", err)
+		}
+		if cfg, ok := d.plat.(relayPeerConfigurer); ok {
+			_ = cfg.RemoveRelayPeer(d.dev, pub)
 		}
 		d.log.Printf("split: exit unavailable, blocked destinations back on Aegis")
 	}
