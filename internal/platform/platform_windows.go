@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -888,7 +889,13 @@ func (p windowsPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string)
 // outbound traffic but its inbound packets can be filtered, which is the
 // failure this exists to avoid. Later calls rewrite the file with the current
 // allowed destinations without a restart; the live list is updated separately.
+var relayConfigMu sync.Mutex
+
 func (p windowsPlatform) EnsureRelayPeer(dev, pubkey, endpoint string, allowed []string) (bool, error) {
+	// The exit manager and the peer manager both edit this file; serialize the
+	// read-modify-write so one cannot drop the other's peer.
+	relayConfigMu.Lock()
+	defer relayConfigMu.Unlock()
 	if len(allowed) == 0 {
 		return false, nil
 	}
@@ -923,6 +930,8 @@ func (p windowsPlatform) EnsureRelayPeer(dev, pubkey, endpoint string, allowed [
 // RemoveRelayPeer drops the exit peer from the config without restarting, so a
 // later service restart does not resurrect a broken exit.
 func (p windowsPlatform) RemoveRelayPeer(dev, pubkey string) error {
+	relayConfigMu.Lock()
+	defer relayConfigMu.Unlock()
 	path := filepath.Join(winProgramData, dev+".conf")
 	data, err := os.ReadFile(path)
 	if err != nil {

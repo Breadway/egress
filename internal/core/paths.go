@@ -18,3 +18,32 @@ func InstallDir() string {
 	}
 	return "/usr/local/bin"
 }
+
+// CredentialPath is where the relay credential lives. It is a secret, so it
+// does not belong in the binary directory even though older installs put it
+// there; those are still read as a fallback.
+func CredentialPath() string {
+	if runtime.GOOS == "linux" {
+		return "/var/lib/egress/socks-auth"
+	}
+	return filepath.Join(InstallDir(), "socks-auth")
+}
+
+// DeviceIdentityPath is the non-secret half of the tunnel identity. It is state,
+// not install payload, so it lives beside the other per-device state rather
+// than in the binary directory.
+func DeviceIdentityPath() string {
+	if runtime.GOOS == "windows" {
+		if dir := os.Getenv("ProgramData"); dir != "" {
+			return filepath.Join(dir, "egress", "device.json")
+		}
+		return `C:\ProgramData\egress\device.json`
+	}
+	if runtime.GOOS == "linux" {
+		return "/var/lib/egress/device.json"
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, "egress", "device.json")
+	}
+	return "device.json"
+}

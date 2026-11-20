@@ -25,15 +25,25 @@ func cmdPeers(args []string) error {
 	}
 	setupLogging(resolveDebug(*debug))
 
-	user, pass, ok := readAuthFile(filepath.Join(core.InstallDir(), "socks-auth"))
+	user, pass, ok := readAuthFile(core.CredentialPath())
 	if !ok || user == "" || pass == "" {
-		return errors.New("this device has no relay credential, so the peer list cannot be authenticated")
+		// Older Linux installs wrote the credential beside the binary.
+		user, pass, ok = readAuthFile(filepath.Join(core.InstallDir(), "socks-auth"))
 	}
 	req, err := http.NewRequest(http.MethodGet, "https://bypass.breadway.dev/api/peers", nil)
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth(user, pass)
+	if ok && user != "" && pass != "" {
+		req.SetBasicAuth(user, pass)
+	} else if self := devicePubkey(); self != "" {
+		// A bound device's public key identifies it without a credential.
+		q := req.URL.Query()
+		q.Set("k", self)
+		req.URL.RawQuery = q.Encode()
+	} else {
+		return errors.New("this device has neither a relay credential nor a device identity, so the peer list cannot be authenticated")
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

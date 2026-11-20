@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // apiPeers returns the devices a client may reach over the tunnel.
@@ -22,7 +23,16 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, pass, ok := r.BasicAuth()
-	if !ok || !validRelayCredential(user, pass) {
+	authorized := ok && validRelayCredential(user, pass)
+	if !authorized {
+		// Older installs and Linux devices do not always hold a relay
+		// credential. A bound device's public key is enough to identify it;
+		// it is not published anywhere, and the list is still not anonymous.
+		if k := strings.TrimSpace(r.URL.Query().Get("k")); k != "" && isBoundDevice(s.state, k) {
+			authorized = true
+		}
+	}
+	if !authorized {
 		w.Header().Set("WWW-Authenticate", `Basic realm="egress"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -84,6 +94,28 @@ func loadEndpoints() map[string]string {
 	}
 	_ = json.Unmarshal(data, &out)
 	return out
+}
+
+func isBoundDevice(stateDir, pubkey string) bool {
+	var state struct {
+		Devices []struct {
+			PubKey string `json:"pubkey"`
+			Status string `json:"status"`
+		} `json:"devices"`
+	}
+	data, err := os.ReadFile(filepath.Join(stateDir, "devices.json"))
+	if err != nil {
+		return false
+	}
+	if json.Unmarshal(data, &state) != nil {
+		return false
+	}
+	for _, d := range state.Devices {
+		if d.Status == "bound" && d.PubKey == pubkey {
+			return true
+		}
+	}
+	return false
 }
 
 func validRelayCredential(user, pass string) bool {
