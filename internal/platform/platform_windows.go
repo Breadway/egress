@@ -882,6 +882,147 @@ func (p windowsPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string)
 	return nil
 }
 
+// EnsureRelayPeer keeps a direct-exit peer in the tunnel config so the
+// WireGuard service owns it from start-up, and restarts the service only when
+// the peer is new. A peer added with `wg set` after the service started carries
+// outbound traffic but its inbound packets can be filtered, which is the
+// failure this exists to avoid. Later calls rewrite the file with the current
+// allowed destinations without a restart; the live list is updated separately.
+func (p windowsPlatform) EnsureRelayPeer(dev, pubkey, endpoint string, allowed []string) (bool, error) {
+	if len(allowed) == 0 {
+		return false, nil
+	}
+	path := filepath.Join(winProgramData, dev+".conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	conf := string(data)
+	had := hasPeer(conf, pubkey)
+	updated, changed := renderRelayPeer(conf, pubkey, endpoint, allowed)
+	if changed {
+		if err := os.WriteFile(path, []byte(updated), 0600); err != nil {
+			return false, fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	if had {
+		return false, nil
+	}
+	uninstallTunnel(dev)
+	time.Sleep(300 * time.Millisecond)
+	exe := wireguardExe()
+	if exe == "" {
+		return false, errors.New("wireguard.exe not found")
+	}
+	if err := logx.RunLogged(exe, "/installtunnelservice", path); err != nil {
+		return false, fmt.Errorf("restart tunnel %s: %w", dev, err)
+	}
+	return true, nil
+}
+
+// RemoveRelayPeer drops the exit peer from the config without restarting, so a
+// later service restart does not resurrect a broken exit.
+func (p windowsPlatform) RemoveRelayPeer(dev, pubkey string) error {
+	path := filepath.Join(winProgramData, dev+".conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	updated, changed := removePeerBlock(string(data), pubkey)
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(path, []byte(updated), 0600)
+}
+
+func hasPeer(conf, pubkey string) bool {
+	_, peers := splitPeerBlocks(conf)
+	for _, block := range peers {
+		if peerPublicKey(block) == pubkey {
+			return true
+		}
+	}
+	return false
+}
+
+func renderRelayPeer(conf, pubkey, endpoint string, allowed []string) (string, bool) {
+	prelude, peers := splitPeerBlocks(conf)
+	exitBlock := "[Peer]\nPublicKey = " + pubkey +
+		"\nAllowedIPs = " + strings.Join(allowed, ",") +
+		"\nEndpoint = " + endpoint +
+		"\nPersistentKeepalive = 25"
+	var out []string
+	if strings.TrimSpace(prelude) != "" {
+		out = append(out, strings.TrimRight(prelude, "\n"))
+	}
+	for _, block := range peers {
+		if peerPublicKey(block) == pubkey {
+			out = append(out, exitBlock)
+			continue
+		}
+		out = append(out, strings.TrimRight(block, "\n"))
+	}
+	if !hasPeer(conf, pubkey) {
+		out = append(out, exitBlock)
+	}
+	updated := strings.Join(out, "\n\n") + "\n"
+	return updated, updated != conf
+}
+
+func removePeerBlock(conf, pubkey string) (string, bool) {
+	prelude, peers := splitPeerBlocks(conf)
+	var out []string
+	if strings.TrimSpace(prelude) != "" {
+		out = append(out, strings.TrimRight(prelude, "\n"))
+	}
+	changed := false
+	for _, block := range peers {
+		if peerPublicKey(block) == pubkey {
+			changed = true
+			continue
+		}
+		out = append(out, strings.TrimRight(block, "\n"))
+	}
+	if !changed {
+		return conf, false
+	}
+	return strings.Join(out, "\n\n") + "\n", true
+}
+
+func splitPeerBlocks(conf string) (string, []string) {
+	var prelude, peers, cur []string
+	inPeer := false
+	for _, line := range strings.Split(conf, "\n") {
+		if strings.EqualFold(strings.TrimSpace(line), "[Peer]") {
+			if inPeer && len(cur) > 0 {
+				peers = append(peers, strings.Join(cur, "\n"))
+			}
+			cur = []string{line}
+			inPeer = true
+			continue
+		}
+		if inPeer {
+			cur = append(cur, line)
+		} else {
+			prelude = append(prelude, line)
+		}
+	}
+	if inPeer && len(cur) > 0 {
+		peers = append(peers, strings.Join(cur, "\n"))
+	}
+	return strings.Join(prelude, "\n"), peers
+}
+
+func peerPublicKey(block string) string {
+	for _, line := range strings.Split(block, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "PublicKey") {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 // RemovePeer drops a peer, which also removes the destinations it carried.
 func (p windowsPlatform) RemovePeer(dev, pubkey string) error {
 	exe := wgExe()
