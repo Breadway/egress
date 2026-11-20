@@ -190,6 +190,7 @@ func main() {
 	s.mux.HandleFunc("/api/heartbeat", s.apiHeartbeat)
 	s.mux.HandleFunc("/api/blocked-report", s.apiBlockedReport)
 	s.mux.HandleFunc("/api/seed", s.apiSeed)
+	s.mux.HandleFunc("/api/peers", s.apiPeers)
 	s.mux.HandleFunc("/api/enroll", s.apiEnroll)
 	s.mux.HandleFunc("/admin/reports", s.adminReports)
 	s.mux.HandleFunc("/admin/split", s.adminSplit)
