@@ -771,7 +771,9 @@ func cmdSupervise(args []string) error {
 	if direct != nil {
 		go direct.Run(ctx)
 	}
-	if peers, ok := plat.(peerPlatform); ok && !*noTunnel {
+	// A split install has no direct tunnel of its own but does own wg0ws, which
+	// is where its peers live; the same condition the splitter uses applies.
+	if peers, ok := plat.(peerPlatform); ok && (!*noTunnel || *relayTunnel) {
 		go newPeerManager(peers, splitDev, appLogger()).Run(ctx)
 	}
 	if *relayTunnel {
