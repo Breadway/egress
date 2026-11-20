@@ -105,6 +105,27 @@ func cmdSupport(args []string) error {
 		fmt.Fprintf(&summary, "device %s %s\n", id.IP, id.Pubkey)
 	}
 
+	// The per-user proxy keeps its own learned profile, in the user's profile
+	// rather than the install directory. A wrong "allowed" verdict shows up
+	// there and nowhere else, and without it a bundle cannot explain why a
+	// blocked site was dialled directly.
+	type extraFile struct {
+		name string
+		data []byte
+	}
+	var extras []extraFile
+	for _, dir := range []string{split.ProxyDir(), split.ProfileDir()} {
+		matches, _ := filepath.Glob(filepath.Join(dir, "split-*.json"))
+		for _, match := range matches {
+			data, rerr := os.ReadFile(match)
+			if rerr != nil {
+				continue
+			}
+			name := "profile-" + filepath.Base(filepath.Dir(match)) + "-" + filepath.Base(match)
+			extras = append(extras, extraFile{name, data})
+		}
+	}
+
 	var diag bytes.Buffer
 	if err := health.WriteDiagnose(&diag); err != nil {
 		fmt.Fprintf(&diag, "diagnose failed: %v\n", err)
@@ -118,6 +139,11 @@ func cmdSupport(args []string) error {
 		"log.txt":      logs.Bytes(),
 	} {
 		if err := add(name, []byte(redactSupport(string(data)))); err != nil {
+			return err
+		}
+	}
+	for _, extra := range extras {
+		if err := add(extra.name, []byte(redactSupport(string(extra.data)))); err != nil {
 			return err
 		}
 	}

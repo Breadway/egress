@@ -235,7 +235,7 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 	}
 	defer tconn.Close()
 
-	status, err := headStatus(tconn, domain, ua, timeout)
+	status, body, err := headFetch(tconn, domain, ua, timeout)
 	if err != nil {
 		res.Err = err
 		if isTimeout(err) {
@@ -245,6 +245,11 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 		return res
 	}
 	res.Status = status
+	if looksIntercepted(body) {
+		res.State, res.Evidence = StateBlocked, EvidenceInterceptPage
+		res.Transient = false
+		return res
+	}
 
 	switch {
 	case status == 403 || status == 451:
@@ -276,29 +281,78 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 	}
 }
 
-// headStatus sends a minimal HEAD request and returns the status code.
-func headStatus(conn net.Conn, domain, ua string, timeout time.Duration) (int, error) {
+// headFetch sends a GET and returns the status plus the first few kilobytes of
+// the body. A HEAD would be cheaper, but a filter that intercepts TLS answers
+// 200 with its own block page, and only the body distinguishes that from the
+// real site.
+func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, string, error) {
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	req := "HEAD / HTTP/1.1\r\nHost: " + domain + "\r\nUser-Agent: " + ua +
-		"\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+	req := "GET / HTTP/1.1\r\nHost: " + domain + "\r\nUser-Agent: " + ua +
+		"\r\nAccept: text/html,*/*\r\nRange: bytes=0-8191\r\nConnection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, req); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	line, err := bufio.NewReader(conn).ReadString('\n')
+	br := bufio.NewReader(conn)
+	line, err := br.ReadString('\n')
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	fields := strings.Fields(line)
 	if len(fields) < 2 {
-		return 0, fmt.Errorf("bad status line %q", line)
+		return 0, "", fmt.Errorf("bad status line %q", line)
 	}
 	status, err := strconv.Atoi(fields[1])
 	if err != nil {
-		return 0, fmt.Errorf("bad status line %q", line)
+		return 0, "", fmt.Errorf("bad status line %q", line)
 	}
-	return status, nil
+	for {
+		header, herr := br.ReadString('\n')
+		if herr != nil || header == "\r\n" || header == "\n" {
+			break
+		}
+	}
+	body := make([]byte, 0, 4096)
+	buf := make([]byte, 2048)
+	for len(body) < 8192 {
+		n, rerr := br.Read(buf)
+		if n > 0 {
+			body = append(body, buf[:n]...)
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	return status, string(body), nil
+}
+
+// interceptionMarkers appear in a filter's block page and effectively never in
+// the first kilobytes of a real site. Forcing the traffic through the relay
+// would also work, but a marker check costs one response we already fetch.
+var interceptionMarkers = []string{
+	"fortiguard",
+	"fortinet",
+	"web page blocked",
+	"intrusion prevention",
+	"blocked by your organization",
+	"bluecoat",
+	"sonicwall",
+	"untangle",
+}
+
+// looksIntercepted reports whether a response body is a filter block page.
+// This is what a TLS-intercepting school network needs: it presents a valid
+// certificate, so a status-only probe calls the block page "allowed", and the
+// browser then goes direct and shows the page.
+func looksIntercepted(body string) bool {
+	lower := strings.ToLower(body)
+	for _, marker := range interceptionMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyDialError turns a TCP connect error into a verdict. A timeout is the

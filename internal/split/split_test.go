@@ -208,21 +208,24 @@ func TestCombineProbeSamples(t *testing.T) {
 	}
 }
 
-func TestHeadStatus(t *testing.T) {
+func TestHeadFetch(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 	go func() {
 		defer server.Close()
 		buf := make([]byte, 512)
 		_, _ = server.Read(buf)
-		_, _ = server.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
+		_, _ = server.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 5\r\n\r\nnope!"))
 	}()
-	status, err := headStatus(client, "example.com", "test", time.Second)
+	status, body, err := headFetch(client, "example.com", "test", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status != 403 {
 		t.Errorf("status %d, want 403", status)
+	}
+	if body != "nope!" {
+		t.Errorf("body %q, want the bytes after the headers", body)
 	}
 }
 
@@ -948,5 +951,49 @@ func TestRouteManagerNotifiesOnChange(t *testing.T) {
 	rm.Clear()
 	if len(got) != 0 {
 		t.Fatalf("after clear: %v", got)
+	}
+}
+
+// A school appliance that intercepts TLS answers 200 with its own block page.
+// Status alone cannot tell that from the real site, which is how a blocked
+// destination ended up classified as allowed and dialled directly.
+func TestLooksIntercepted(t *testing.T) {
+	cases := map[string]bool{
+		"<html><title>FortiGuard Intrusion Prevention</title>": true,
+		"Access Blocked. Fortinet Unified Threat Management":   true,
+		"<h1>Web Page Blocked</h1>":                            true,
+		"<html><body>Welcome to Poki, free games</body>":       false,
+		"": false,
+	}
+	for body, want := range cases {
+		if got := looksIntercepted(body); got != want {
+			t.Errorf("looksIntercepted(%.40q) = %v, want %v", body, got, want)
+		}
+	}
+}
+
+// A verdict from an older, weaker check must not outlive the check. Blocked
+// entries are kept because they only cause an extra relay attempt.
+func TestLoadProfileDropsStaleAllowedVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/split-net.json"
+	old := `{"version":1,"network":"net","entries":{` +
+		`"allowed.test":{"state":"allowed","last_ok":"2026-11-20T00:00:00Z"},` +
+		`"blocked.test":{"state":"blocked","evidence":"tls-stall"}}}`
+	if err := os.WriteFile(path, []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadProfile(path, "net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.Entries["allowed.test"]; ok {
+		t.Error("a stale allowed verdict survived the probe version bump")
+	}
+	if _, ok := p.Entries["blocked.test"]; !ok {
+		t.Error("a blocked verdict must be kept")
+	}
+	if p.ProbeVersion != probeVersion {
+		t.Errorf("probe version %d, want %d", p.ProbeVersion, probeVersion)
 	}
 }
