@@ -239,7 +239,6 @@ func runSplitUserTask(user, exe string) error {
 		time.Sleep(500 * time.Millisecond)
 	}
 	return errors.New("per-user setup task never reported; no interactive session, or the task did not run")
-	return errors.New("per-user setup task did not finish")
 }
 
 // taskState pulls the status and last result out of schtasks list output.
