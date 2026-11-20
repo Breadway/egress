@@ -123,6 +123,8 @@ func realMain() error {
 	switch command {
 	case "install":
 		return cmdInstall(args)
+	case "tray":
+		return cmdTray(args)
 	case "supervise":
 		return cmdSupervise(args)
 	case "verify":
@@ -431,7 +433,11 @@ func runInstall(plat platform, args []string) (err error) {
 		_ = saveDeviceIdentity(deviceIdentity{Pubkey: pub, IP: tcfg.ClientIP})
 	}
 
-	if *noTunnel {
+	// A Windows split install still owns the relay tunnel, so WireGuard is
+	// required even though the tunnel is not the default route. Treating split
+	// as "dns only" left devices with a config and no driver to run it.
+	splitRelayTunnel := *noTunnel && runtime.GOOS == "windows"
+	if *noTunnel && !splitRelayTunnel {
 		debugf("dns-only install: skipping wireguard-tools")
 	} else if err := plat.InstallTools(); err != nil {
 		return err
@@ -493,12 +499,6 @@ func runInstall(plat platform, args []string) (err error) {
 		}
 		fmt.Println("wireguard tunnel is up")
 		fmt.Println("split mode: only learned-blocked destinations use the tunnel")
-	}
-
-	if _, err := plat.InstallWstunnel(); err != nil {
-		if !*noFallback {
-			fmt.Fprintf(os.Stderr, "warning: wstunnel unavailable, the fallback will not work: %v\n", err)
-		}
 	}
 
 	exe, err := ensureInstalledBinary()
@@ -563,12 +563,9 @@ func runInstall(plat platform, args []string) (err error) {
 	serviceArgs := []string{"supervise"}
 	if *noTunnel {
 		serviceArgs = append(serviceArgs, "--no-tunnel")
-		// Split mode on Windows still owns a tunnel: learned-blocked
-		// destinations ride the WebSocket relay, which keeps the interceptor
-		// looking at ciphertext instead of a SOCKS session.
-		if runtime.GOOS == "windows" {
-			serviceArgs = append(serviceArgs, "--relay-tunnel")
-		}
+	}
+	if splitRelayTunnel {
+		serviceArgs = append(serviceArgs, "--relay-tunnel")
 	}
 	if *noFallback {
 		serviceArgs = append(serviceArgs, "--no-fallback")
@@ -677,6 +674,19 @@ func parkInstall(plat platform, tcfg tunnelConfig, results checkResults, cause e
 		debugf("failure report unsent, spooled: %v", err)
 		spoolReport(data)
 	}
+}
+
+// cmdTray runs the notification icon. The per-user proxy is gone, so the tray
+// is started on its own and reads nothing from a proxy.
+func cmdTray(args []string) error {
+	fs := newFlagSet("tray")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	setupLogging(resolveDebug(false))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runTray(ctx, nil)
 }
 
 func cmdSupervise(args []string) error {

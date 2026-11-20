@@ -166,7 +166,9 @@ func runTray(ctx context.Context, p *split.Proxy) error {
 	trayProxy = p
 	defer runtime.UnlockOSThread()
 
-	trayPacURL = "http://" + p.ListenAddr() + "/proxy.pac"
+	if p != nil {
+		trayPacURL = "http://" + p.ListenAddr() + "/proxy.pac"
+	}
 	trayPing = []string{"1.1.1.1: ...", "example.com: ..."}
 
 	className, err := syscall.UTF16PtrFromString("egressTrayWindow")
@@ -329,10 +331,12 @@ func refreshPings() {
 
 func trayTipLocked() string {
 	tip := "egress"
-	if blocked, contested, _ := trayProxy.Stats(); blocked > 0 {
-		tip += fmt.Sprintf(" | %d blocked", blocked)
-		if contested > 0 {
-			tip += fmt.Sprintf(" (%d contested)", contested)
+	if trayProxy != nil {
+		if blocked, contested, _ := trayProxy.Stats(); blocked > 0 {
+			tip += fmt.Sprintf(" | %d blocked", blocked)
+			if contested > 0 {
+				tip += fmt.Sprintf(" (%d contested)", contested)
+			}
 		}
 	}
 	for _, line := range trayPing {
@@ -343,6 +347,9 @@ func trayTipLocked() string {
 
 // trayStatusLines describes the proxy for the menu's greyed header.
 func trayStatusLines(p *split.Proxy) []string {
+	if p == nil {
+		return []string{"Blocked sites: relay tunnel", "Proxy: not used"}
+	}
 	blocked, contested, allowed := p.Stats()
 	lines := []string{
 		"Proxy: listening on " + p.ListenAddr(),

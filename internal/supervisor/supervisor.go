@@ -192,20 +192,6 @@ func (s *Supervisor) loop(ctx context.Context) error {
 		// the embedded copy: this process runs as SYSTEM and may write there,
 		// while the per-user proxy may not. Back off when the file keeps
 		// disappearing, because then the scan is the cause, not a bad copy.
-		if s.manageFallback {
-			if _, err := s.plat.WstunnelPath(); err != nil {
-				if time.Now().Before(s.restorePaused) {
-					// Deliberately quiet: noteRestore already explained it.
-				} else if path, ierr := s.plat.InstallWstunnel(); ierr != nil {
-					s.log.Printf("tunneler missing and could not be restored: %v", ierr)
-				} else {
-					s.noteRestore(path)
-				}
-			} else if s.restores > 0 {
-				s.restores = 0
-			}
-		}
-
 		// Track the whole default-route set, not just the best route. A new
 		// escape path can appear (or vanish) without the best route
 		// changing, and a best route can go dead while staying selected.

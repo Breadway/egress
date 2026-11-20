@@ -25,6 +25,8 @@ func userPrincipal(user string) string { return sysplatform.UserPrincipal(user) 
 func clearUserPAC()               { sysplatform.ClearUserPAC() }
 func setUserPAC(url string) error { return sysplatform.SetUserPAC(url) }
 
+func installTrayAutostart(exe string) error { return sysplatform.InstallTrayAutostart(exe) }
+
 func installProxyAutostart(authPath, relay string) error {
 	return sysplatform.InstallProxyAutostart(authPath, relay)
 }

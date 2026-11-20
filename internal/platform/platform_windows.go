@@ -319,8 +319,14 @@ func (windowsPlatform) TunnelUp() bool {
 }
 
 func (windowsPlatform) TunnelConfigured() bool {
-	_, err := os.Stat(filepath.Join(winProgramData, "wg0.conf"))
-	return err == nil
+	// Split installs own wg0ws.conf; full installs own wg0.conf. Either one
+	// means this device has a tunnel that verification should demand.
+	for _, name := range []string{"wg0.conf", "wg0ws.conf"} {
+		if _, err := os.Stat(filepath.Join(winProgramData, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // LivePublicKey is unimplemented on Windows: the tunnel runs inside the
