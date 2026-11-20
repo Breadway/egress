@@ -7,19 +7,35 @@ import (
 	"time"
 )
 
+type peerCall struct {
+	kind     string // set, remove
+	endpoint string
+	allowed  []string
+	allowedN bool // allowed was not nil
+}
+
 type fakePeerPlatform struct {
-	set     []string
-	removed []string
+	calls []peerCall
 }
 
 func (f *fakePeerPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string) error {
-	f.set = append(f.set, pubkey+" "+endpoint)
+	f.calls = append(f.calls, peerCall{kind: "set", endpoint: endpoint, allowed: allowed, allowedN: allowed != nil})
 	return nil
 }
 
 func (f *fakePeerPlatform) RemovePeer(dev, pubkey string) error {
-	f.removed = append(f.removed, pubkey)
+	f.calls = append(f.calls, peerCall{kind: "remove"})
 	return nil
+}
+
+func (f *fakePeerPlatform) count(kind string) int {
+	n := 0
+	for _, c := range f.calls {
+		if c.kind == kind {
+			n++
+		}
+	}
+	return n
 }
 
 func newTestManager(plat peerPlatform) *peerManager {
@@ -50,7 +66,7 @@ func TestDialable(t *testing.T) {
 	}
 }
 
-func TestPeerManagerSkipsSelfAndRelayed(t *testing.T) {
+func TestPeerManagerSkipsSelfAndOffline(t *testing.T) {
 	plat := &fakePeerPlatform{}
 	m := newTestManager(plat)
 	m.setDesired([]apiPeer{
@@ -59,15 +75,41 @@ func TestPeerManagerSkipsSelfAndRelayed(t *testing.T) {
 		{PubKey: "offline", IP: "10.88.0.22"},
 		{PubKey: "direct", IP: "10.88.0.20", Endpoint: "203.0.113.9:51820"},
 	})
-	if len(m.links) != 1 {
-		t.Fatalf("links = %d, want 1", len(m.links))
+	if len(m.links) != 2 {
+		t.Fatalf("links = %d, want the relayed and direct peers", len(m.links))
 	}
-	if _, ok := m.links["direct"]; !ok {
-		t.Fatalf("direct peer missing: %+v", m.links)
+	if m.links["relayed"].dialable {
+		t.Fatal("a relayed peer must not be dialled")
+	}
+	if !m.links["direct"].dialable {
+		t.Fatal("a public peer should be dialled")
 	}
 }
 
-func TestPeerManagerAddsOneAttemptPerPass(t *testing.T) {
+// A relayed peer is configured passively so it can dial us, and it must never
+// be dialled at the loopback address the relay produces.
+func TestPeerManagerConfiguresRelayedPeerPassively(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	m := newTestManager(plat)
+	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.21", Endpoint: "127.0.0.1:55751"}})
+	m.reconcile()
+	m.reconcile()
+	if len(plat.calls) != 1 {
+		t.Fatalf("calls = %+v, want one passive configuration", plat.calls)
+	}
+	call := plat.calls[0]
+	if call.kind != "set" || call.endpoint != "" || call.allowedN {
+		t.Fatalf("passive peer = %+v, want no endpoint and untouched routes", call)
+	}
+	if !m.links["a"].present {
+		t.Fatal("peer should be marked present")
+	}
+	if m.links["a"].dialing || m.links["a"].direct {
+		t.Fatal("a relayed peer must not start a dial")
+	}
+}
+
+func TestPeerManagerAddsOnePeerPerPass(t *testing.T) {
 	plat := &fakePeerPlatform{}
 	m := newTestManager(plat)
 	m.setDesired([]apiPeer{
@@ -75,18 +117,39 @@ func TestPeerManagerAddsOneAttemptPerPass(t *testing.T) {
 		{PubKey: "b", IP: "10.88.0.21", Endpoint: "203.0.113.10:51820"},
 	})
 	m.reconcile()
-	if len(plat.set) != 1 {
-		t.Fatalf("set calls = %d, want 1 (one attempt per pass)", len(plat.set))
+	if len(plat.calls) != 1 {
+		t.Fatalf("calls = %d, want 1 (one configuration per pass)", len(plat.calls))
 	}
 	m.reconcile()
-	// The next pass starts the second peer rather than restarting the first.
-	if len(plat.set) != 2 {
-		t.Fatalf("set calls = %d, want 2 after a second pass", len(plat.set))
+	if len(plat.calls) != 2 {
+		t.Fatalf("calls = %d, want 2 after a second pass", len(plat.calls))
 	}
+}
+
+func TestPeerManagerDialsAndPromotes(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	m := newTestManager(plat)
+	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.20", Endpoint: "203.0.113.9:51820"}})
+	// First pass creates the peer, second starts the dial.
 	m.reconcile()
-	// Both attempts are open, so nothing new is dialled.
-	if len(plat.set) != 2 {
-		t.Fatalf("set calls = %d, want 2 while both attempts are open", len(plat.set))
+	m.reconcile()
+	link := m.links["a"]
+	if !link.dialing {
+		t.Fatalf("peer should be dialing after two passes: %+v", link)
+	}
+	last := plat.calls[len(plat.calls)-1]
+	if last.endpoint != "203.0.113.9:51820" || !last.allowedN || len(last.allowed) != 1 || last.allowed[0] != "10.88.0.20/32" {
+		t.Fatalf("dial call = %+v", last)
+	}
+	// The handshake completes, but not until the window has passed.
+	m.handshake = func(dev, pubkey string) (time.Duration, bool) { return 5 * time.Second, true }
+	link.dialStart = time.Now().Add(-peerAttemptWindow - time.Second)
+	m.reconcile()
+	if !link.direct || link.dialing {
+		t.Fatalf("peer should be direct: %+v", link)
+	}
+	if link.failures != 0 {
+		t.Fatalf("failures = %d, want 0", link.failures)
 	}
 }
 
@@ -95,53 +158,70 @@ func TestPeerManagerFallsBackWhenHandshakeDoesNotCome(t *testing.T) {
 	m := newTestManager(plat)
 	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.20", Endpoint: "203.0.113.9:51820"}})
 	m.reconcile()
-	link := m.links["a"]
-	link.addedAt = time.Now().Add(-peerAttemptWindow - time.Second)
 	m.reconcile()
-	if len(plat.removed) != 1 || plat.removed[0] != "a" {
-		t.Fatalf("removed = %v, want the failed peer", plat.removed)
+	link := m.links["a"]
+	link.dialStart = time.Now().Add(-peerAttemptWindow - time.Second)
+	m.reconcile()
+	if link.direct || link.dialing {
+		t.Fatalf("peer should be passive after a failed dial: %+v", link)
 	}
-	if link.direct || !link.backoffUntil.After(time.Now()) {
-		t.Fatalf("peer should be backed off after a failed attempt: %+v", link)
+	if len(plat.calls) == 0 {
+		t.Fatal("no calls recorded")
+	}
+	last := plat.calls[len(plat.calls)-1]
+	if last.endpoint != "" || !last.allowedN || len(last.allowed) != 0 {
+		t.Fatalf("demotion call = %+v, want routes cleared", last)
+	}
+	if !link.present || !link.backoffUntil.After(time.Now()) {
+		t.Fatalf("peer should stay present and backed off: %+v", link)
+	}
+	if m.links["a"].failures != 1 {
+		t.Fatalf("failures = %d, want 1", m.links["a"].failures)
 	}
 }
 
-func TestPeerManagerKeepsDirectLink(t *testing.T) {
-	plat := &fakePeerPlatform{}
-	m := newTestManager(plat)
-	m.handshake = func(dev, pubkey string) (time.Duration, bool) { return 10 * time.Second, true }
-	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.20", Endpoint: "203.0.113.9:51820"}})
-	m.reconcile()
-	link := m.links["a"]
-	link.addedAt = time.Now().Add(-peerAttemptWindow - time.Second)
-	m.reconcile()
-	if !link.direct {
-		t.Fatal("peer should be direct once the handshake completes")
-	}
-	if len(plat.removed) != 0 {
-		t.Fatalf("removed = %v, want none", plat.removed)
-	}
-	// A stale handshake drops the link and returns the pair to the star.
-	m.handshake = func(dev, pubkey string) (time.Duration, bool) {
-		return peerHandshakeStale + time.Minute, true
-	}
-	m.reconcile()
-	if link.direct || len(plat.removed) != 1 {
-		t.Fatalf("stale link should be removed: direct=%v removed=%v", link.direct, plat.removed)
-	}
-}
-
-func TestPeerManagerDropsPeerThatLeavesTheList(t *testing.T) {
+func TestPeerManagerDemotesStaleDirectLink(t *testing.T) {
 	plat := &fakePeerPlatform{}
 	m := newTestManager(plat)
 	m.handshake = func(dev, pubkey string) (time.Duration, bool) { return 5 * time.Second, true }
 	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.20", Endpoint: "203.0.113.9:51820"}})
 	m.reconcile()
+	m.reconcile()
+	link := m.links["a"]
+	link.dialStart = time.Now().Add(-peerAttemptWindow - time.Second)
+	m.reconcile()
+	if !link.direct {
+		t.Fatal("peer should be direct")
+	}
+	m.handshake = func(dev, pubkey string) (time.Duration, bool) {
+		return peerHandshakeStale + time.Minute, true
+	}
+	m.reconcile()
+	if link.direct || !link.present {
+		t.Fatalf("stale link should be demoted but kept: %+v", link)
+	}
+	last := plat.calls[len(plat.calls)-1]
+	if last.endpoint != "" || !last.allowedN || len(last.allowed) != 0 {
+		t.Fatalf("demotion call = %+v, want routes cleared", last)
+	}
+}
+
+func TestPeerManagerRemovesPeerThatLeavesTheList(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	m := newTestManager(plat)
+	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.21", Endpoint: "127.0.0.1:55751"}})
+	m.reconcile()
 	m.setDesired(nil)
 	if len(m.links) != 0 {
 		t.Fatalf("links = %+v, want empty", m.links)
 	}
-	if len(plat.removed) != 1 {
-		t.Fatalf("removed = %v, want the departed peer", plat.removed)
+	if plat.count("remove") != 1 {
+		t.Fatalf("remove calls = %d, want 1", plat.count("remove"))
+	}
+}
+
+func TestPeerBackoffGrows(t *testing.T) {
+	if peerBackoff(1) >= peerBackoff(2) || peerBackoff(2) >= peerBackoff(3) {
+		t.Fatal("backoff should grow with repeated failures")
 	}
 }

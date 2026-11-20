@@ -714,7 +714,9 @@ func (linuxPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string) err
 	if endpoint != "" {
 		args = append(args, "endpoint", endpoint, "persistent-keepalive", "25")
 	}
-	if len(allowed) > 0 {
+	if allowed != nil {
+		// Non-nil but empty means clear the routes, which is how a direct link
+		// is demoted without losing the peer or its learned endpoint.
 		args = append(args, "allowed-ips", strings.Join(allowed, ","))
 	}
 	out, err := logx.ExecLogged("wg", args...)
