@@ -70,6 +70,18 @@ func (d *directExit) SetExits(list []split.DirectExit) {
 	d.nudge()
 }
 
+// ExitPubkey is the key of the peer currently carrying blocked destinations.
+// A device that is both a circle peer and the active exit is one WireGuard
+// peer, and the exit wins: the P2P manager must leave its routes alone.
+func (d *directExit) ExitPubkey() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.active {
+		return ""
+	}
+	return d.pubkey
+}
+
 // SetPeerExits records the circle's offered exits and whether they should win
 // over the published ones.
 func (d *directExit) SetPeerExits(list []split.DirectExit, prefer bool) {

@@ -779,7 +779,11 @@ func cmdSupervise(args []string) error {
 	// A split install has no direct tunnel of its own but does own wg0ws, which
 	// is where its peers live; the same condition the splitter uses applies.
 	if peers, ok := plat.(peerPlatform); ok && (!*noTunnel || *relayTunnel) {
-		go newPeerManager(peers, splitDev, appLogger()).Run(ctx)
+		var exitOwner func() string
+		if direct != nil {
+			exitOwner = direct.ExitPubkey
+		}
+		go newPeerManager(peers, splitDev, appLogger(), exitOwner).Run(ctx)
 	}
 	if *relayTunnel {
 		// The relay tunnel is the path for learned-blocked destinations on

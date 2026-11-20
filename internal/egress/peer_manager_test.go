@@ -46,6 +46,7 @@ func newTestManager(plat peerPlatform) *peerManager {
 		self:      "self",
 		links:     map[string]*peerLink{},
 		handshake: func(dev, pubkey string) (time.Duration, bool) { return 0, false },
+		exclude:   func() string { return "" },
 	}
 }
 
@@ -223,5 +224,23 @@ func TestPeerManagerRemovesPeerThatLeavesTheList(t *testing.T) {
 func TestPeerBackoffGrows(t *testing.T) {
 	if peerBackoff(1) >= peerBackoff(2) || peerBackoff(2) >= peerBackoff(3) {
 		t.Fatal("backoff should grow with repeated failures")
+	}
+}
+
+func TestPeerManagerLeavesTheActiveExitAlone(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	m := newTestManager(plat)
+	m.exclude = func() string { return "a" }
+	m.setDesired([]apiPeer{{PubKey: "a", IP: "10.88.0.2", Endpoint: "203.0.113.9:51820"}})
+	m.reconcile()
+	if len(plat.calls) != 0 {
+		t.Fatalf("calls = %+v, want none while the exit owns the peer", plat.calls)
+	}
+	// The exit manager removes its own peer when it falls back; the P2P manager
+	// must not remove the same identity as a peer leaving the list.
+	m.links["a"].present = true
+	m.setDesired(nil)
+	if len(plat.calls) != 0 {
+		t.Fatalf("calls = %+v, want no removal of an owned peer", plat.calls)
 	}
 }

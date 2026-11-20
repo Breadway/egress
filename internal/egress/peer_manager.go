@@ -93,17 +93,27 @@ type peerManager struct {
 	// handshake is a variable so tests can drive the state machine without a
 	// live WireGuard interface.
 	handshake func(dev, pubkey string) (time.Duration, bool)
+	// exclude names a peer another manager owns, currently the active exit.
+	exclude func() string
 
 	mu        sync.Mutex
 	links     map[string]*peerLink
 	lastCount int
 }
 
-func newPeerManager(plat peerPlatform, dev string, logger *log.Logger) *peerManager {
-	return &peerManager{
+func newPeerManager(plat peerPlatform, dev string, logger *log.Logger, exclude func() string) *peerManager {
+	m := &peerManager{
 		plat: plat, dev: dev, log: logger, links: map[string]*peerLink{},
-		self: devicePubkey(), handshake: handshakeAge,
+		self: devicePubkey(), handshake: handshakeAge, exclude: exclude,
 	}
+	return m
+}
+
+// owned reports whether another manager controls this peer. The exit manager
+// and the P2P manager address the same WireGuard identity, so the exit has to
+// win while it is active or the two undo each other every tick.
+func (m *peerManager) owned(pubkey string) bool {
+	return m.exclude != nil && m.exclude() == pubkey
 }
 
 func (m *peerManager) Run(ctx context.Context) {
@@ -178,7 +188,9 @@ func (m *peerManager) setDesired(peers []apiPeer) {
 	defer m.mu.Unlock()
 	for key, link := range m.links {
 		if _, ok := desired[key]; !ok {
-			if link.present {
+			// Never remove a peer the exit manager owns: the peer is the same
+			// identity, and it will clean up after itself.
+			if link.present && !m.owned(key) {
 				m.removeLocked(link)
 			}
 			delete(m.links, key)
@@ -221,6 +233,9 @@ func (m *peerManager) reconcile() {
 	// tunnel service, and several at once would restart it repeatedly.
 	budget := 1
 	for _, link := range m.links {
+		if m.owned(link.pubkey) {
+			continue
+		}
 		if !link.present {
 			if budget == 0 {
 				continue

@@ -272,7 +272,7 @@ func ensureExitNAT(dev, wan string) error {
 	}
 	forward := []string{"-C", "FORWARD", "-s", core.TunnelSubnet, "-o", wan, "-j", "ACCEPT"}
 	if err := logx.RunLogged("iptables", forward...); err != nil {
-		add := append([]string{"-I", "FORWARD", "1"}, forward[1:]...)
+		add := append([]string{"-I", "FORWARD", "1"}, forward[2:]...)
 		if err := logx.RunLogged("iptables", add...); err != nil {
 			return err
 		}
