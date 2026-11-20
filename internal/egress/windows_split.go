@@ -86,6 +86,16 @@ func applyUserTray(exe string) error {
 // which is what broke an update that ran install as SYSTEM and asked for
 // HOST\SYSTEM (EGRESS-97).
 func grantUserExecute(path string) error {
+	// The file grant is useless without traverse on the directory: Windows
+	// checks every component of the path, and the install directory is
+	// deliberately closed to anyone but SYSTEM and Administrators.
+	if err := grantUsersRX(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return grantUsersRX(path)
+}
+
+func grantUsersRX(path string) error {
 	out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(RX)").CombinedOutput()
 	if err == nil {
 		return nil
