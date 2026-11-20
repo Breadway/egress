@@ -45,9 +45,10 @@ func cmdPeers(args []string) error {
 	}
 	var payload struct {
 		Peers []struct {
-			Label  string `json:"label"`
-			PubKey string `json:"pubkey"`
-			IP     string `json:"ip"`
+			Label    string `json:"label"`
+			PubKey   string `json:"pubkey"`
+			IP       string `json:"ip"`
+			Endpoint string `json:"endpoint"`
 		} `json:"peers"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -63,16 +64,26 @@ func cmdPeers(args []string) error {
 		return nil
 	}
 	plat := newPlatform()
+	silent := false
 	for _, peer := range payload.Peers {
-		state := "unreachable"
+		state := "no icmp reply"
 		if plat.Ping(peer.IP) {
 			state = "reachable"
+		} else {
+			silent = true
 		}
 		label := peer.Label
 		if label == "" {
 			label = peer.PubKey[:min(10, len(peer.PubKey))]
 		}
-		fmt.Printf("%-10s %-14s %s\n", peer.IP, state, label)
+		endpoint := peer.Endpoint
+		if endpoint == "" {
+			endpoint = "-"
+		}
+		fmt.Printf("%-10s %-16s %-22s %s\n", peer.IP, state, endpoint, label)
+	}
+	if silent {
+		fmt.Println("\nNo ICMP reply can mean the peer's firewall drops pings, not that it is down; Windows does by default.")
 	}
 	return nil
 }
