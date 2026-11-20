@@ -523,7 +523,11 @@ const (
 	EvidenceTLSStall         Evidence = "tls-stall"
 	EvidenceCertSubstitution Evidence = "cert-substitution"
 	EvidenceIPRejected       Evidence = "ip-rejected"
-	EvidenceSeed             Evidence = "seed"
+	// EvidenceInterceptPage is a direct connection that looked healthy but
+	// returned the filter's own block page. TLS interception with a trusted CA
+	// makes that indistinguishable from the real site by status code alone.
+	EvidenceInterceptPage Evidence = "intercept-page"
+	EvidenceSeed          Evidence = "seed"
 )
 
 const (
@@ -556,11 +560,18 @@ type DomainEntry struct {
 
 // Profile is the learned block list for one network. It is deliberately small
 // and text: domains and evidence, never browsing history.
+// probeVersion guards the evidence rules. A verdict is only as good as the
+// check that produced it, so when the check improves, old "allowed" verdicts
+// must be re-probed. Blocked verdicts are kept: they only ever cause an
+// attempt through the relay, which cannot make a working site fail.
+const probeVersion = 2
+
 type Profile struct {
-	Version int                    `json:"version"`
-	Network string                 `json:"network"`
-	Updated time.Time              `json:"updated"`
-	Entries map[string]DomainEntry `json:"entries"`
+	Version      int                    `json:"version"`
+	ProbeVersion int                    `json:"probe_version"`
+	Network      string                 `json:"network"`
+	Updated      time.Time              `json:"updated"`
+	Entries      map[string]DomainEntry `json:"entries"`
 	// Protocols is what the network was last seen to allow outbound: udp,
 	// tcp, icmp, dns. Shared between devices so a joining client can start
 	// in the right mode instead of rediscovering a UDP block.
@@ -568,8 +579,8 @@ type Profile struct {
 }
 
 func NewProfile(network string) *Profile {
-	return &Profile{Version: 1, Network: network, Entries: map[string]DomainEntry{},
-		Protocols: map[string]string{}}
+	return &Profile{Version: 1, ProbeVersion: probeVersion, Network: network,
+		Entries: map[string]DomainEntry{}, Protocols: map[string]string{}}
 }
 
 // NetworkID is the key the shared table uses. It hashes the SSID so the server
@@ -776,6 +787,17 @@ func LoadProfile(path, network string) (*Profile, error) {
 	}
 	if p.Network == "" {
 		p.Network = network
+	}
+	if p.ProbeVersion < probeVersion {
+		// The stored verdicts came from an older check. Re-probing an allowed
+		// verdict costs one request; keeping a wrong one hides a block for a
+		// day, which is exactly how a blocked site ended up dialled directly.
+		for domain, entry := range p.Entries {
+			if entry.State != StateBlocked {
+				delete(p.Entries, domain)
+			}
+		}
+		p.ProbeVersion = probeVersion
 	}
 	return &p, nil
 }
