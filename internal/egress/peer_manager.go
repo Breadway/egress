@@ -323,15 +323,7 @@ func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if user, pass, ok := relayCredential(); ok {
-		req.SetBasicAuth(user, pass)
-	} else {
-		// A bound device's public key identifies it when the device has no
-		// relay credential, which older installs may not.
-		q := req.URL.Query()
-		q.Set("k", self)
-		req.URL.RawQuery = q.Encode()
-	}
+	applyPeerAuth(req, self)
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
@@ -347,6 +339,19 @@ func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {
 		return nil, err
 	}
 	return out.Peers, nil
+}
+
+// applyPeerAuth authenticates a peer API request. The relay credential is
+// preferred; a bound device's public key identifies devices that do not hold
+// one, which older installs may not.
+func applyPeerAuth(req *http.Request, self string) {
+	if user, pass, ok := relayCredential(); ok {
+		req.SetBasicAuth(user, pass)
+		return
+	}
+	q := req.URL.Query()
+	q.Set("k", self)
+	req.URL.RawQuery = q.Encode()
 }
 
 // relayCredential reads the relay credential, preferring the state directory

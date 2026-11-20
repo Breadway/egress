@@ -38,13 +38,18 @@ type directExit struct {
 	dev  string
 	log  *log.Logger
 
-	mu       sync.Mutex
-	exits    []split.DirectExit
-	prefixes []string
-	tunnel   *wgtunnel.Tunnel
-	pubkey   string
-	active   bool
-	lastErr  string
+	mu    sync.Mutex
+	exits []split.DirectExit
+	// peerExits are exits offered by devices in the circle. They are only
+	// chosen when the person opted in, because using one sends traffic through
+	// someone else's connection.
+	peerExits  []split.DirectExit
+	preferPeer bool
+	prefixes   []string
+	tunnel     *wgtunnel.Tunnel
+	pubkey     string
+	active     bool
+	lastErr    string
 
 	wake chan struct{}
 }
@@ -61,6 +66,16 @@ func newDirectExit(plat peerSetter, dev string, logger *log.Logger) *directExit 
 func (d *directExit) SetExits(list []split.DirectExit) {
 	d.mu.Lock()
 	d.exits = append([]split.DirectExit(nil), list...)
+	d.mu.Unlock()
+	d.nudge()
+}
+
+// SetPeerExits records the circle's offered exits and whether they should win
+// over the published ones.
+func (d *directExit) SetPeerExits(list []split.DirectExit, prefer bool) {
+	d.mu.Lock()
+	d.peerExits = append([]split.DirectExit(nil), list...)
+	d.preferPeer = prefer
 	d.mu.Unlock()
 	d.nudge()
 }
@@ -105,6 +120,9 @@ func (d *directExit) Run(ctx context.Context) {
 func (d *directExit) first() (split.DirectExit, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.preferPeer && len(d.peerExits) > 0 {
+		return d.peerExits[0], true
+	}
 	if len(d.exits) == 0 {
 		return split.DirectExit{}, false
 	}
@@ -130,7 +148,11 @@ func (d *directExit) reconcile(ctx context.Context) {
 	}
 
 	d.mu.Lock()
+	previous := ""
 	if d.tunnel == nil || d.pubkey != ex.PubKey {
+		if d.pubkey != "" && d.pubkey != ex.PubKey {
+			previous = d.pubkey
+		}
 		if d.tunnel != nil {
 			d.tunnel.Stop()
 		}
@@ -144,6 +166,14 @@ func (d *directExit) reconcile(ctx context.Context) {
 	}
 	tunnel := d.tunnel
 	d.mu.Unlock()
+	if previous != "" {
+		// Two exit peers claiming the same destinations is a coin toss in the
+		// cryptokey routing; drop the one being replaced.
+		_ = d.plat.RemovePeer(d.dev, previous)
+		if cfg, ok := d.plat.(relayPeerConfigurer); ok {
+			_ = cfg.RemoveRelayPeer(d.dev, previous)
+		}
+	}
 
 	if err := tunnel.Ensure(ctx); err != nil {
 		d.noteError("exit tunnel: %v", err)

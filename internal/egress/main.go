@@ -125,6 +125,10 @@ func realMain() error {
 		return cmdInstall(args)
 	case "peers":
 		return cmdPeers(args)
+	case "peer-exit":
+		return cmdPeerExit(args)
+	case "exit":
+		return cmdExit(args)
 	case "tray":
 		return cmdTray(args)
 	case "supervise":
@@ -770,6 +774,7 @@ func cmdSupervise(args []string) error {
 	defer stop()
 	if direct != nil {
 		go direct.Run(ctx)
+		go newPeerExitPoller(direct, appLogger()).Run(ctx)
 	}
 	// A split install has no direct tunnel of its own but does own wg0ws, which
 	// is where its peers live; the same condition the splitter uses applies.
