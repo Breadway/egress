@@ -3,7 +3,6 @@
 package egress
 
 import (
-	"egress/internal/core"
 	"egress/internal/split"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -33,10 +31,8 @@ func configureWindowsSplit() error {
 	// The install directory is SYSTEM/Administrators only, and the tray runs
 	// with the user's own token, so grant read and execute on what it needs.
 	// The directory stays locked; write access is unchanged.
-	for _, path := range []string{exe, filepath.Join(filepath.Dir(exe), "wstunnel.exe")} {
-		if err := grantUserExecute(path); err != nil {
-			return fmt.Errorf("grant user execute on %s: %w", path, err)
-		}
+	if err := grantUserExecute(exe); err != nil {
+		return fmt.Errorf("grant user execute on %s: %w", exe, err)
 	}
 	// The proxy, its PAC and its login entry belong to the logged-in user, so
 	// they must be applied in that user's session. An update runs install as
@@ -48,71 +44,32 @@ func configureWindowsSplit() error {
 			return fmt.Errorf("find the console user: %w", err)
 		}
 		if console == "" {
-			fmt.Println("no interactive user is logged on; the proxy and PAC will be applied by the next install")
+			fmt.Println("no interactive user is logged on; the tray will be started by the next install")
 			return nil
 		}
-		if err := runSplitUserTask(console, exe, enrollRelayUser, enrollRelayPass); err != nil {
+		if err := runSplitUserTask(console, exe); err != nil {
 			return fmt.Errorf("apply the per-user half for %s: %w", console, err)
 		}
 		return nil
 	}
-	return applyUserSplit(exe, enrollRelayUser, enrollRelayPass)
+	return applyUserTray(exe)
 }
 
-// applyUserSplit writes the per-user proxy settings and starts the tray. It
-// must run in the target user's session: the Run key lives in HKCU.
-func applyUserSplit(exe, relayUser, relayPass string) error {
-	// The proxy is per-user, the install directory is SYSTEM/Administrators
-	// only, and ProxyDir is SYSTEM's profile when install runs as SYSTEM. All
-	// per-user state therefore lives here, in the user's own profile.
-	authPath := filepath.Join(split.ProxyDir(), "socks-auth")
-	// An install that enrolled but failed before this step leaves the device
-	// credential in the install directory only, and the next `enable` has no
-	// token to enrol again. Seed the per-user copy from it so finishing the
-	// split setup does not need a new invite.
-	if _, _, ok := readAuthFile(authPath); !ok {
-		installed := filepath.Join(core.InstallDir(), "socks-auth")
-		if u, p, ok := readAuthFile(installed); ok {
-			if err := os.MkdirAll(filepath.Dir(authPath), 0700); err == nil {
-				if err := writeSocksAuth(authPath, u, p); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not seed the relay credential: %v\n", err)
-				}
-			}
-		}
+// applyUserTray retires the per-user proxy and starts the tray.
+//
+// The proxy existed to intercept blocked destinations before the tunnel could
+// carry them. That decision now lives in the supervisor: learned-blocked
+// destinations are routed into WireGuard, so a per-user proxy and PAC only add
+// a process, a port, and a thing that can fail. Clear them on upgrade rather
+// than leaving a browser pointed at a port nothing serves.
+func applyUserTray(exe string) error {
+	clearUserPAC()
+	removeProxyAutostart()
+	stopUserProxy()
+	if err := installTrayAutostart(exe); err != nil {
+		return fmt.Errorf("start the tray at login: %w", err)
 	}
-	user, pass := relayUser, relayPass
-	if user == "" || pass == "" {
-		user, pass = resolveSocksAuth(authPath, embeddedSocksUser, embeddedSocksPass)
-	}
-	if user == "" || pass == "" {
-		return fmt.Errorf("this device has no relay credential yet: neither %s nor %s exists. "+
-			"Re-run install with a fresh enrollment token, or ask the administrator for the "+
-			"device's relay user and password and write \"user:password\" to %s",
-			authPath, filepath.Join(core.InstallDir(), "socks-auth"), authPath)
-	}
-	if err := writeSocksAuth(authPath, user, pass); err != nil {
-		return err
-	}
-	if err := installProxyAutostart(authPath, relayListenAddr); err != nil {
-		return err
-	}
-	pac, err := writePAC()
-	if err != nil {
-		return err
-	}
-	// Start the proxy and prove it answers before pointing the browser at it.
-	// A PAC that names a dead port is worse than no PAC (EGRESS-98).
-	if !split.ProxyListening() {
-		cmd := exec.Command(exe, "proxy", "--tray", "--start-relay", "--socks-auth", authPath)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		if err := split.WaitForProxy(15 * time.Second); err != nil {
-			return err
-		}
-	}
-	return setUserPAC(pacURLForFile(pac))
+	return nil
 }
 
 // grantUserExecute lets any interactive account read and run one file. The
@@ -191,13 +148,10 @@ func consoleUser() (string, error) {
 }
 
 // runSplitUserTask runs the per-user setup in user's session and waits for it.
-func runSplitUserTask(user, exe, relayUser, relayPass string) error {
+func runSplitUserTask(user, exe string) error {
 	// Windows paths go inside plain double quotes: %q would double the
 	// backslashes and hand the child a path that does not exist.
 	args := fmt.Sprintf(`split-user --exe "%s"`, exe)
-	if relayUser != "" && relayPass != "" {
-		args += fmt.Sprintf(` --relay-user "%s" --relay-pass "%s"`, relayUser, relayPass)
-	}
 	script, err := windowsTaskScript(splitUserTask, exe, args,
 		"New-ScheduledTaskTrigger -Once -At (Get-Date)", userPrincipal(user), false)
 	if err != nil {
@@ -243,13 +197,14 @@ func taskState(out string) (status, result string) {
 	return status, result
 }
 
-// cmdSplitUser applies the per-user proxy settings and starts the tray. The
-// scheduled task calls it inside the user's session.
+// cmdSplitUser retires the per-user proxy and starts the tray. The scheduled
+// task calls it inside the user's session.
 func cmdSplitUser(args []string) error {
 	fs := newFlagSet("split-user")
 	exePath := fs.String("exe", "", "installed executable")
-	relayUser := fs.String("relay-user", "", "enrolled relay user")
-	relayPass := fs.String("relay-pass", "", "enrolled relay password")
+	// Accepted for compatibility with tasks created by older builds.
+	_ = fs.String("relay-user", "", "ignored")
+	_ = fs.String("relay-pass", "", "ignored")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -259,7 +214,7 @@ func cmdSplitUser(args []string) error {
 	// The task gives this process no console, so a debug build must log to
 	// the shared file for the failure to be visible at all.
 	setupLogging(resolveDebug(false))
-	if err := applyUserSplit(*exePath, *relayUser, *relayPass); err != nil {
+	if err := applyUserTray(*exePath); err != nil {
 		appLogger().Printf("split-user: %v", err)
 		return err
 	}

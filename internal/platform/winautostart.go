@@ -144,6 +144,24 @@ func InstallProxyAutostart(authPath, relay string) error {
 	return RegSetString(`Software\Microsoft\Windows\CurrentVersion\Run`, "egress", runValue)
 }
 
+// InstallTrayAutostart starts the notification icon at login. It replaces the
+// proxy autostart: the tray is the whole per-user process now.
+func InstallTrayAutostart(exe string) error {
+	dir := ProxyDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	launcher := filepath.Join(dir, "launch-tray.vbs")
+	cmdLine := fmt.Sprintf(`"%s" tray`, exe)
+	body := "Set sh = CreateObject(\"WScript.Shell\")\r\n" +
+		"sh.Run \"" + strings.ReplaceAll(cmdLine, `"`, `""`) + "\", 0, False\r\n"
+	if err := os.WriteFile(launcher, []byte(body), 0600); err != nil {
+		return err
+	}
+	return RegSetString(`Software\Microsoft\Windows\CurrentVersion\Run`, "egress",
+		fmt.Sprintf(`wscript.exe //B //Nologo "%s"`, launcher))
+}
+
 // removeProxyAutostart drops the per-user Run entry and its launcher.
 func RemoveProxyAutostart() {
 	_ = RegDeleteValue(`Software\Microsoft\Windows\CurrentVersion\Run`, "egress")

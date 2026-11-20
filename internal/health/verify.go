@@ -5,7 +5,6 @@ import (
 	"egress/internal/core"
 	"egress/internal/logx"
 	"egress/internal/platform"
-	"egress/internal/split"
 	"errors"
 	"fmt"
 	"io"
@@ -116,9 +115,20 @@ type Results struct {
 // describeSplit adds the Windows split client's state to a result set. It is
 // deliberately not part of runChecks: install verifies before split setup has
 // run, so a split probe there would fail every fresh install.
+// DescribeSplit judges the split path by its tunnel. The per-user proxy and
+// PAC are being retired: blocked destinations are routed into WireGuard, so a
+// running relay tunnel is what "split works" now means.
 func DescribeSplit(r Results, tcfg core.TunnelConfig) Results {
-	if tcfg.Split {
-		r.Split = split.HealthCheck()
+	if !tcfg.Split {
+		return r
+	}
+	switch r.Tunnel {
+	case "up":
+		r.Split = "ok"
+	case "skipped":
+		r.Split = ""
+	default:
+		r.Split = "the relay tunnel is down"
 	}
 	return r
 }
@@ -200,7 +210,7 @@ func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) er
 
 	if checkSplit && r.Split != "" {
 		if r.Split == "ok" {
-			fmt.Println("[ok]   split client: proxy and PAC in place")
+			fmt.Println("[ok]   split routing: relay tunnel is up")
 		} else {
 			fmt.Printf("[FAIL] split client: %s\n", r.Split)
 			failed = true
