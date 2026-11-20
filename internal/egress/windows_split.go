@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -78,7 +79,25 @@ func applyUserTray(exe string) error {
 	if err := installTrayAutostart(exe); err != nil {
 		return fmt.Errorf("start the tray at login: %w", err)
 	}
+	// Start it now as well. Waiting for the next login makes a working install
+	// look broken for the rest of the session.
+	if !trayRunning() {
+		cmd := exec.Command(exe, "tray")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("start the tray: %w", err)
+		}
+	}
 	return nil
+}
+
+// trayRunning reports whether a tray process exists for this session.
+func trayRunning() bool {
+	out, err := powershell(`(Get-CimInstance Win32_Process -Filter "Name='egress.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '* tray*' } | Measure-Object).Count`)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != "0"
 }
 
 // grantUserExecute lets any interactive account read and run one file. The
@@ -112,6 +131,12 @@ func grantUsersRX(path string) error {
 	}
 	return fmt.Errorf("grant users read on %s: %v: %s", path, err, strings.TrimSpace(string(out)))
 }
+
+// splitUserResult is written by the per-user task. The task runs in another
+// session, so its exit code is not enough: task state can read Ready with 0
+// before it has even started, which used to make the installer return success
+// and delete the task before it ran.
+const splitUserResult = `C:\Windows\Temp\egress-split-user.txt`
 
 // splitUserTask is the one-shot task that applies the per-user half of split
 // mode inside the logged-in user's session. It exists because an update runs
@@ -191,21 +216,25 @@ func runSplitUserTask(user, exe string) error {
 	}
 	defer exec.Command("schtasks", "/delete", "/tn", splitUserTask, "/f").Run()
 
+	_ = os.Remove(splitUserResult)
 	if out, err := exec.Command("schtasks", "/run", "/tn", splitUserTask).CombinedOutput(); err != nil {
 		return fmt.Errorf("run per-user setup task: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		out, _ := exec.Command("schtasks", "/query", "/tn", splitUserTask, "/fo", "list").Output()
-		status, result := taskState(string(out))
-		if status != "" && !strings.EqualFold(status, "Running") {
-			if result != "" && result != "0" {
-				return fmt.Errorf("per-user setup task failed with result %s", result)
+		if data, err := os.ReadFile(splitUserResult); err == nil {
+			text := strings.TrimSpace(string(data))
+			if text == "ok" {
+				return nil
 			}
-			return nil
+			if strings.HasPrefix(text, "error: ") {
+				return errors.New(strings.TrimPrefix(text, "error: "))
+			}
+			return fmt.Errorf("per-user setup reported %q", text)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	return errors.New("per-user setup task never reported; no interactive session, or the task did not run")
 	return errors.New("per-user setup task did not finish")
 }
 
@@ -243,9 +272,13 @@ func cmdSplitUser(args []string) error {
 	// The task gives this process no console, so a debug build must log to
 	// the shared file for the failure to be visible at all.
 	setupLogging(resolveDebug(false))
-	if err := applyUserTray(*exePath); err != nil {
+	err := applyUserTray(*exePath)
+	// The installer waits for this file rather than for task state.
+	msg := "ok"
+	if err != nil {
 		appLogger().Printf("split-user: %v", err)
-		return err
+		msg = "error: " + err.Error()
 	}
-	return nil
+	_ = os.WriteFile(splitUserResult, []byte(msg+"\n"), 0600)
+	return err
 }
