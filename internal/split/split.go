@@ -139,6 +139,19 @@ func (c *Controller) HandleAnswer(domain string, ips []net.IP, ttl time.Duration
 	if domain == "" || probeIgnoredName(domain) {
 		return
 	}
+	// A local override beats the profile and the probe. split-block.txt is
+	// what makes "force this through the tunnel" possible without a release,
+	// and it has to work for the controller, not only for the proxy.
+	if state, ok := c.overrides.Forced(domain); ok {
+		if state == StateBlocked {
+			now := time.Now()
+			c.mu.Lock()
+			c.trackIPsLocked(domain, ips)
+			c.mu.Unlock()
+			c.routes.Add(ips, ttl, now)
+		}
+		return
+	}
 	now := time.Now()
 	c.mu.Lock()
 	state := c.profile.State(domain, now)
