@@ -435,6 +435,9 @@ func (t *derpTransport) Status() (connected bool, relay string, err string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.client != nil {
+		if last := t.client.LastRecv(); !last.IsZero() && time.Since(last) > 90*time.Second {
+			return false, t.client.Relay().Host, "relay silent"
+		}
 		return true, t.client.Relay().Host, ""
 	}
 	return false, "", t.lastErr

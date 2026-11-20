@@ -95,6 +95,7 @@ type Client struct {
 	closeOnce sync.Once
 	done      chan struct{}
 	err       atomic.Value
+	lastRecv  atomic.Int64
 }
 
 // Dial connects to a relay, completes the DERP handshake, and starts reading.
@@ -251,6 +252,17 @@ func (c *Client) Send(dst [32]byte, pkt []byte) error {
 	return c.writeFrame(frameSendPacket, payload)
 }
 
+// LastRecv reports when the relay last sent anything. The server pings
+// regularly, so a stale value means the connection is dead even if writes
+// still land in a socket buffer.
+func (c *Client) LastRecv() time.Time {
+	ns := c.lastRecv.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
 // Done closes when the connection ends.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
@@ -283,7 +295,7 @@ func (c *Client) readFrames() error {
 	buf := make([]byte, maxFrameSize+frameHeaderLen)
 	for {
 		// The relay pings often; a long silence means the path is gone.
-		if err := c.conn.SetReadDeadline(time.Now().Add(150 * time.Second)); err != nil {
+		if err := c.conn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
 			return err
 		}
 		t, n, err := readFrameHeader(c.br)
@@ -297,6 +309,7 @@ func (c *Client) readFrames() error {
 		if _, err := io.ReadFull(c.br, payload); err != nil {
 			return err
 		}
+		c.lastRecv.Store(time.Now().UnixNano())
 		switch t {
 		case frameRecvPacket:
 			if len(payload) < keyLen {

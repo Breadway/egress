@@ -131,7 +131,9 @@ func (m *peerManager) Run(ctx context.Context) {
 	m.refresh(ctx)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
-	refresh := time.NewTicker(5 * time.Minute)
+	// A relay key or endpoint change should take a minute, not five. The list
+	// is small and the request is authenticated.
+	refresh := time.NewTicker(time.Minute)
 	defer refresh.Stop()
 	for {
 		select {
