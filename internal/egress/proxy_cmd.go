@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,9 @@ var (
 
 // cmdProxy runs the per-user split proxy and, on Windows, its tray.
 func cmdProxy(args []string) (err error) {
+	if runtime.GOOS != "windows" {
+		return errors.New("the split proxy is Windows only; Linux and macOS route blocked destinations with host routes")
+	}
 	fs := newFlagSet("proxy")
 	listen := fs.String("listen", "127.0.0.1:1081", "local CONNECT proxy and PAC address")
 	relay := fs.String("relay", "127.0.0.1:1080", "local wstunnel forward to the Aegis SOCKS relay")

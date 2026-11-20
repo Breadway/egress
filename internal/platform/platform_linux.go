@@ -3,7 +3,6 @@
 package platform
 
 import (
-	"egress/internal/assets"
 	"egress/internal/core"
 	"egress/internal/logx"
 	"egress/internal/wstunnel"
@@ -696,24 +695,50 @@ func (linuxPlatform) Ping(host string) bool {
 	return logx.RunLogged("ping", "-c", "2", "-W", "2", "-i", "0.5", "-n", "-q", host) == nil
 }
 
-func (linuxPlatform) WstunnelPath() (string, error) { return wstunnel.Find() }
-
-// InstallWstunnel extracts the embedded fallback client. No target-side
-// download is attempted when the delivery build carries the binary; a dev
-// build without embedded assets still falls back to the pinned download.
-func (linuxPlatform) InstallWstunnel() (string, error) {
-	if len(assets.Wstunnel) > 0 {
-		dest := filepath.Join(core.InstallDir(), wstunnel.ExeName())
-		if err := core.ExtractEmbedded(dest, assets.Wstunnel, wstunnelLinuxSHA256); err != nil {
-			return "", fmt.Errorf("extract bundled wstunnel: %w", err)
-		}
-		if err := os.Chmod(dest, 0755); err != nil {
-			return "", err
-		}
-		return dest, nil
-	}
-	return wstunnel.Ensure()
+// The relay leg is in-process on Linux, so there is no external tunneler to
+// install or find. These stay for the platform interface and fail honestly if
+// anything still asks.
+func (linuxPlatform) WstunnelPath() (string, error) {
+	return "", errors.New("this platform carries the relay in-process; no external tunneler is used")
 }
+
+func (linuxPlatform) InstallWstunnel() (string, error) {
+	return "", errors.New("this platform carries the relay in-process; no external tunneler is installed")
+}
+
+// SetPeer adds or updates a WireGuard peer at runtime. Linux applies the peer
+// and its cryptokey routing directly, so no config rewrite or restart is
+// needed the way it is on Windows.
+func (linuxPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string) error {
+	args := []string{"set", dev, "peer", pubkey}
+	if endpoint != "" {
+		args = append(args, "endpoint", endpoint, "persistent-keepalive", "25")
+	}
+	if len(allowed) > 0 {
+		args = append(args, "allowed-ips", strings.Join(allowed, ","))
+	}
+	out, err := logx.ExecLogged("wg", args...)
+	if err != nil {
+		return fmt.Errorf("wg set %s peer: %v (%s)", dev, err, logx.Truncate(string(out), 300))
+	}
+	return nil
+}
+
+func (linuxPlatform) RemovePeer(dev, pubkey string) error {
+	out, err := logx.ExecLogged("wg", "set", dev, "peer", pubkey, "remove")
+	if err != nil {
+		return fmt.Errorf("wg set %s peer remove: %v (%s)", dev, err, logx.Truncate(string(out), 300))
+	}
+	return nil
+}
+
+// EnsureRelayPeer exists for the Windows shape of the problem: there the
+// service owns its peer list. Here the runtime peer is enough.
+func (p linuxPlatform) EnsureRelayPeer(dev, pubkey, endpoint string, allowed []string) (bool, error) {
+	return false, p.SetPeer(dev, pubkey, endpoint, allowed)
+}
+
+func (linuxPlatform) RemoveRelayPeer(dev, pubkey string) error { return nil }
 
 func Diagnose(w io.Writer) error {
 	fmt.Fprintf(w, "  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
