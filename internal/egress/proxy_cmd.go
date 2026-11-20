@@ -99,11 +99,17 @@ func cmdProxy(args []string) (err error) {
 	defer stop()
 
 	if *startRelay {
-		stopRelay, err := startSocksRelay(ctx, *relay)
-		if err != nil {
-			return fmt.Errorf("start relay: %w", err)
+		// The SOCKS relay is the fallback path, not the tunnel. A machine whose
+		// tunneler cannot start (the Visual C++ runtime is the usual reason)
+		// used to exit here, which failed the whole install and parked it, even
+		// though the WireGuard relay leg is now served in-process and needs no
+		// external binary. Serve without the fallback and say so.
+		stopRelay, relErr := startSocksRelay(ctx, *relay)
+		if relErr != nil {
+			appLogger().Printf("proxy: relay unavailable, continuing without it: %v", relErr)
+		} else {
+			defer stopRelay()
 		}
-		defer stopRelay()
 	}
 
 	if *tray {
