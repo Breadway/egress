@@ -43,6 +43,13 @@ func configureWindowsSplit() (err error) {
 		return fmt.Errorf("locate the installed binary: %w", ierr)
 	}
 
+	// The per-user task runs the binary with the user's own token, so it must
+	// be executable first. A failure here is not fatal: the ACL may already
+	// allow it, and the task itself reports what went wrong.
+	if err := grantUserExecute(exe); err != nil {
+		appLogger().Printf("split: the tray may not start: %v", err)
+	}
+
 	if runningAsSystem() {
 		console, cerr := consoleUser()
 		if cerr != nil {
@@ -59,9 +66,6 @@ func configureWindowsSplit() (err error) {
 		return err
 	}
 
-	if err := grantUserExecute(exe); err != nil {
-		appLogger().Printf("split: the tray may not start: %v", err)
-	}
 	return nil
 }
 
