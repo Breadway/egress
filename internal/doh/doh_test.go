@@ -3,6 +3,7 @@ package doh
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -46,12 +47,35 @@ func checkAnswer(t *testing.T, id uint16, resp []byte) {
 	}
 }
 
+// cannedAnswer fabricates a valid A answer from a query. The framing tests do
+// not need a real upstream, and using one made CI depend on outbound DoH.
+func cannedAnswer(query []byte) ([]byte, error) {
+	if len(query) < 12 {
+		return nil, errors.New("short DNS query")
+	}
+	resp := make([]byte, 12, 12+len(query)-12+16)
+	copy(resp[0:2], query[0:2])
+	resp[2] = 0x81 // response, recursion desired
+	resp[3] = 0x80 // recursion available, no error
+	binary.BigEndian.PutUint16(resp[4:6], 1)
+	binary.BigEndian.PutUint16(resp[6:8], 1)
+	resp = append(resp, query[12:]...)
+	resp = append(resp,
+		0xC0, 0x0C, // pointer to the question name
+		0x00, 0x01, 0x00, 0x01, // A, IN
+		0x00, 0x00, 0x00, 0x3C, // 60 seconds
+		0x00, 0x04, 203, 0, 113, 7)
+	return resp, nil
+}
+
 func startTestResolver(t *testing.T) (string, func()) {
 	t.Helper()
 
-	addr := "127.0.0.1:15353"
 	resolver := New("", log.New(io.Discard, "", 0))
-	resolver.listenAddr = addr
+	resolver.listenAddr = "127.0.0.1:0"
+	resolver.lookup = func(_ context.Context, query []byte) ([]byte, error) {
+		return cannedAnswer(query)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -62,12 +86,14 @@ func startTestResolver(t *testing.T) (string, func()) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return addr, func() {
-				cancel()
-				<-done
+		addr := resolver.LocalAddr()
+		if addr != "" {
+			if conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+				conn.Close()
+				return addr, func() {
+					cancel()
+					<-done
+				}
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -79,9 +105,6 @@ func startTestResolver(t *testing.T) (string, func()) {
 }
 
 func TestResolverUDP(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs the DoH endpoint")
-	}
 	addr, stop := startTestResolver(t)
 	defer stop()
 
@@ -105,9 +128,6 @@ func TestResolverUDP(t *testing.T) {
 }
 
 func TestResolverTCP(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs the DoH endpoint")
-	}
 	addr, stop := startTestResolver(t)
 	defer stop()
 

@@ -32,10 +32,11 @@ type Resolver struct {
 	url        string
 	listenAddr string
 
-	mu      sync.RWMutex
-	host    string
-	gateway string
-	addrs   []string
+	mu        sync.RWMutex
+	host      string
+	gateway   string
+	addrs     []string
+	localAddr string
 
 	client    *http.Client
 	fallbacks []*fallback
@@ -87,6 +88,14 @@ func (r *Resolver) newTransport() *http.Transport {
 		TLSHandshakeTimeout:   8 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
+}
+
+// LocalAddr is the address Serve actually bound. It matters when listenAddr
+// asks for port zero, where the kernel chooses the port.
+func (r *Resolver) LocalAddr() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.localAddr
 }
 
 func (r *Resolver) SetGateway(gateway string) {
@@ -500,11 +509,18 @@ func (r *Resolver) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("udp %s: %w", r.listenAddr, err)
 	}
-	tcp, err := net.Listen("tcp", r.listenAddr)
+	addr := r.listenAddr
+	if _, port, herr := net.SplitHostPort(r.listenAddr); herr == nil && port == "0" {
+		addr = udp.LocalAddr().String()
+	}
+	tcp, err := net.Listen("tcp", addr)
 	if err != nil {
 		udp.Close()
-		return fmt.Errorf("tcp %s: %w", r.listenAddr, err)
+		return fmt.Errorf("tcp %s: %w", addr, err)
 	}
+	r.mu.Lock()
+	r.localAddr = addr
+	r.mu.Unlock()
 
 	go func() {
 		<-ctx.Done()
@@ -517,7 +533,7 @@ func (r *Resolver) Serve(ctx context.Context) error {
 	// filtered network is the resolver this tool exists to avoid. Bind the
 	// system port too; failure is not fatal, because 7103 still serves the
 	// components that dial it by name.
-	if host, _, herr := net.SplitHostPort(r.listenAddr); herr == nil && host != "" {
+	if host, port, herr := net.SplitHostPort(addr); herr == nil && host != "" && port != "0" {
 		systemAddr := net.JoinHostPort(host, "53")
 		if sysUDP, uerr := net.ListenPacket("udp", systemAddr); uerr == nil {
 			go func() {
@@ -539,7 +555,7 @@ func (r *Resolver) Serve(ctx context.Context) error {
 	}
 
 	go r.serveTCP(tcp)
-	r.log.Printf("DoH resolver listening on %s", r.listenAddr)
+	r.log.Printf("DoH resolver listening on %s", addr)
 	if r.Ready != nil {
 		if err := r.Ready(); err != nil {
 			r.log.Printf("could not write the readiness marker: %v", err)
