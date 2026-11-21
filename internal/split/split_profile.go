@@ -58,12 +58,14 @@ type feedProtocol struct {
 // the TLS listener that carries the WebSocket upgrade, and Path is where the
 // relay answers.
 type DirectExit struct {
-	ID       string `json:"id"`
-	Label    string `json:"label,omitempty"`
-	Endpoint string `json:"endpoint"`
-	Path     string `json:"path,omitempty"`
-	PubKey   string `json:"pubkey"`
-	Priority int    `json:"priority,omitempty"`
+	ID        string `json:"id"`
+	Label     string `json:"label,omitempty"`
+	Transport string `json:"transport,omitempty"` // tls (default) or derp
+	Endpoint  string `json:"endpoint"`
+	Path      string `json:"path,omitempty"`
+	PubKey    string `json:"pubkey"`
+	RelayKey  string `json:"relay_key,omitempty"`
+	Priority  int    `json:"priority,omitempty"`
 }
 
 type feedResponse struct {

@@ -255,8 +255,7 @@ func b64Key(fill byte) string {
 func newTestRelay() *derpTransport {
 	return &derpTransport{
 		log:    log.New(io.Discard, "", 0),
-		peers:  map[[32]byte]*derpPeer{},
-		byDerp: map[[32]byte]*derpPeer{},
+		routes: map[[32]byte]*derpLink{},
 	}
 }
 
@@ -284,10 +283,10 @@ func TestPeerManagerRelayedPeerUsesDERP(t *testing.T) {
 	// The relay address is the peer's relay key, not its WireGuard key.
 	derpRaw, _ := decodeKey(relayKey)
 	wgRaw, _ := decodeKey(key)
-	if m.relay.byDerp[derpRaw] == nil {
+	if m.relay.routes[derpRaw] == nil {
 		t.Fatal("relay key is not mapped to the peer socket")
 	}
-	if m.relay.byDerp[wgRaw] != nil {
+	if m.relay.routes[wgRaw] != nil {
 		t.Fatal("WireGuard key must not be used as the relay address")
 	}
 
@@ -310,7 +309,7 @@ func TestPeerManagerRelayedPeerUsesDERP(t *testing.T) {
 		t.Fatalf("demotion = %+v, want routes cleared", last)
 	}
 	// The registration stays so the pair can meet on the relay later.
-	if m.relay.byDerp[derpRaw] == nil {
+	if m.relay.routes[derpRaw] == nil {
 		t.Fatal("relay registration was dropped on demotion")
 	}
 	if !link.derpPassive {

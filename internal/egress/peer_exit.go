@@ -18,11 +18,13 @@ import (
 
 // peerExitInfo is one exit another device in the circle is offering.
 type peerExitInfo struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Endpoint string `json:"endpoint"`
-	Path     string `json:"path"`
-	PubKey   string `json:"pubkey"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Transport string `json:"transport"`
+	Endpoint  string `json:"endpoint"`
+	Path      string `json:"path"`
+	PubKey    string `json:"pubkey"`
+	RelayKey  string `json:"relay_key"`
 }
 
 // peerExitPrefPath is the opt-in marker. Peer exits are off by default: using
@@ -77,7 +79,11 @@ func cmdPeerExit(args []string) error {
 			if label == "" {
 				label = e.ID
 			}
-			fmt.Printf("%-12s %-24s %s\n", e.ID, e.Endpoint, label)
+			where := e.Endpoint
+			if e.Transport == "derp" {
+				where = "derp " + e.RelayKey
+			}
+			fmt.Printf("%-12s %-24s %s\n", e.ID, where, label)
 		}
 		return nil
 	default:
@@ -132,7 +138,8 @@ func (p *peerExitPoller) refresh(ctx context.Context) {
 	list := make([]split.DirectExit, 0, len(exits))
 	for _, e := range exits {
 		list = append(list, split.DirectExit{
-			ID: e.ID, Label: e.Label, Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey,
+			ID: e.ID, Label: e.Label, Transport: e.Transport,
+			Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey, RelayKey: e.RelayKey,
 		})
 	}
 	p.direct.SetPeerExits(list, true)

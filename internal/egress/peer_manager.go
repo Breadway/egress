@@ -57,6 +57,7 @@ type peerLink struct {
 	derping     bool
 	derped      bool
 	derpPassive bool
+	derpLink    *derpLink
 	failures    int
 
 	backoffUntil time.Time
@@ -303,8 +304,8 @@ func (m *peerManager) reconcile() {
 			// The registration stays connected while idle, so the other side
 			// can start a handshake at any time. Promote as soon as one lands.
 			if m.handshakeFresh(link) {
-				if endpoint, err := m.relay.Endpoint(link.pubkey, link.derpKey); err == nil {
-					if err := m.configure(link, endpoint, []string{link.ip + "/32"}); err == nil {
+				if link.derpLink != nil {
+					if err := m.configure(link, link.derpLink.LocalAddr(), []string{link.ip + "/32"}); err == nil {
 						link.derpPassive = false
 						link.derped = true
 						link.failures = 0
@@ -369,12 +370,20 @@ func (m *peerManager) startDERP(link *peerLink, now time.Time) bool {
 	if m.relay == nil || link.derpKey == "" {
 		return false
 	}
-	endpoint, err := m.relay.Endpoint(link.pubkey, link.derpKey)
+	remote, err := decodeKey(link.derpKey)
 	if err != nil {
-		m.log.Printf("peers: derp endpoint for %s: %v", link.ip, err)
+		m.log.Printf("peers: relay key for %s: %v", link.ip, err)
 		return false
 	}
-	if err := m.configure(link, endpoint, []string{link.ip + "/32"}); err != nil {
+	if link.derpLink == nil {
+		attached, aerr := m.relay.Attach(remote)
+		if aerr != nil {
+			m.log.Printf("peers: derp endpoint for %s: %v", link.ip, aerr)
+			return false
+		}
+		link.derpLink = attached
+	}
+	if err := m.configure(link, link.derpLink.LocalAddr(), []string{link.ip + "/32"}); err != nil {
 		m.log.Printf("peers: derp %s: %v", link.ip, err)
 		return false
 	}
@@ -397,8 +406,9 @@ func (m *peerManager) demote(link *peerLink, now time.Time, reason string) {
 	// A relayed pair only meets if both ends stay registered while they are
 	// not actively handshaking. Keep the socket and the DERP connection for a
 	// peer that was on the relay; the next attempt reuses them.
-	if m.relay != nil && !wasDERP {
-		m.relay.Release(link.pubkey)
+	if !wasDERP && link.derpLink != nil {
+		link.derpLink.Close()
+		link.derpLink = nil
 	}
 	link.dialing = false
 	link.direct = false
@@ -445,8 +455,9 @@ func (m *peerManager) removeLocked(link *peerLink) {
 	if cfg, ok := m.plat.(peerConfigPlatform); ok {
 		_ = cfg.RemoveRelayPeer(m.dev, link.pubkey)
 	}
-	if m.relay != nil {
-		m.relay.Release(link.pubkey)
+	if link.derpLink != nil {
+		link.derpLink.Close()
+		link.derpLink = nil
 	}
 	link.present = false
 	link.direct = false

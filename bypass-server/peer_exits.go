@@ -15,12 +15,14 @@ import (
 // only the device knows what port and path its relay is serving; the admin
 // still controls who can see it by controlling the circle.
 type peerExit struct {
-	Device   string `json:"device"`
-	Label    string `json:"label"`
-	Endpoint string `json:"endpoint"`
-	Path     string `json:"path"`
-	PubKey   string `json:"pubkey"`
-	Updated  string `json:"updated"`
+	Device    string `json:"device"`
+	Label     string `json:"label"`
+	Transport string `json:"transport,omitempty"` // tls (default) or derp
+	Endpoint  string `json:"endpoint"`
+	Path      string `json:"path"`
+	PubKey    string `json:"pubkey"`
+	RelayKey  string `json:"relay_key,omitempty"`
+	Updated   string `json:"updated"`
 }
 
 type peerExitRegistry struct {
@@ -95,25 +97,46 @@ func (s *server) apiExitAnnounce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Endpoint string `json:"endpoint"`
-		Path     string `json:"path"`
+		Transport string `json:"transport"`
+		Endpoint  string `json:"endpoint"`
+		Path      string `json:"path"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	transport := strings.ToLower(strings.TrimSpace(req.Transport))
+	if transport == "" {
+		transport = "tls"
+	}
 	endpoint := strings.TrimSpace(req.Endpoint)
-	host, port, err := net.SplitHostPort(endpoint)
-	if err != nil || host == "" || port == "" || strings.ContainsAny(host, " /") {
-		http.Error(w, "endpoint must be host:port", http.StatusBadRequest)
-		return
-	}
 	path := strings.TrimSpace(req.Path)
-	if path == "" {
-		path = "/peer-exit"
-	}
-	if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " \r\n") {
-		http.Error(w, "path must start with /", http.StatusBadRequest)
+	relayKey := ""
+	switch transport {
+	case "derp":
+		// A CGNAT exit has no public endpoint; the relay key is its address.
+		if dev.DerpPubKey == "" {
+			http.Error(w, "this device has no relay key", http.StatusBadRequest)
+			return
+		}
+		relayKey = dev.DerpPubKey
+		endpoint = ""
+		path = ""
+	case "tls":
+		host, port, err := net.SplitHostPort(endpoint)
+		if err != nil || host == "" || port == "" || strings.ContainsAny(host, " /") {
+			http.Error(w, "endpoint must be host:port", http.StatusBadRequest)
+			return
+		}
+		if path == "" {
+			path = "/peer-exit"
+		}
+		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " \r\n") {
+			http.Error(w, "path must start with /", http.StatusBadRequest)
+			return
+		}
+	default:
+		http.Error(w, "unknown transport", http.StatusBadRequest)
 		return
 	}
 
@@ -131,16 +154,18 @@ func (s *server) apiExitAnnounce(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		reg.Exits[i] = peerExit{
-			Device: dev.ID, Label: dev.Label, Endpoint: endpoint,
-			Path: path, PubKey: dev.PubKey, Updated: now.Format(time.RFC3339),
+			Device: dev.ID, Label: dev.Label, Transport: transport,
+			Endpoint: endpoint, Path: path, PubKey: dev.PubKey,
+			RelayKey: relayKey, Updated: now.Format(time.RFC3339),
 		}
 		replaced = true
 		break
 	}
 	if !replaced {
 		reg.Exits = append(reg.Exits, peerExit{
-			Device: dev.ID, Label: dev.Label, Endpoint: endpoint,
-			Path: path, PubKey: dev.PubKey, Updated: now.Format(time.RFC3339),
+			Device: dev.ID, Label: dev.Label, Transport: transport,
+			Endpoint: endpoint, Path: path, PubKey: dev.PubKey,
+			RelayKey: relayKey, Updated: now.Format(time.RFC3339),
 		})
 	}
 	if err := savePeerExits(s.peerExitsPath(), reg); err != nil {
@@ -185,18 +210,23 @@ func (s *server) apiPeerExits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type entry struct {
-		ID       string `json:"id"`
-		Label    string `json:"label,omitempty"`
-		Endpoint string `json:"endpoint"`
-		Path     string `json:"path,omitempty"`
-		PubKey   string `json:"pubkey"`
+		ID        string `json:"id"`
+		Label     string `json:"label,omitempty"`
+		Transport string `json:"transport,omitempty"`
+		Endpoint  string `json:"endpoint,omitempty"`
+		Path      string `json:"path,omitempty"`
+		PubKey    string `json:"pubkey"`
+		RelayKey  string `json:"relay_key,omitempty"`
 	}
 	out := make([]entry, 0, len(reg.Exits))
 	for _, e := range reg.Exits {
 		if !inCircle[e.Device] || e.Device == self.ID {
 			continue
 		}
-		out = append(out, entry{ID: e.Device, Label: e.Label, Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey})
+		out = append(out, entry{
+			ID: e.Device, Label: e.Label, Transport: e.Transport,
+			Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey, RelayKey: e.RelayKey,
+		})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, struct {
@@ -379,10 +409,11 @@ func (s *server) apiExitClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type client struct {
-		ID     string `json:"id"`
-		Label  string `json:"label,omitempty"`
-		IP     string `json:"ip"`
-		PubKey string `json:"pubkey"`
+		ID         string `json:"id"`
+		Label      string `json:"label,omitempty"`
+		IP         string `json:"ip"`
+		PubKey     string `json:"pubkey"`
+		DerpPubKey string `json:"derp_pubkey,omitempty"`
 	}
 	out := make([]client, 0)
 	for _, u := range uses.Uses {
@@ -391,7 +422,7 @@ func (s *server) apiExitClients(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, d := range devices.Devices {
 			if d.ID == u.Client && d.Status == "bound" && d.IP != "" && d.PubKey != "" {
-				out = append(out, client{ID: d.ID, Label: d.Label, IP: d.IP, PubKey: d.PubKey})
+				out = append(out, client{ID: d.ID, Label: d.Label, IP: d.IP, PubKey: d.PubKey, DerpPubKey: d.DerpPubKey})
 				break
 			}
 		}

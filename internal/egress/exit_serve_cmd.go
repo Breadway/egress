@@ -48,6 +48,7 @@ func cmdExitServe(args []string) error {
 		return errors.New("serving a peer exit is Linux only for now; this platform can use one")
 	}
 	fs := newFlagSet("exit serve")
+	derpMode := fs.Bool("derp", false, "serve through DERP so the exit can sit behind CGNAT")
 	port := fs.Int("port", 7443, "TCP port the exit relay listens on")
 	path := fs.String("path", "/peer-exit", "HTTPS path the relay answers on")
 	public := fs.String("public-endpoint", "", "host:port other devices should dial; derived from the tunnel endpoint when empty")
@@ -74,50 +75,65 @@ func cmdExitServe(args []string) error {
 		return fmt.Errorf("nat: %w", err)
 	}
 
-	endpoint := strings.TrimSpace(*public)
-	if endpoint == "" {
-		endpoint, err = ownPublicEndpoint(*port)
-		if err != nil {
-			return err
-		}
-	}
-	if _, _, err := net.SplitHostPort(endpoint); err != nil {
-		return fmt.Errorf("public endpoint %q: %w", endpoint, err)
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	cert, err := selfSignedCert()
-	if err != nil {
-		return fmt.Errorf("certificate: %w", err)
-	}
-	target := fmt.Sprintf("127.0.0.1:%d", wgPort)
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
-	if err != nil {
-		return fmt.Errorf("listen on %d: %w", *port, err)
-	}
-	tlsListener := tls.NewListener(listener, &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	})
-	srv := &http.Server{Handler: wgtunnel.Handler(target, *path)}
-	go func() {
-		if serr := srv.Serve(tlsListener); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
-			appLogger().Printf("exit: relay stopped: %v", serr)
+	transport := "tls"
+	endpoint := ""
+	var relay *derpTransport
+	var srv *http.Server
+	if *derpMode {
+		transport = "derp"
+		relay, err = newDERPTransport(appLogger())
+		if err != nil {
+			return fmt.Errorf("relay identity: %w", err)
 		}
-	}()
-	appLogger().Printf("exit: serving on :%d%s, forwarding to %s", *port, *path, target)
-	if err := announceSelfExit(context.Background(), endpoint, *path); err != nil {
+		go relay.Run(ctx)
+		appLogger().Printf("exit: serving through DERP, forwarding to 127.0.0.1:%d", wgPort)
+	} else {
+		endpoint = strings.TrimSpace(*public)
+		if endpoint == "" {
+			endpoint, err = ownPublicEndpoint(*port)
+			if err != nil {
+				return err
+			}
+		}
+		if _, _, err := net.SplitHostPort(endpoint); err != nil {
+			return fmt.Errorf("public endpoint %q: %w", endpoint, err)
+		}
+		cert, cerr := selfSignedCert()
+		if cerr != nil {
+			return fmt.Errorf("certificate: %w", cerr)
+		}
+		target := fmt.Sprintf("127.0.0.1:%d", wgPort)
+		listener, lerr := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+		if lerr != nil {
+			return fmt.Errorf("listen on %d: %w", *port, lerr)
+		}
+		tlsListener := tls.NewListener(listener, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		})
+		srv = &http.Server{Handler: wgtunnel.Handler(target, *path)}
+		go func() {
+			if serr := srv.Serve(tlsListener); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+				appLogger().Printf("exit: relay stopped: %v", serr)
+			}
+		}()
+		appLogger().Printf("exit: serving on :%d%s, forwarding to %s", *port, *path, target)
+	}
+	if err := announceSelfExit(context.Background(), transport, endpoint, *path); err != nil {
 		appLogger().Printf("exit: announce: %v", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	active := map[string]bool{}
+	links := map[string]*derpLink{}
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
 	announce := time.NewTicker(4 * time.Minute)
 	defer announce.Stop()
 	for {
-		if err := reconcileExitClients(*dev, active); err != nil {
+		if err := reconcileExitClients(*dev, active, relay, wgPort, links, *derpMode); err != nil {
 			appLogger().Printf("exit: clients: %v", err)
 		}
 		select {
@@ -125,12 +141,17 @@ func cmdExitServe(args []string) error {
 			for pubkey := range active {
 				_ = logx.RunLogged("wg", "set", *dev, "peer", pubkey, "remove")
 			}
+			for _, link := range links {
+				link.Close()
+			}
 			_ = withdrawSelfExit(context.Background())
-			_ = srv.Close()
+			if srv != nil {
+				_ = srv.Close()
+			}
 			appLogger().Printf("exit: stopped")
 			return nil
 		case <-announce.C:
-			if err := announceSelfExit(ctx, endpoint, *path); err != nil {
+			if err := announceSelfExit(ctx, transport, endpoint, *path); err != nil {
 				appLogger().Printf("exit: announce: %v", err)
 			}
 		case <-tick.C:
@@ -139,16 +160,20 @@ func cmdExitServe(args []string) error {
 }
 
 type exitClient struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	IP     string `json:"ip"`
-	PubKey string `json:"pubkey"`
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	IP         string `json:"ip"`
+	PubKey     string `json:"pubkey"`
+	DerpPubKey string `json:"derp_pubkey"`
 }
 
 // reconcileExitClients adds a WireGuard peer for every device that chose this
 // exit, and removes peers for devices that stopped. Adding every circle member
-// would hijack the star route for people who are not using this exit.
-func reconcileExitClients(dev string, active map[string]bool) error {
+// would hijack the star route for people who are not using this exit. In DERP
+// mode it also keeps one relayed UDP link per client, connected to the local
+// WireGuard listener, which is what a CGNAT exit uses instead of a public
+// listener.
+func reconcileExitClients(dev string, active map[string]bool, relay *derpTransport, wgPort int, links map[string]*derpLink, derpMode bool) error {
 	var out struct {
 		Clients []exitClient `json:"clients"`
 	}
@@ -170,25 +195,43 @@ func reconcileExitClients(dev string, active map[string]bool) error {
 			return err
 		}
 		delete(active, pubkey)
+		if link := links[pubkey]; link != nil {
+			link.Close()
+			delete(links, pubkey)
+		}
 	}
 	for pubkey, c := range want {
-		if active[pubkey] {
+		if !active[pubkey] {
+			if err := logx.RunLogged("wg", "set", dev, "peer", pubkey, "allowed-ips", c.IP+"/32"); err != nil {
+				return fmt.Errorf("add %s (%s): %w", c.Label, c.IP, err)
+			}
+			active[pubkey] = true
+			appLogger().Printf("exit: carrying traffic for %s (%s)", c.Label, c.IP)
+		}
+		if !derpMode || links[pubkey] != nil {
 			continue
 		}
-		if err := logx.RunLogged("wg", "set", dev, "peer", pubkey, "allowed-ips", c.IP+"/32"); err != nil {
-			return fmt.Errorf("add %s (%s): %w", c.Label, c.IP, err)
+		key, err := decodeKey(c.DerpPubKey)
+		if err != nil {
+			appLogger().Printf("exit: %s has no usable relay key: %v", c.Label, err)
+			continue
 		}
-		active[pubkey] = true
-		appLogger().Printf("exit: carrying traffic for %s (%s)", c.Label, c.IP)
+		link, err := relay.AttachDial(key, fmt.Sprintf("127.0.0.1:%d", wgPort))
+		if err != nil {
+			return fmt.Errorf("relay link for %s: %w", c.Label, err)
+		}
+		links[pubkey] = link
+		appLogger().Printf("exit: relaying for %s over DERP", c.Label)
 	}
 	return nil
 }
 
-func announceSelfExit(ctx context.Context, endpoint, path string) error {
+func announceSelfExit(ctx context.Context, transport, endpoint, path string) error {
 	body, _ := json.Marshal(struct {
-		Endpoint string `json:"endpoint"`
-		Path     string `json:"path"`
-	}{Endpoint: endpoint, Path: path})
+		Transport string `json:"transport"`
+		Endpoint  string `json:"endpoint"`
+		Path      string `json:"path"`
+	}{Transport: transport, Endpoint: endpoint, Path: path})
 	return peerAPI(ctx, http.MethodPost, "/api/exit/announce", body, nil)
 }
 
