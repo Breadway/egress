@@ -35,10 +35,11 @@ const (
 // a duplicate key, and the relay would shadow one of them, so there is exactly
 // one client and a route table keyed by the remote relay key.
 type derpTransport struct {
-	log    *log.Logger
-	priv   [32]byte
-	public string
-	region string
+	log       *log.Logger
+	priv      [32]byte
+	public    string
+	region    string
+	preferred string
 	// announceKey publishes this identity through /api/derp-key. Slot
 	// identities are published through /api/exit/slot instead, so they must
 	// not overwrite the device's own relay key.
@@ -87,23 +88,35 @@ func (a *addrSlot) load() *net.UDPAddr {
 // from the WireGuard key: the relay sees it, so it must not be the key that
 // authenticates the tunnel.
 func newDERPTransport(logger *log.Logger) (*derpTransport, error) {
+	return newDERPTransportRegion(logger, "")
+}
+
+// newDERPTransportRegion selects the relay region for this device. Both ends
+// of a relayed pair must land in the same region, so the choice is shared by
+// peer links, exit use and exit serving.
+func newDERPTransportRegion(logger *log.Logger, region string) (*derpTransport, error) {
 	priv, _, err := loadOrCreateDerpKey()
 	if err != nil {
 		return nil, err
 	}
-	return newDERPTransportWithKey(logger, priv, true, true)
+	return newDERPTransportWithKeyRegion(logger, priv, true, true, region)
 }
 
 // newDERPTransportWithKey builds a connection with a chosen identity. Exit
 // slots use this with announce and reporting off: their key is published to the
 // assigned client, not as the device's relay key.
 func newDERPTransportWithKey(logger *log.Logger, priv [32]byte, announce, report bool) (*derpTransport, error) {
+	return newDERPTransportWithKeyRegion(logger, priv, announce, report, "")
+}
+
+func newDERPTransportWithKeyRegion(logger *log.Logger, priv [32]byte, announce, report bool, region string) (*derpTransport, error) {
 	pub, err := derpPublicKey(priv)
 	if err != nil {
 		return nil, err
 	}
 	return &derpTransport{
 		log: logger, priv: priv, public: pub,
+		preferred:   region,
 		announceKey: announce, reportHealth: report,
 		routes: map[[32]byte]*derpLink{},
 	}, nil
@@ -409,19 +422,26 @@ func (t *derpTransport) onPacket(src [32]byte, pkt []byte) {
 // cannot be read, the known Sydney nodes are used so a transient
 // control-plane failure does not disable the fallback.
 func (t *derpTransport) loadRelays(ctx context.Context) {
-	region := strings.TrimSpace(os.Getenv("EGRESS_DERP_REGION"))
+	region := t.preferred
+	if region == "" {
+		region = strings.TrimSpace(os.Getenv("EGRESS_DERP_REGION"))
+	}
 	if region == "" {
 		region = derpDefaultRegion
 	}
 	relays, err := fetchDERPRelays(ctx, region)
 	if err != nil || len(relays) == 0 {
-		t.log.Printf("derp: map unavailable (%v); using Sydney defaults", err)
-		relays = defaultDERPRelays()
+		t.log.Printf("derp: no relays for region %q (%v)", region, err)
+		if region == derpDefaultRegion {
+			relays = defaultDERPRelays()
+		}
 	}
 	t.mu.Lock()
 	if len(t.relays) == 0 {
 		t.relays = relays
-		t.region = relays[0].Region
+		if len(relays) > 0 {
+			t.region = relays[0].Region
+		}
 	}
 	t.mu.Unlock()
 }

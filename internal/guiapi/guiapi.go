@@ -255,14 +255,23 @@ func loadOrCreateToken(path string) (string, error) {
 }
 
 func (s *Server) loadSettings() {
-	data, err := os.ReadFile(s.settingsPath)
+	s.settings = LoadSettings()
+}
+
+// LoadSettings reads the persisted preferences without starting a server. The
+// daemon uses it before the relay and sharing are created, so the saved region
+// and sharing choice apply from the first connection.
+func LoadSettings() Settings {
+	settings := DefaultSettings()
+	data, err := os.ReadFile(filepath.Join(core.StateDir(), "gui-settings.json"))
 	if err != nil {
-		return
+		return settings
 	}
 	var loaded Settings
 	if json.Unmarshal(data, &loaded) == nil {
-		s.settings = normalizeSettings(loaded)
+		return normalizeSettings(loaded)
 	}
+	return settings
 }
 
 func (s *Server) saveSettings() error {
@@ -611,7 +620,11 @@ func normalizeSettings(v Settings) Settings {
 		v.RelayRegion = def.RelayRegion
 	}
 	switch v.ShareScope {
-	case "friends", "close", "none":
+	case "friends", "none":
+	case "close":
+		// The circle has no close-friends subset yet. An old value must not
+		// silently disable sharing.
+		v.ShareScope = "friends"
 	default:
 		v.ShareScope = def.ShareScope
 	}

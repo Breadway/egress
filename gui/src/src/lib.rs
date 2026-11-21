@@ -5,6 +5,7 @@ use tauri::{Manager, WindowEvent};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![api_token])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Open egress", true, None::<&str>)?;

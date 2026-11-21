@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -17,12 +18,15 @@ import (
 // Nothing here changes the tunnel; the two actions are pause/resume and a
 // single-site retry.
 func newGUISources(
+	ctx context.Context,
 	sup *supervisor.Supervisor,
 	peers *peerManager,
 	splitter *split.Controller,
 	direct *directExit,
 	plat platform,
 	meter *linkMeter,
+	share *exitShare,
+	relay *derpTransport,
 ) guiapi.Sources {
 	protection := func() guiapi.Protection {
 		if splitter == nil {
@@ -149,7 +153,7 @@ func newGUISources(
 		},
 		SetConnected: sup.SetConnected,
 		ApplySettings: func(s guiapi.Settings) error {
-			sup.SetFallback(s.RelayFallback && s.Mode != guiapi.ModeDirect)
+			applyRuntimeSettings(ctx, sup, peers, share, relay, s)
 			if s.ConnectAutomatically != !bootDisabled() {
 				if err := setBootStart(s.ConnectAutomatically); err != nil {
 					return fmt.Errorf("boot start: %w", err)
@@ -157,6 +161,39 @@ func newGUISources(
 			}
 			return nil
 		},
+	}
+}
+
+// applyRuntimeSettings applies everything that can change while the service
+// runs. Boot start is separate because a manual CLI disable must survive a
+// daemon restart.
+func applyRuntimeSettings(ctx context.Context, sup *supervisor.Supervisor, peers *peerManager, share *exitShare, relay *derpTransport, s guiapi.Settings) {
+	sup.SetFallback(s.RelayFallback && s.Mode != guiapi.ModeDirect)
+	if peers != nil {
+		peers.SetHiddenAddress(s.HidePublicAddress || s.RelayOnly)
+	}
+	if share != nil {
+		opts := defaultExitServeOptions()
+		// The relay's region is fixed when the daemon starts, so serving
+		// reuses that connection rather than opening a second identity.
+		opts.Relay = relay
+		opts.LimitGB = s.ShareLimitGB
+		share.Apply(ctx, s.ShareConnection && s.ShareScope != "none", opts)
+	}
+}
+
+// relayRegionCode maps the user-facing region name to the DERP region code.
+// Empty means automatic: the transport keeps its existing default.
+func relayRegionCode(setting string) string {
+	switch setting {
+	case "sydney":
+		return "syd"
+	case "singapore":
+		return "sin"
+	case "los_angeles":
+		return "lax"
+	default:
+		return ""
 	}
 }
 

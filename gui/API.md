@@ -163,17 +163,28 @@ collapsed when the same title repeats within two minutes, and persisted to
 }
 ```
 
-`PATCH` accepts any subset and returns the saved set. The daemon applies what it
-can today:
+`PATCH` accepts any subset and returns the saved set. The daemon applies every
+field that has a backend:
 
 - `connect_automatically` enables or disables the boot service.
 - `relay_fallback` toggles the WebSocket fallback in the supervisor.
 - `mode: "direct"` also forbids the fallback.
+- `share_connection`, `share_scope` and `share_limit_gb` start or stop this
+  device's exit server. Serving always uses the relay, never a public listener.
+  `scope: "none"` stops serving even when sharing is on. The limit is counted
+  from WireGuard transfer counters, persisted in `share-usage.json`, and resets
+  at the start of each month. Reaching it withdraws the exit until the next
+  month.
+- `hide_public_address` and `relay_only` stop direct peer links, so friends
+  reach this device through the relay or the Aegis star.
+- `relay_region` selects the DERP region (`sydney` = `syd`,
+  `singapore` = `sin`, `los_angeles` = `lax`, `automatic` = the built-in
+  default). It is read when the relay connection starts, so a change applies on
+  the next service start.
+- `notify_*` are read by the desktop app, which raises native notifications
+  through Tauri. The daemon does not notify.
 
-The rest are persisted for the screens that own them. Sharing activation still
-runs through the existing exit-serve path, and region, address hiding and
-notifications are stored until their backends are wired. The API does not
-restart the service.
+The API does not restart the service.
 
 ## `GET /events` (server-sent events)
 
@@ -200,6 +211,11 @@ meaning of a field requires `v2`.
 ## Implementation status
 
 Implemented in the daemon and wired into all five screens. The GUI keeps demo
-data only as a first-launch fallback when the API cannot be reached. Remaining
-backend work: sharing activation, relay region selection, address hiding and
-native notifications.
+data only as a first-launch fallback when the API cannot be reached.
+
+- Connection pause/resume, site retry and reporting, activity clearing, boot
+  start, relay fallback, sharing, address hiding and relay region all have real
+  backends.
+- Native notifications are raised by the Tauri shell from the settings flags.
+- The relay region applies on the next service start, the only setting that
+  does not take effect immediately.

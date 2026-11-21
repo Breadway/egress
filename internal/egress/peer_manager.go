@@ -114,6 +114,9 @@ type peerManager struct {
 	mu        sync.Mutex
 	links     map[string]*peerLink
 	lastCount int
+	// hidden keeps this device's own address out of peer links. Friends then
+	// reach it through the relay or the Aegis star, never a direct dial.
+	hidden bool
 }
 
 func newPeerManager(plat peerPlatform, dev string, logger *log.Logger, exclude func() string, relay *derpTransport) *peerManager {
@@ -285,6 +288,14 @@ func dialable(endpoint string) bool {
 	return host != "" && host != "127.0.0.1" && host != "::1"
 }
 
+// SetHiddenAddress forbids direct peer links when the user asked friends to
+// see only a relayed connection.
+func (m *peerManager) SetHiddenAddress(hidden bool) {
+	m.mu.Lock()
+	m.hidden = hidden
+	m.mu.Unlock()
+}
+
 func (m *peerManager) reconcile() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -294,6 +305,13 @@ func (m *peerManager) reconcile() {
 	budget := 1
 	for _, link := range m.links {
 		if m.owned(link.pubkey) {
+			continue
+		}
+		if m.hidden && (link.direct || link.dialing) {
+			if m.startDERP(link, now) {
+				continue
+			}
+			m.demote(link, now, "the address is hidden")
 			continue
 		}
 		if !link.present {
@@ -378,7 +396,7 @@ func (m *peerManager) reconcile() {
 			if now.Before(link.backoffUntil) {
 				continue
 			}
-			if link.dialable {
+			if link.dialable && !m.hidden {
 				if budget == 0 {
 					continue
 				}

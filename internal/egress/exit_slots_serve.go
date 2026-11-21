@@ -19,11 +19,12 @@ import (
 // One relay connection is roughly a 21 Mbps pipe, so a shared exit identity
 // splits that between clients; a slot gives each client its own pipe.
 type exitSlotManager struct {
-	ctx   context.Context
-	dir   string
-	log   *log.Logger
-	mu    sync.Mutex
-	slots map[string]*exitClientSlot
+	ctx    context.Context
+	dir    string
+	log    *log.Logger
+	region string
+	mu     sync.Mutex
+	slots  map[string]*exitClientSlot
 }
 
 type exitClientSlot struct {
@@ -33,10 +34,10 @@ type exitClientSlot struct {
 	cancel    context.CancelFunc
 }
 
-func newExitSlotManager(ctx context.Context, logger *log.Logger) *exitSlotManager {
+func newExitSlotManager(ctx context.Context, logger *log.Logger, region string) *exitSlotManager {
 	return &exitSlotManager{
 		ctx: ctx, dir: filepath.Join(core.StateDir(), "exit-clients"), log: logger,
-		slots: map[string]*exitClientSlot{},
+		region: region, slots: map[string]*exitClientSlot{},
 	}
 }
 
@@ -52,7 +53,7 @@ func (m *exitSlotManager) ensure(client string) (*exitClientSlot, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport, err := newDERPTransportWithKey(m.log, priv, false, false)
+	transport, err := newDERPTransportWithKeyRegion(m.log, priv, false, false, m.region)
 	if err != nil {
 		return nil, err
 	}

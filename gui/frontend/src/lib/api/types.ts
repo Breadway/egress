@@ -72,7 +72,7 @@ export interface Settings {
   relay_fallback: boolean;
   relay_region: "automatic" | "sydney" | "singapore" | "los_angeles";
   share_connection: boolean;
-  share_scope: "friends" | "close" | "none";
+  share_scope: "friends" | "none";
   share_limit_gb: number;
   hide_public_address: boolean;
   relay_only: boolean;

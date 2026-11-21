@@ -88,10 +88,11 @@ were ported from.
 - The daemon serves `/api/v1/status`, `/connection`, `/circle`, `/protection`,
   `/protection/retry`, `/activity`, `/settings` and the `/events` stream.
 - Connection control pauses and resumes the tunnel without restarting the
-  service. Site retry and settings persistence are wired.
-- Remaining backend work: sharing activation, relay region, address hiding and
-  native notifications. Those settings persist but do not change daemon
-  behaviour yet.
+  service. Site retry, reporting and settings persistence are wired.
+- Sharing starts and stops a real exit server, with the monthly limit enforced
+  and persisted. Address hiding and relay-only stop direct peer links. Relay
+  region selects the DERP region on the next service start. Native
+  notifications use the Tauri notification plugin.
 
 `npm audit` reports advisories against SvelteKit 2 that are only fixed in
 SvelteKit 3. They cover server-side form actions, prerendered cache headers and

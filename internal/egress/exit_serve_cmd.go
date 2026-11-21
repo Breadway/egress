@@ -44,26 +44,65 @@ func cmdExit(args []string) error {
 }
 
 func cmdExitServe(args []string) error {
-	if runtime.GOOS != "linux" {
-		return errors.New("serving a peer exit is Linux only for now; this platform can use one")
-	}
 	fs := newFlagSet("exit serve")
 	derpMode := fs.Bool("derp", false, "serve through DERP so the exit can sit behind CGNAT")
 	port := fs.Int("port", 7443, "TCP port the exit relay listens on")
 	path := fs.String("path", "/peer-exit", "HTTPS path the relay answers on")
 	public := fs.String("public-endpoint", "", "host:port other devices should dial; derived from the tunnel endpoint when empty")
 	dev := fs.String("dev", core.WGInterface, "WireGuard interface to serve from")
+	region := fs.String("region", "", "relay region code; defaults to EGRESS_DERP_REGION or syd")
 	debug := fs.Bool("debug", false, "trace")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	setupLogging(resolveDebug(*debug))
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runExitServe(ctx, exitServeOptions{
+		DERP: *derpMode, Port: *port, Path: *path, Public: *public,
+		Dev: *dev, Region: *region,
+	})
+}
+
+// exitServeOptions is the handful of knobs the CLI and the GUI share. The GUI
+// always serves through DERP so sharing works behind CGNAT and never exposes a
+// public listener.
+type exitServeOptions struct {
+	DERP    bool
+	Port    int
+	Path    string
+	Public  string
+	Dev     string
+	Region  string
+	LimitGB int
+	// Relay, when set, is the daemon's existing relay connection. Starting a
+	// second client with the same node key would make the relay shadow one of
+	// them, so the supervisor shares its connection instead.
+	Relay *derpTransport
+}
+
+func defaultExitServeOptions() exitServeOptions {
+	return exitServeOptions{
+		DERP: true, Port: 7443, Path: "/peer-exit", Dev: core.WGInterface,
+	}
+}
+
+// errShareLimit stops serving until the next calendar month.
+var errShareLimit = errors.New("monthly sharing limit reached")
+
+// runExitServe is the serving loop. It runs until ctx is cancelled or the
+// monthly sharing limit is reached, then withdraws the announcement and drops
+// every client peer.
+func runExitServe(ctx context.Context, opts exitServeOptions) error {
+	if runtime.GOOS != "linux" {
+		return errors.New("serving a peer exit is Linux only for now; this platform can use one")
+	}
 	self := devicePubkey()
 	if self == "" {
 		return errors.New("this device has no identity, so it cannot offer an exit")
 	}
-	wgPort, err := wgListenPort(*dev)
+	wgPort, err := wgListenPort(opts.Dev)
 	if err != nil {
 		return err
 	}
@@ -71,34 +110,41 @@ func cmdExitServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureExitNAT(*dev, wan); err != nil {
+	if err := ensureExitNAT(opts.Dev, wan); err != nil {
 		return fmt.Errorf("nat: %w", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	usage := newShareUsage(opts.LimitGB)
+	if usage.Exceeded() {
+		appLogger().Printf("exit: monthly sharing limit already reached (%d GB)", opts.LimitGB)
+		return errShareLimit
+	}
 
 	transport := "tls"
 	endpoint := ""
 	var relay *derpTransport
 	var srv *http.Server
-	if *derpMode {
+	if opts.DERP {
 		transport = "derp"
-		relay, err = newDERPTransport(appLogger())
-		if err != nil {
-			return fmt.Errorf("relay identity: %w", err)
+		relay = opts.Relay
+		if relay == nil {
+			relay, err = newDERPTransportRegion(appLogger(), opts.Region)
+			if err != nil {
+				return fmt.Errorf("relay identity: %w", err)
+			}
+			// The daemon's shared connection is already running. A CLI serve
+			// owns its connection and has to start it here.
+			go relay.Run(ctx)
 		}
 		// Publish the relay key before announcing the exit: the server rejects
-		// a DERP exit whose device has no relay key yet.
+		// a DERP exit whose device has no relay key yet. This is idempotent.
 		if err := announceDerpKey(ctx, relay.PublicKey()); err != nil {
 			appLogger().Printf("exit: publish relay key: %v", err)
 		}
-		go relay.Run(ctx)
 		appLogger().Printf("exit: serving through DERP, forwarding to 127.0.0.1:%d", wgPort)
 	} else {
-		endpoint = strings.TrimSpace(*public)
+		endpoint = strings.TrimSpace(opts.Public)
 		if endpoint == "" {
-			endpoint, err = ownPublicEndpoint(*port)
+			endpoint, err = ownPublicEndpoint(opts.Port)
 			if err != nil {
 				return err
 			}
@@ -111,66 +157,78 @@ func cmdExitServe(args []string) error {
 			return fmt.Errorf("certificate: %w", cerr)
 		}
 		target := fmt.Sprintf("127.0.0.1:%d", wgPort)
-		listener, lerr := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+		listener, lerr := net.Listen("tcp", fmt.Sprintf(":%d", opts.Port))
 		if lerr != nil {
-			return fmt.Errorf("listen on %d: %w", *port, lerr)
+			return fmt.Errorf("listen on %d: %w", opts.Port, lerr)
 		}
 		tlsListener := tls.NewListener(listener, &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
 		})
-		srv = &http.Server{Handler: wgtunnel.Handler(target, *path)}
+		srv = &http.Server{Handler: wgtunnel.Handler(target, opts.Path)}
 		go func() {
 			if serr := srv.Serve(tlsListener); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
 				appLogger().Printf("exit: relay stopped: %v", serr)
 			}
 		}()
-		appLogger().Printf("exit: serving on :%d%s, forwarding to %s", *port, *path, target)
+		appLogger().Printf("exit: serving on :%d%s, forwarding to %s", opts.Port, opts.Path, target)
 	}
-	if err := announceSelfExit(context.Background(), transport, endpoint, *path); err != nil {
+	if err := announceSelfExit(context.Background(), transport, endpoint, opts.Path); err != nil {
 		appLogger().Printf("exit: announce: %v", err)
 	}
 
 	active := map[string]exitClient{}
 	links := map[string]*activeExitLink{}
 	var slots *exitSlotManager
-	if *derpMode {
-		slots = newExitSlotManager(ctx, appLogger())
+	if opts.DERP {
+		slots = newExitSlotManager(ctx, appLogger(), opts.Region)
 	}
+	cleanup := func() {
+		for pubkey := range active {
+			_ = logx.RunLogged("wg", "set", opts.Dev, "peer", pubkey, "remove")
+		}
+		for _, cur := range links {
+			if cur.base != nil {
+				cur.base.Close()
+			}
+			if cur.slot != nil {
+				cur.slot.Close()
+			}
+		}
+		if slots != nil {
+			slots.close()
+		}
+		usage.Save()
+		_ = withdrawSelfExit(context.Background())
+		if srv != nil {
+			_ = srv.Close()
+		}
+		appLogger().Printf("exit: stopped")
+	}
+
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
 	announce := time.NewTicker(4 * time.Minute)
 	defer announce.Stop()
 	for {
-		if err := reconcileExitClients(ctx, *dev, active, relay, slots, wgPort, links, *derpMode); err != nil {
+		if err := reconcileExitClients(ctx, opts.Dev, active, relay, slots, wgPort, links, opts.DERP); err != nil {
 			appLogger().Printf("exit: clients: %v", err)
+		}
+		usage.Track(opts.Dev, active)
+		if usage.Exceeded() {
+			appLogger().Printf("exit: monthly sharing limit reached (%d GB)", opts.LimitGB)
+			cleanup()
+			return errShareLimit
 		}
 		select {
 		case <-ctx.Done():
-			for pubkey := range active {
-				_ = logx.RunLogged("wg", "set", *dev, "peer", pubkey, "remove")
-			}
-			for _, cur := range links {
-				if cur.base != nil {
-					cur.base.Close()
-				}
-				if cur.slot != nil {
-					cur.slot.Close()
-				}
-			}
-			if slots != nil {
-				slots.close()
-			}
-			_ = withdrawSelfExit(context.Background())
-			if srv != nil {
-				_ = srv.Close()
-			}
-			appLogger().Printf("exit: stopped")
+			cleanup()
 			return nil
 		case <-announce.C:
-			if err := announceSelfExit(ctx, transport, endpoint, *path); err != nil {
+			if err := announceSelfExit(ctx, transport, endpoint, opts.Path); err != nil {
 				appLogger().Printf("exit: announce: %v", err)
 			}
+			usage.Save()
 		case <-tick.C:
 		}
 	}

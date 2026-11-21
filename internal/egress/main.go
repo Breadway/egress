@@ -747,7 +747,8 @@ func cmdSupervise(args []string) error {
 	// One relay connection per device serves peer links, an exit this device
 	// uses, and clients using this device as an exit.
 	var relay *derpTransport
-	if t, derr := newDERPTransport(appLogger()); derr == nil {
+	startupSettings := guiapi.LoadSettings()
+	if t, derr := newDERPTransportRegion(appLogger(), relayRegionCode(startupSettings.RelayRegion)); derr == nil {
 		relay = t
 	} else {
 		appLogger().Printf("derp: unavailable: %v", derr)
@@ -831,15 +832,21 @@ func cmdSupervise(args []string) error {
 		}()
 	}
 	var gui *guiapi.Server
-	if srv, gerr := guiapi.New(newGUISources(sup, peers, splitter, direct, plat, newLinkMeter(splitDev)), apiTokenPath()); gerr != nil {
+	share := newExitShare()
+	defer share.Stop()
+	sources := newGUISources(ctx, sup, peers, splitter, direct, plat, newLinkMeter(splitDev), share, relay)
+	if srv, gerr := guiapi.New(sources, apiTokenPath()); gerr != nil {
 		appLogger().Printf("gui api: %v", gerr)
 	} else {
 		gui = srv
-		st := srv.CurrentSettings()
-		sup.SetFallback(st.RelayFallback && st.Mode != guiapi.ModeDirect)
 		go srv.Run(ctx)
 		appLogger().Printf("gui api: http://%s/api/v1 (token file %s)", core.PortalListenAddr, apiTokenPath())
 	}
+	settings := startupSettings
+	if gui != nil {
+		settings = gui.CurrentSettings()
+	}
+	applyRuntimeSettings(ctx, sup, peers, share, relay, settings)
 
 	go func() {
 		snap := func() portal.Snapshot {

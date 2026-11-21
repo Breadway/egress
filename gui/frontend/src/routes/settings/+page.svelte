@@ -57,7 +57,7 @@
         </div>
       </div>
       <div class="setting">
-        <div class="copy"><strong>Relay region</strong><span>Choose the closest cloud relay.</span></div>
+        <div class="copy"><strong>Relay region</strong><span>Choose the closest cloud relay. Applies on the next start.</span></div>
         <div class="control">
           <select class="select" bind:value={app.settings.relay_region} onchange={() => save("relay_region")}>
             <option value="automatic">Automatic</option>
@@ -82,13 +82,12 @@
         <div class="control">
           <select class="select" bind:value={app.settings.share_scope} disabled={!app.settings.share_connection} onchange={() => save("share_scope")}>
             <option value="friends">Friends only</option>
-            <option value="close">Close friends</option>
             <option value="none">Nobody</option>
           </select>
         </div>
       </div>
       <div class="setting">
-        <div class="copy"><strong>Monthly limit</strong><span>Stop sharing after this much data.</span></div>
+        <div class="copy"><strong>Monthly limit</strong><span>Stop sharing after this much data each month.</span></div>
         <div class="control">
           <input
             class="input"

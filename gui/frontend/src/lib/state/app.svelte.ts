@@ -1,4 +1,5 @@
 import { api, openEvents } from "../api/client";
+import { notify } from "../notify";
 import type {
   ActivityEvent,
   Circle,
@@ -135,7 +136,10 @@ class AppState {
             .catch(() => {});
         }
       },
-      onActivity: (event) => this.addEvent(event),
+      onActivity: (event) => {
+        this.addEvent(event);
+        this.maybeNotify(event);
+      },
       onError: () => {
         this.stopStream?.();
         this.stopStream = null;
@@ -160,6 +164,25 @@ class AppState {
     const key = `${event.time}|${event.title}`;
     if (this.activity.some((e) => `${e.time}|${e.title}` === key)) return;
     this.activity = [event, ...this.activity].slice(0, 200);
+  }
+
+  private maybeNotify(event: ActivityEvent) {
+    if (!this.live) return;
+    if (
+      event.kind === "friend" &&
+      this.settings.notify_friend &&
+      !event.title.includes("offline")
+    ) {
+      void notify("Your circle", event.title);
+      return;
+    }
+    if (event.kind === "protection" && this.settings.notify_site && event.title.startsWith("Unblocked")) {
+      void notify("Site unblocked", event.title);
+      return;
+    }
+    if (event.kind === "connection" && this.settings.notify_drop && event.title.includes("Protection is paused")) {
+      void notify("Protection paused", "Your normal connection is back.");
+    }
   }
 
   async toggle(): Promise<boolean> {
