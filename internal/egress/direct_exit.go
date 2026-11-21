@@ -165,15 +165,17 @@ func (d *directExit) reconcile(ctx context.Context) {
 		d.fallback()
 		return
 	}
-	host, port := exitHostPort(ex.Endpoint)
-	if host == "" {
-		d.fallback()
-		return
-	}
-
 	kind := ex.Transport
 	if kind == "" {
 		kind = "tls"
+	}
+	host, port := "", ""
+	if kind != "derp" {
+		host, port = exitHostPort(ex.Endpoint)
+		if host == "" {
+			d.fallback()
+			return
+		}
 	}
 	d.mu.Lock()
 	previous := ""
