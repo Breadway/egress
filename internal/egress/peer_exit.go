@@ -134,9 +134,10 @@ func cmdPeerExit(args []string) error {
 // which exit this device uses in step. It runs even when the preference is off
 // so turning it on takes effect within a tick, without a restart.
 type peerExitPoller struct {
-	direct *directExit
-	log    *log.Logger
-	used   string
+	direct   *directExit
+	log      *log.Logger
+	used     string
+	withdrew bool
 }
 
 func newPeerExitPoller(direct *directExit, logger *log.Logger) *peerExitPoller {
@@ -209,10 +210,13 @@ func (p *peerExitPoller) refresh(ctx context.Context) {
 		p.log.Printf("peer exits: using %s (%s)", chosen.ID, chosen.Endpoint)
 		p.used = chosen.ID
 	}
+	p.withdrew = false
 }
 
 func (p *peerExitPoller) withdraw(ctx context.Context) {
-	if p.used == "" {
+	// One delete per transition, including on a fresh process whose preference
+	// is already off. The server may still hold a use from a previous run.
+	if p.withdrew && p.used == "" {
 		return
 	}
 	if err := withdrawExitUse(ctx); err != nil {
@@ -220,6 +224,7 @@ func (p *peerExitPoller) withdraw(ctx context.Context) {
 		return
 	}
 	p.used = ""
+	p.withdrew = true
 }
 
 func fetchPeerExits(ctx context.Context) ([]peerExitInfo, error) {
