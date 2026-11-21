@@ -6,18 +6,32 @@ import (
 	"runtime"
 )
 
-// apiTokenPath is where the daemon publishes the local GUI token. Linux uses
-// the runtime directory, which is cleared at boot; the token itself is stable
-// for the life of that file, and the GUI reads it at launch.
+// apiTokenPath is where the daemon publishes the local GUI token. Every path
+// is readable by the signed-in user while the daemon still runs as root or
+// SYSTEM:
 //
-// The Tauri shell reads this exact path. EGRESS_API_TOKEN_FILE overrides it
+//   - Linux: the runtime directory, cleared at boot.
+//   - Windows: ProgramData\egress-gui, which inherits the Users read ACE from
+//     ProgramData. The install directory is administrator-only, so it must not
+//     be used here.
+//   - macOS: the local var run directory.
+//
+// The Tauri shell resolves the same path. EGRESS_API_TOKEN_FILE overrides it
 // for tests and for a second identity on one host.
 func apiTokenPath() string {
 	if path := os.Getenv("EGRESS_API_TOKEN_FILE"); path != "" {
 		return path
 	}
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		return "/run/egress/api-token"
+	case "windows":
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			base = `C:\ProgramData`
+		}
+		return filepath.Join(base, "egress-gui", "api-token")
+	default:
+		return "/usr/local/var/run/egress/api-token"
 	}
-	return filepath.Join(os.TempDir(), "egress-api-token")
 }

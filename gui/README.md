@@ -64,10 +64,11 @@ Every screen reads the live daemon API through `frontend/src/lib/api/client.ts`
 and the single store in `frontend/src/lib/state/app.svelte.ts`. `API.md` is the
 contract and `frontend/src/lib/api/types.ts` is the shared shape.
 
-The daemon writes a bearer token to `/run/egress/api-token` on Linux (or
-`EGRESS_API_TOKEN_FILE`). The Tauri shell reads it through the `api_token`
-command. For a plain browser during development, set `VITE_EGRESS_TOKEN` and
-optionally `VITE_EGRESS_API`:
+The daemon writes a bearer token to `/run/egress/api-token` on Linux,
+`%ProgramData%\egress-gui\api-token` on Windows, or
+`/usr/local/var/run/egress/api-token` on macOS (or `EGRESS_API_TOKEN_FILE`).
+The Tauri shell reads it through the `api_token` command. For a plain browser
+during development, set `VITE_EGRESS_TOKEN` and optionally `VITE_EGRESS_API`:
 
 ```sh
 VITE_EGRESS_TOKEN=$(cat /run/egress/api-token) npm run dev
@@ -91,9 +92,9 @@ were ported from.
   `/settings` and the `/events` stream.
 - Connection control pauses and resumes the tunnel without restarting the
   service. Site retry, reporting and settings persistence are wired.
-- Sharing starts and stops a real exit server, with the monthly limit enforced
-  and persisted. Address hiding and relay-only stop direct peer links. Relay
-  region selects the DERP region on the next service start. Native
+- Sharing starts and stops a real exit server on Linux, with the monthly limit
+  enforced and persisted. Address hiding and relay-only stop direct peer links.
+  Relay region selects the DERP region on the next service start. Native
   notifications use the Tauri notification plugin.
 
 `npm audit` reports advisories against SvelteKit 2 that are only fixed in

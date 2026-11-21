@@ -579,10 +579,14 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	next = normalizeSettings(next)
 	s.settings = next
-	var data []byte
 	if s.settingsPath != "" {
-		var err error
-		data, err = json.MarshalIndent(next, "", "  ")
+		// Write while the lock is still held. Two concurrent PATCHes would
+		// otherwise be able to persist in the opposite order to the state
+		// they set.
+		data, err := json.MarshalIndent(next, "", "  ")
+		if err == nil {
+			err = os.WriteFile(s.settingsPath, append(data, '\n'), 0600)
+		}
 		if err != nil {
 			s.mu.Unlock()
 			writeError(w, http.StatusInternalServerError, "settings", err.Error())
@@ -590,12 +594,6 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.Unlock()
-	if s.settingsPath != "" {
-		if err := os.WriteFile(s.settingsPath, append(data, '\n'), 0600); err != nil {
-			writeError(w, http.StatusInternalServerError, "settings", err.Error())
-			return
-		}
-	}
 	if s.src.ApplySettings != nil {
 		if err := s.src.ApplySettings(next); err != nil {
 			writeError(w, http.StatusInternalServerError, "apply", err.Error())

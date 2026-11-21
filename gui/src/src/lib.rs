@@ -67,11 +67,17 @@ fn api_token() -> Result<String, String> {
 }
 
 // default_token_path must match internal/egress/api_token_path.go: the runtime
-// directory on Linux, the temp directory everywhere else.
+// directory on Linux, ProgramData\egress-gui on Windows, and the local var run
+// directory on macOS. The daemon runs elevated, so none of these may be the
+// user's temp directory.
 fn default_token_path() -> PathBuf {
-    if cfg!(target_os = "linux") {
-        PathBuf::from("/run/egress/api-token")
-    } else {
-        std::env::temp_dir().join("egress-api-token")
+    match std::env::consts::OS {
+        "linux" => PathBuf::from("/run/egress/api-token"),
+        "windows" => {
+            let base =
+                std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
+            PathBuf::from(base).join("egress-gui").join("api-token")
+        }
+        _ => PathBuf::from("/usr/local/var/run/egress/api-token"),
     }
 }

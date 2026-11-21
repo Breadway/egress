@@ -8,12 +8,15 @@ API and never reads root-owned state directly.
 
 - Loopback HTTP at `http://127.0.0.1:7280/api/v1`, on the same listener as the
   local portal.
-- The daemon writes a random token to a file for the local user:
+- The daemon writes a random token to a file the signed-in user can read while
+  the daemon itself runs as root or SYSTEM:
   - Linux: `/run/egress/api-token`
-  - other platforms: the temp directory, `egress-api-token`
-  - `EGRESS_API_TOKEN_FILE` overrides both (tests, a second identity)
-- The Tauri shell reads that file through the `api_token` command and adds
-  `Authorization: Bearer <token>` to every request.
+  - Windows: `%ProgramData%\egress-gui\api-token` (inherits the Users read ACE
+    from ProgramData; the administrator-only install directory is not used)
+  - macOS: `/usr/local/var/run/egress/api-token`
+  - `EGRESS_API_TOKEN_FILE` overrides all of them (tests, a second identity)
+- The Tauri shell resolves the same path through the `api_token` command and
+  adds `Authorization: Bearer <token>` to every request.
 - The file is mode 0644 by design: the API is loopback only and the alternative
   is a root prompt on every GUI launch. A Unix socket with peer credentials is
   the planned upgrade; the JSON contract does not change.
@@ -185,11 +188,13 @@ field that has a backend:
 - `relay_fallback` toggles the WebSocket fallback in the supervisor.
 - `mode: "direct"` also forbids the fallback.
 - `share_connection`, `share_scope` and `share_limit_gb` start or stop this
-  device's exit server. Serving always uses the relay, never a public listener.
-  `scope: "none"` stops serving even when sharing is on. The limit is counted
-  from WireGuard transfer counters, persisted in `share-usage.json`, and resets
-  at the start of each month. Reaching it withdraws the exit until the next
-  month.
+  device's exit server (Linux only; other platforms store the preference).
+  Serving always uses the relay, never a public listener. `scope: "none"`
+  stops serving even when sharing is on. The limit is counted from WireGuard
+  transfer counter deltas, persisted in `share-usage.json` with the per-peer
+  baselines, and resets at the start of each month without charging the
+  previous month's counters again. Reaching it withdraws the exit until the
+  next month.
 - `hide_public_address` and `relay_only` stop direct peer links, so friends
   reach this device through the relay or the Aegis star.
 - `relay_region` selects the DERP region (`sydney` = `syd`,

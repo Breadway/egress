@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,6 +205,60 @@ func TestExitShareStartsAndStopsOnce(t *testing.T) {
 	waitFor(&starts, 2)
 	share.Stop()
 	waitFor(&stops, 2)
+}
+
+func TestShareUsageMonthRolloverKeepsBaselines(t *testing.T) {
+	t.Setenv("EGRESS_STATE_DIR", t.TempDir())
+	previous := wgTransferCommand
+	t.Cleanup(func() { wgTransferCommand = previous })
+
+	// 40 GB of last month's traffic already sits in the cumulative peer
+	// counter. The new month must start from that counter, not from zero.
+	current := uint64(40_000_000_000)
+	wgTransferCommand = func(string) map[string]uint64 {
+		return map[string]uint64{"peer": current}
+	}
+	active := map[string]exitClient{"peer": {}}
+
+	usage := newShareUsage(50)
+	usage.mu.Lock()
+	usage.month = time.Now().AddDate(0, -1, 0).Format("2006-01")
+	usage.total = current
+	usage.last["peer"] = current
+	usage.mu.Unlock()
+	usage.Save()
+
+	reloaded := newShareUsage(50)
+	reloaded.Track("wg-test", active)
+	reloaded.mu.Lock()
+	total := reloaded.total
+	reloaded.mu.Unlock()
+	if total != 0 {
+		t.Fatalf("month rollover charged old traffic: %d, want 0", total)
+	}
+	if reloaded.Exceeded() {
+		t.Fatal("old traffic must not count against the new month")
+	}
+
+	current += 1_000_000_000
+	reloaded.Track("wg-test", active)
+	reloaded.mu.Lock()
+	total = reloaded.total
+	reloaded.mu.Unlock()
+	if total != 1_000_000_000 {
+		t.Fatalf("new month traffic = %d, want 1000000000", total)
+	}
+}
+
+func TestAPITokenPath(t *testing.T) {
+	t.Setenv("EGRESS_API_TOKEN_FILE", "/tmp/override-token")
+	if got := apiTokenPath(); got != "/tmp/override-token" {
+		t.Fatalf("override path = %q", got)
+	}
+	t.Setenv("EGRESS_API_TOKEN_FILE", "")
+	if runtime.GOOS == "linux" && apiTokenPath() != "/run/egress/api-token" {
+		t.Fatalf("linux path = %q", apiTokenPath())
+	}
 }
 
 func TestHiddenPeerNeverDialsDirect(t *testing.T) {

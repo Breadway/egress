@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -183,7 +184,14 @@ func applyRuntimeSettings(ctx context.Context, sup *supervisor.Supervisor, peers
 		// reuses that connection rather than opening a second identity.
 		opts.Relay = relay
 		opts.LimitGB = s.ShareLimitGB
-		share.Apply(ctx, s.ShareConnection && s.ShareScope != "none", opts)
+		enabled := s.ShareConnection && s.ShareScope != "none"
+		if runtime.GOOS != "linux" {
+			if enabled {
+				appLogger().Printf("share: serving an exit is Linux only; the preference is stored")
+			}
+			enabled = false
+		}
+		share.Apply(ctx, enabled, opts)
 	}
 }
 

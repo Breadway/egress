@@ -41,10 +41,15 @@ func newShareUsage(limitGB int) *shareUsage {
 	}
 	if data, err := os.ReadFile(u.path); err == nil {
 		var stored shareUsageFile
-		if json.Unmarshal(data, &stored) == nil && stored.Month == u.month {
-			u.total = stored.Total
+		if json.Unmarshal(data, &stored) == nil {
+			// The per-peer baselines carry across a month boundary: the
+			// counters are cumulative, so dropping them would charge the whole
+			// lifetime to the new month. The total starts fresh.
 			if stored.Peers != nil {
 				u.last = stored.Peers
+			}
+			if stored.Month == u.month {
+				u.total = stored.Total
 			}
 		}
 	}
@@ -61,9 +66,11 @@ func (u *shareUsage) Track(dev string, active map[string]exitClient) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if month != u.month {
+		// Keep the peer baselines. They are cumulative counters, so they are
+		// still the correct starting point for the new month; clearing them
+		// would count every byte since the peer was configured.
 		u.month = month
 		u.total = 0
-		u.last = map[string]uint64{}
 	}
 	// A peer that is gone cannot be sampled again; drop its baseline without
 	// changing the accumulated total.
