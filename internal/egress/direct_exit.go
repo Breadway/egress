@@ -104,7 +104,7 @@ func (d *directExit) ActiveExit() (label, kind, pubkey string, active bool) {
 	if !d.active {
 		return "", "", "", false
 	}
-	label = d.pubkey
+	label = ""
 	for _, list := range [][]split.DirectExit{d.exits, d.peerExits} {
 		for _, e := range list {
 			if e.PubKey == d.pubkey {

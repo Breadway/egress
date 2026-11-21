@@ -137,6 +137,18 @@ func decodeKey(text string) ([32]byte, error) {
 // PublicKey is the relay identity this device publishes.
 func (t *derpTransport) PublicKey() string { return t.public }
 
+// Region reports the preferred region, or the connected one when automatic.
+// Exit slots use it so every identity stays in the same region as the base
+// connection.
+func (t *derpTransport) Region() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.preferred != "" {
+		return t.preferred
+	}
+	return t.region
+}
+
 // Attach returns a loopback socket that WireGuard should use as a peer
 // endpoint. Datagrams read from it go to the remote relay key; datagrams from
 // that key are written back to the last WireGuard source address.

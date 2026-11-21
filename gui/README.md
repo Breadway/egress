@@ -24,7 +24,7 @@ gui/
     src/routes/          Home, Friends, Protection, Activity, Settings
     src/lib/components/  Sidebar, Topbar, Statusbar, Icon, Toggle, Toast, Sparkline
     src/lib/api/         typed client and shared types
-    src/lib/data/        mock data until the daemon endpoints land
+    src/lib/data/        fallback data before the daemon answers
   src/                   Tauri crate
     src/lib.rs           window, tray, close-to-tray
     tauri.conf.json      window, CSP, bundle
@@ -75,7 +75,8 @@ VITE_EGRESS_TOKEN=$(cat /run/egress/api-token) npm run dev
 
 The store starts on `frontend/src/lib/data/mock.ts` so the window renders before
 the daemon answers, then replaces it with live status, circle, protection,
-activity and settings. The footer shows "Demo data" while the mock is in use.
+activity and settings. The sidebar footer shows "Demo data" while the fallback
+is in use.
 
 ## Design reference
 
@@ -86,7 +87,8 @@ were ported from.
 
 - Home, Friends, Protection, Activity and Settings are ported and live.
 - The daemon serves `/api/v1/status`, `/connection`, `/circle`, `/protection`,
-  `/protection/retry`, `/activity`, `/settings` and the `/events` stream.
+  `/protection/retry`, `/protection/report`, `/activity` (GET and DELETE),
+  `/settings` and the `/events` stream.
 - Connection control pauses and resumes the tunnel without restarting the
   service. Site retry, reporting and settings persistence are wired.
 - Sharing starts and stops a real exit server, with the monthly limit enforced

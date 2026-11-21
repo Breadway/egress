@@ -176,10 +176,13 @@ func (m *peerManager) Snapshot() []PeerView {
 	defer m.mu.Unlock()
 	out := make([]PeerView, 0, len(m.links))
 	for _, link := range m.links {
-		name := link.label
-		if name == "" {
-			name = link.ip
+		// The published list always carries a label. An unlabeled link would
+		// otherwise be named by its tunnel address, which the user UI must
+		// never expose.
+		if link.label == "" {
+			continue
 		}
+		name := link.label
 		fresh := link.direct || link.derped || link.derpPassive || m.handshakeFresh(link)
 		transport := "offline"
 		switch {

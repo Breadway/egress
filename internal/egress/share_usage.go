@@ -13,35 +13,39 @@ import (
 	"egress/internal/core"
 )
 
-// shareUsage enforces the monthly sharing limit. It counts the WireGuard
-// transfer counters of the peers currently carried as an exit, keeps the
-// running total across restarts in the daemon state directory, and resets when
-// the calendar month changes.
+// shareUsage enforces the monthly sharing limit. It accumulates per-peer
+// counter deltas rather than storing a raw total, so traffic is counted once
+// across reconnects and daemon restarts, including the case where WireGuard's
+// counters survive a restart.
 type shareUsage struct {
-	mu       sync.Mutex
-	path     string
-	month    string
-	baseline uint64
-	max      map[string]uint64
-	limitGB  int
+	mu      sync.Mutex
+	path    string
+	month   string
+	total   uint64
+	last    map[string]uint64
+	limitGB int
 }
 
 type shareUsageFile struct {
-	Month string `json:"month"`
-	Bytes uint64 `json:"bytes"`
+	Month string            `json:"month"`
+	Total uint64            `json:"total"`
+	Peers map[string]uint64 `json:"peers,omitempty"`
 }
 
 func newShareUsage(limitGB int) *shareUsage {
 	u := &shareUsage{
 		path:    filepath.Join(core.StateDir(), "share-usage.json"),
 		month:   time.Now().Format("2006-01"),
-		max:     map[string]uint64{},
+		last:    map[string]uint64{},
 		limitGB: limitGB,
 	}
 	if data, err := os.ReadFile(u.path); err == nil {
 		var stored shareUsageFile
 		if json.Unmarshal(data, &stored) == nil && stored.Month == u.month {
-			u.baseline = stored.Bytes
+			u.total = stored.Total
+			if stored.Peers != nil {
+				u.last = stored.Peers
+			}
 		}
 	}
 	return u
@@ -58,16 +62,34 @@ func (u *shareUsage) Track(dev string, active map[string]exitClient) {
 	defer u.mu.Unlock()
 	if month != u.month {
 		u.month = month
-		u.baseline = 0
-		u.max = map[string]uint64{}
+		u.total = 0
+		u.last = map[string]uint64{}
 	}
-	for pubkey, bytes := range wgTransfer(dev) {
+	// A peer that is gone cannot be sampled again; drop its baseline without
+	// changing the accumulated total.
+	for key := range u.last {
+		if _, carried := active[key]; !carried {
+			delete(u.last, key)
+		}
+	}
+	for pubkey, bytes := range wgTransferCommand(dev) {
 		if _, carried := active[pubkey]; !carried {
 			continue
 		}
-		if bytes > u.max[pubkey] {
-			u.max[pubkey] = bytes
+		prev, seen := u.last[pubkey]
+		switch {
+		case !seen:
+			// First sample: everything the counter holds happened while it
+			// was carried, so it all counts.
+			u.total += bytes
+		case bytes >= prev:
+			u.total += bytes - prev
+		default:
+			// WireGuard restarted the counter with a re-added peer. The new
+			// value is all fresh traffic, not a negative delta.
+			u.total += bytes
 		}
+		u.last[pubkey] = bytes
 	}
 	u.saveLocked()
 }
@@ -79,7 +101,7 @@ func (u *shareUsage) Exceeded() bool {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return u.totalLocked() >= uint64(u.limitGB)*1_000_000_000
+	return u.total >= uint64(u.limitGB)*1_000_000_000
 }
 
 // Save persists the running total. Called periodically and on shutdown.
@@ -92,21 +114,17 @@ func (u *shareUsage) Save() {
 	u.saveLocked()
 }
 
-func (u *shareUsage) totalLocked() uint64 {
-	total := u.baseline
-	for _, bytes := range u.max {
-		total += bytes
-	}
-	return total
-}
-
 func (u *shareUsage) saveLocked() {
-	data, err := json.Marshal(shareUsageFile{Month: u.month, Bytes: u.totalLocked()})
+	data, err := json.Marshal(shareUsageFile{Month: u.month, Total: u.total, Peers: u.last})
 	if err != nil {
 		return
 	}
 	_ = os.WriteFile(u.path, data, 0600)
 }
+
+// wgTransferCommand is a variable so tests can drive accounting without a
+// live WireGuard interface.
+var wgTransferCommand = wgTransfer
 
 // wgTransfer returns the summed rx and tx bytes per peer. The command is the
 // same on Linux and Windows when WireGuard's userspace tools are installed.

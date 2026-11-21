@@ -11,10 +11,13 @@ import (
 // the sharing setting. Options are comparable, so re-applying the same values
 // leaves a running server alone.
 type exitShare struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
-	opts   exitServeOptions
+	// applyMu serializes Apply calls. Two settings updates arriving together
+	// must not both decide the server is stopped and start one each.
+	applyMu sync.Mutex
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	opts    exitServeOptions
 }
 
 func newExitShare() *exitShare { return &exitShare{} }
@@ -22,6 +25,8 @@ func newExitShare() *exitShare { return &exitShare{} }
 // Apply reconciles the server with the requested state. Starting or stopping
 // is asynchronous; the caller does not wait for peers to drain.
 func (s *exitShare) Apply(parent context.Context, enabled bool, opts exitServeOptions) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	s.mu.Lock()
 	if enabled && s.cancel != nil && s.opts == opts {
 		s.mu.Unlock()
@@ -50,7 +55,7 @@ func (s *exitShare) Apply(parent context.Context, enabled bool, opts exitServeOp
 	go func() {
 		defer close(finished)
 		for {
-			err := runExitServe(ctx, opts)
+			err := runExitServer(ctx, opts)
 			if ctx.Err() != nil {
 				break
 			}

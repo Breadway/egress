@@ -50,6 +50,10 @@ type Supervisor struct {
 	connMu sync.Mutex
 	paused bool
 	path   string
+	// runMu serializes pause/resume with the tunnel start on the loop. Without
+	// it a tick that already passed the pause check could restart the tunnel
+	// just after the user paused.
+	runMu sync.Mutex
 
 	Iface   string
 	Gateway string
@@ -117,12 +121,19 @@ func New(plat platform.Interface, resolver *doh.Resolver, wst Tunneler, logger *
 // user can reconnect without a service restart. Resuming starts the tunnel;
 // the normal loop then re-pins the endpoint and re-applies routes.
 func (s *Supervisor) SetConnected(on bool) error {
+	// Taking runMu closes the window where a tick has passed its pause check
+	// and would otherwise start the tunnel right after StopTunnel.
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
 	s.connMu.Lock()
 	was := !s.paused
 	s.paused = !on
 	s.connMu.Unlock()
 	switch {
 	case was && !on:
+		if s.wst != nil {
+			s.wst.Stop()
+		}
 		return s.plat.StopTunnel()
 	case !was && on:
 		return s.plat.StartTunnel()
@@ -253,18 +264,6 @@ func (s *Supervisor) loop(ctx context.Context) error {
 		logx.Debugf("tick: state=%d failures=%d tunnel=%v iface=%s gateway=%s",
 			state, failures, s.plat.TunnelUp(), s.Iface, s.Gateway)
 
-		// A paused supervisor keeps the process, resolver and local API alive
-		// but owns no tunnel. The loop stays on its ticker so resume is a flag
-		// flip rather than a service restart.
-		if s.Paused() {
-			if s.plat.TunnelUp() {
-				if err := s.plat.StopTunnel(); err != nil {
-					s.log.Printf("pause: could not stop the tunnel: %v", err)
-				}
-			}
-			continue
-		}
-
 		// changed tracks a fresh route flip for this tick only. The first
 		// probe after a flip fails over immediately instead of waiting out
 		// another full round, because a flip usually means the old path is
@@ -332,8 +331,25 @@ func (s *Supervisor) loop(ctx context.Context) error {
 			return err
 		}
 
+		// The resolver and its DNS setting stay live while paused, so a pause
+		// does not silently break ordinary lookups. Only the tunnel and the
+		// fallback are owned by this block.
+		s.runMu.Lock()
+		if s.Paused() {
+			if s.plat.TunnelUp() {
+				if err := s.plat.StopTunnel(); err != nil {
+					s.log.Printf("pause: could not stop the tunnel: %v", err)
+				}
+			}
+			s.runMu.Unlock()
+			if s.wst != nil {
+				s.wst.Stop()
+			}
+			continue
+		}
 		if !s.plat.TunnelUp() {
 			if err := s.plat.StartTunnel(); err != nil {
+				s.runMu.Unlock()
 				s.log.Printf("tunnel is down and would not start: %v", err)
 				continue
 			}
@@ -343,6 +359,7 @@ func (s *Supervisor) loop(ctx context.Context) error {
 				}
 			}
 		}
+		s.runMu.Unlock()
 
 		switch state {
 		case pathUDP:
@@ -365,6 +382,10 @@ func (s *Supervisor) loop(ctx context.Context) error {
 			if failures < threshold || !s.Fallback() {
 				continue
 			}
+			if s.Paused() {
+				failures = 0
+				continue
+			}
 			if err := s.enterWebSocket(ctx); err != nil {
 				s.log.Printf("fallback failed: %v", err)
 				failures = 0
@@ -376,6 +397,9 @@ func (s *Supervisor) loop(ctx context.Context) error {
 			s.log.Printf("udp path is blocked, using the websocket fallback")
 
 		case pathWebSocket:
+			if s.Paused() {
+				continue
+			}
 			if err := s.wst.Ensure(ctx); err != nil {
 				s.log.Printf("wstunnel: %v", err)
 			}

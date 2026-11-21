@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconEvent;
 use tauri::{Manager, WindowEvent};
@@ -54,11 +56,22 @@ fn reveal(app: &tauri::AppHandle) {
 #[tauri::command]
 fn api_token() -> Result<String, String> {
     let path = std::env::var("EGRESS_API_TOKEN_FILE")
-        .unwrap_or_else(|_| "/run/egress/api-token".to_string());
-    let raw = std::fs::read_to_string(&path).map_err(|err| format!("{path}: {err}"))?;
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| default_token_path());
+    let raw = std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
     let token = raw.trim().to_string();
     if token.is_empty() {
-        return Err(format!("{path} is empty"));
+        return Err(format!("{} is empty", path.display()));
     }
     Ok(token)
+}
+
+// default_token_path must match internal/egress/api_token_path.go: the runtime
+// directory on Linux, the temp directory everywhere else.
+fn default_token_path() -> PathBuf {
+    if cfg!(target_os = "linux") {
+        PathBuf::from("/run/egress/api-token")
+    } else {
+        std::env::temp_dir().join("egress-api-token")
+    }
 }

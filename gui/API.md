@@ -44,7 +44,8 @@ API and never reads root-owned state directly.
 ```
 
 - `mode`: `automatic`, `direct`, `friend` (from settings).
-- `path`: `direct`, `relay`, `cloud`, `off`. It is `off` while paused.
+- `path`: `direct`, `cloud`, `off`. It is `off` while paused. A peer exit is
+  represented by `exit`; `path` describes the transport to the cloud relay.
 - `exit`: `Cloud relay`, or the circle member currently carrying blocked
   traffic. Never a key or tunnel address.
 - `speed_mbps` and `data_gb` come from the tunnel interface counters on Linux.
@@ -138,6 +139,20 @@ Queues one verification attempt for a site already in the blocked list. Returns
 from real transitions (connection, path, exit, peer links, newly served sites),
 collapsed when the same title repeats within two minutes, and persisted to
 `gui-activity.json` in the daemon state directory. The ring holds 200 rows.
+
+## `DELETE /activity`
+
+Clears the local activity ring and its persisted file. Returns `{"ok":true}`.
+
+## `POST /protection/report`
+
+```json
+{ "domain": "example.com" }
+```
+
+Queues a first probe for a site the user could not open. A confirmed block joins
+the profile the same way a learned one does. Returns `{"ok":true}`; a malformed
+or non-hostname value returns 400.
 
 ## `GET /settings` and `PATCH /settings`
 

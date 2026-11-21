@@ -158,6 +158,11 @@ func newGUISources(
 				if err := setBootStart(s.ConnectAutomatically); err != nil {
 					return fmt.Errorf("boot start: %w", err)
 				}
+				// The marker outlives reinstalls and updates, so it has to
+				// move with the unit or an update silently re-enables boot.
+				if err := setBootPreference(!s.ConnectAutomatically); err != nil {
+					return fmt.Errorf("boot preference: %w", err)
+				}
 			}
 			return nil
 		},

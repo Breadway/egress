@@ -274,14 +274,6 @@ func LoadSettings() Settings {
 	return settings
 }
 
-func (s *Server) saveSettings() error {
-	data, err := json.MarshalIndent(s.settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.settingsPath, append(data, '\n'), 0600)
-}
-
 func (s *Server) loadActivity() {
 	data, err := os.ReadFile(s.activityPath)
 	if err != nil {
@@ -576,19 +568,30 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body", "expected a JSON object")
 		return
 	}
+	// Hold the lock across the whole read-modify-write and the marshal, so a
+	// concurrent GET or PATCH can never observe a half-applied set.
 	s.mu.Lock()
 	next := s.settings
-	s.mu.Unlock()
 	if err := applyPatch(&next, patch); err != nil {
+		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "settings", err.Error())
 		return
 	}
 	next = normalizeSettings(next)
-	s.mu.Lock()
 	s.settings = next
+	var data []byte
+	if s.settingsPath != "" {
+		var err error
+		data, err = json.MarshalIndent(next, "", "  ")
+		if err != nil {
+			s.mu.Unlock()
+			writeError(w, http.StatusInternalServerError, "settings", err.Error())
+			return
+		}
+	}
 	s.mu.Unlock()
 	if s.settingsPath != "" {
-		if err := s.saveSettings(); err != nil {
+		if err := os.WriteFile(s.settingsPath, append(data, '\n'), 0600); err != nil {
 			writeError(w, http.StatusInternalServerError, "settings", err.Error())
 			return
 		}

@@ -91,6 +91,10 @@ func defaultExitServeOptions() exitServeOptions {
 // errShareLimit stops serving until the next calendar month.
 var errShareLimit = errors.New("monthly sharing limit reached")
 
+// runExitServer is a variable so the sharing lifecycle can be tested without
+// starting a real relay.
+var runExitServer = runExitServe
+
 // runExitServe is the serving loop. It runs until ctx is cancelled or the
 // monthly sharing limit is reached, then withdraws the announcement and drops
 // every client peer.
@@ -181,11 +185,20 @@ func runExitServe(ctx context.Context, opts exitServeOptions) error {
 	links := map[string]*activeExitLink{}
 	var slots *exitSlotManager
 	if opts.DERP {
-		slots = newExitSlotManager(ctx, appLogger(), opts.Region)
+		slotRegion := opts.Region
+		if relay != nil {
+			if connected := relay.Region(); connected != "" {
+				slotRegion = connected
+			}
+		}
+		slots = newExitSlotManager(ctx, appLogger(), slotRegion)
 	}
 	cleanup := func() {
-		for pubkey := range active {
+		for pubkey, client := range active {
 			_ = logx.RunLogged("wg", "set", opts.Dev, "peer", pubkey, "remove")
+			if runtime.GOOS == "linux" && client.IP != "" {
+				_ = logx.RunLogged("ip", "route", "del", client.IP+"/32", "dev", opts.Dev)
+			}
 		}
 		for _, cur := range links {
 			if cur.base != nil {

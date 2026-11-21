@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"testing"
+	"time"
 )
 
 type pauseFake struct {
@@ -46,6 +47,34 @@ func TestPauseResume(t *testing.T) {
 	}
 	if sup.Paused() || !sup.Connected() || plat.starts != 1 {
 		t.Fatalf("resume failed: paused=%v connected=%v starts=%d", sup.Paused(), sup.Connected(), plat.starts)
+	}
+}
+
+func TestPauseWaitsForRunLock(t *testing.T) {
+	plat := &pauseFake{up: true}
+	sup := New(plat, nil, nil, log.New(io.Discard, "", 0), true, true)
+
+	// Simulate a tick that is inside its tunnel-start critical section. A
+	// pause must not slip in between the pause check and StartTunnel.
+	sup.runMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		_ = sup.SetConnected(false)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("pause did not wait for the run lock")
+	case <-time.After(30 * time.Millisecond):
+	}
+	sup.runMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("pause did not finish after the run lock was released")
+	}
+	if !sup.Paused() || plat.up {
+		t.Fatalf("pause after lock: paused=%v up=%v", sup.Paused(), plat.up)
 	}
 }
 

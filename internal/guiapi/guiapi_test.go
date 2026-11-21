@@ -255,6 +255,51 @@ func TestReportAndClear(t *testing.T) {
 	}
 }
 
+func TestOptionsAndCORS(t *testing.T) {
+	_, h, _ := testServer(t, baseSources())
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/settings", nil)
+	req.Header.Set("Origin", "tauri://localhost")
+	req.Header.Set("Access-Control-Request-Method", "PATCH")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS: %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("allow-origin = %q, want *", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
+		t.Fatalf("allow-headers = %q, missing Authorization", got)
+	}
+}
+
+func TestSettingsConcurrentReadWrite(t *testing.T) {
+	_, h, tokenPath := testServer(t, baseSources())
+	token := strings.TrimSpace(readFile(t, tokenPath))
+	var wg sync.WaitGroup
+	for i := 0; i < 25; i++ {
+		wg.Add(2)
+		value := i%2 == 0
+		go func() {
+			defer wg.Done()
+			body := `{"relay_fallback":false}`
+			if value {
+				body = `{"relay_fallback":true}`
+			}
+			if rec := request(t, h, http.MethodPatch, "/api/v1/settings", token, body); rec.Code != http.StatusOK {
+				t.Errorf("PATCH: %d %s", rec.Code, rec.Body)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if rec := request(t, h, http.MethodGet, "/api/v1/settings", token, ""); rec.Code != http.StatusOK {
+				t.Errorf("GET: %d %s", rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func TestEventsStreamSendsStatus(t *testing.T) {
 	_, h, tokenPath := testServer(t, baseSources())
 	token := strings.TrimSpace(readFile(t, tokenPath))

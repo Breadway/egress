@@ -27,6 +27,7 @@ class AppState {
   private started = false;
   private poll: ReturnType<typeof setInterval> | null = null;
   private stopStream: (() => void) | null = null;
+  private lastRefresh = 0;
 
   get connected() {
     return this.status.connected;
@@ -139,6 +140,7 @@ class AppState {
       onActivity: (event) => {
         this.addEvent(event);
         this.maybeNotify(event);
+        this.refreshSoon();
       },
       onError: () => {
         this.stopStream?.();
@@ -164,6 +166,20 @@ class AppState {
     const key = `${event.time}|${event.title}`;
     if (this.activity.some((e) => `${e.time}|${e.title}` === key)) return;
     this.activity = [event, ...this.activity].slice(0, 200);
+  }
+
+  // An activity row means circle or protection state changed. Refresh both,
+  // at most once every two seconds, so a burst of events does not flood the
+  // daemon with requests.
+  private refreshSoon() {
+    const now = Date.now();
+    if (now - this.lastRefresh < 2000) return;
+    this.lastRefresh = now;
+    this.refreshProtection();
+    api
+      .circle()
+      .then((circle) => (this.people = circle.people?.length ? circle.people : this.people))
+      .catch(() => {});
   }
 
   private maybeNotify(event: ActivityEvent) {
