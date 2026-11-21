@@ -50,13 +50,14 @@ type peerLink struct {
 	// A passive peer accepts an inbound handshake and learns the endpoint from
 	// it, which is how a device behind the relay gets a direct link: the side
 	// with a public address dials, and this side only has to be willing.
-	present   bool
-	dialing   bool
-	dialStart time.Time
-	direct    bool
-	derping   bool
-	derped    bool
-	failures  int
+	present     bool
+	dialing     bool
+	dialStart   time.Time
+	direct      bool
+	derping     bool
+	derped      bool
+	derpPassive bool
+	failures    int
 
 	backoffUntil time.Time
 }
@@ -298,6 +299,24 @@ func (m *peerManager) reconcile() {
 				m.log.Printf("peers: %s lost its DERP link", link.ip)
 				m.demote(link, now, "lost its DERP link")
 			}
+		case link.derpPassive:
+			// The registration stays connected while idle, so the other side
+			// can start a handshake at any time. Promote as soon as one lands.
+			if m.handshakeFresh(link) {
+				if endpoint, err := m.relay.Endpoint(link.pubkey, link.derpKey); err == nil {
+					if err := m.configure(link, endpoint, []string{link.ip + "/32"}); err == nil {
+						link.derpPassive = false
+						link.derped = true
+						link.failures = 0
+						m.log.Printf("peers: DERP link to %s (%s)", link.ip, m.relayName())
+						continue
+					}
+				}
+			}
+			if now.Before(link.backoffUntil) {
+				continue
+			}
+			m.startDERP(link, now)
 		case link.derping:
 			if now.Sub(link.dialStart) < peerAttemptWindow {
 				continue
@@ -362,6 +381,7 @@ func (m *peerManager) startDERP(link *peerLink, now time.Time) bool {
 	link.dialing = false
 	link.direct = false
 	link.derping = true
+	link.derpPassive = false
 	link.dialStart = now
 	m.log.Printf("peers: trying DERP for %s", link.ip)
 	return true
@@ -384,6 +404,7 @@ func (m *peerManager) demote(link *peerLink, now time.Time, reason string) {
 	link.direct = false
 	link.derping = false
 	link.derped = false
+	link.derpPassive = wasDERP
 	link.failures++
 	if wasDERP {
 		link.backoffUntil = now.Add(peerDERPRetry)
@@ -432,6 +453,7 @@ func (m *peerManager) removeLocked(link *peerLink) {
 	link.dialing = false
 	link.derping = false
 	link.derped = false
+	link.derpPassive = false
 }
 
 func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {
