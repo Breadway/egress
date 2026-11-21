@@ -87,3 +87,59 @@ jobs:
             "${PKG_DIR}/egress-gui-x86_64" \
             "${PKG_DIR}/egress-gui-x86_64.sha256" \
             --clobber
+
+  windows:
+    if: ${{ !contains(github.ref_name, '-rc.') }}
+    runs-on: [self-hosted]
+    steps:
+      - name: checkout
+        run: |
+          set -euo pipefail
+          rm -rf src && mkdir src
+          git clone --branch "${GITHUB_REF_NAME}" --depth 1 \
+            "https://git.breadway.dev/${GITHUB_REPOSITORY}.git" src
+
+      - name: build frontend
+        run: |
+          set -euo pipefail
+          cd src/gui/frontend
+          npm ci
+          npm run build
+
+      - name: windows toolchain
+        run: |
+          set -euo pipefail
+          command -v cargo-xwin >/dev/null 2>&1 || cargo install cargo-xwin
+          rustup target add x86_64-pc-windows-msvc >/dev/null
+
+      - name: build windows
+        run: cd src/gui/src && cargo xwin build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: package windows
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG_DIR="/srv/breadway-dl/egress-gui/${VERSION}"
+          mkdir -p "${PKG_DIR}"
+          cp "src/gui/src/target/x86_64-pc-windows-msvc/release/egress-gui.exe" \
+            "${PKG_DIR}/egress-gui-windows-x86_64.exe"
+          STAGE="$(mktemp -d)"
+          trap 'rm -rf "${STAGE}"' EXIT
+          mkdir -p "${STAGE}/egress-gui-${VERSION}-windows-x86_64"
+          cp "src/gui/src/target/x86_64-pc-windows-msvc/release/egress-gui.exe" \
+            "${STAGE}/egress-gui-${VERSION}-windows-x86_64/egress-gui.exe"
+          cp src/deploy/windows-gui-README.txt \
+            "${STAGE}/egress-gui-${VERSION}-windows-x86_64/README.txt"
+          python3 - "${STAGE}/egress-gui-${VERSION}-windows-x86_64" \
+            "${PKG_DIR}/egress-gui-${VERSION}-windows-x86_64.zip" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+          src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+              for path in src.rglob("*"):
+                  archive.write(path, path.relative_to(src.parent))
+          PY
+          (cd "${PKG_DIR}" && sha256sum "egress-gui-windows-x86_64.exe" \
+            "egress-gui-${VERSION}-windows-x86_64.zip" \
+            > "egress-gui-${VERSION}-windows-x86_64.sha256")
