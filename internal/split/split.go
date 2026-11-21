@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +43,9 @@ type Controller struct {
 	blockedIPs map[string][]string
 	// exits are the direct exits published with the feed.
 	exits []DirectExit
+	// shareReports controls outbound learning only. The feed is still read, so
+	// a device that stops sharing keeps receiving the circle's blocks.
+	shareReports atomic.Bool
 }
 
 func NewController(network, iface string, routes *RouteManager, logger *log.Logger) *Controller {
@@ -54,6 +58,7 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 		blockedIPs: map[string][]string{},
 	}
 	c.overrides = LoadOverrides(ProfileDir())
+	c.shareReports.Store(true)
 	c.load(network)
 	// Clear routes left by a previous process. The supervisor calls SetNetwork
 	// right after this with the same network, which returns early, so startup
@@ -65,6 +70,10 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	go c.refreshProtocols()
 	return c
 }
+
+// SetShareReports enables or disables outbound learning. Incoming feed data
+// and local probing continue either way.
+func (c *Controller) SetShareReports(on bool) { c.shareReports.Store(on) }
 
 // SetExitsHandler receives the direct exits published with the feed, and gets
 // the current list immediately so a handler installed after the first fetch
@@ -263,7 +272,7 @@ func (c *Controller) probe(domain string) {
 	// 0.arch.pool.ntp.org and CDN hosts for that reason, and routing those into
 	// the tunnel on every device would be worse than learning them locally.
 	if res.State == StateBlocked && before != StateBlocked && reporter != nil &&
-		strongBlockEvidence(res.Evidence) {
+		c.shareReports.Load() && strongBlockEvidence(res.Evidence) {
 		reporter.Report(domain, res.Evidence)
 	}
 
@@ -319,7 +328,7 @@ func (c *Controller) shareKnownBlocks(ctx context.Context) {
 	network := c.network
 	reporter := c.reporter
 	c.mu.Unlock()
-	if reporter == nil || len(blocks) == 0 {
+	if reporter == nil || len(blocks) == 0 || !c.shareReports.Load() {
 		return
 	}
 	shared := 0
@@ -527,7 +536,9 @@ func (c *Controller) resolveConflicts(domains []feedDomain) {
 			if evidence == "" {
 				evidence = string(EvidenceFeed)
 			}
-			c.reporter.ReportFinal(ctx, domain, answer, evidence)
+			if c.shareReports.Load() {
+				c.reporter.ReportFinal(ctx, domain, answer, evidence)
+			}
 		}(d.Domain)
 	}
 }
@@ -552,7 +563,9 @@ func (c *Controller) refreshSites(due []feedDomain) {
 			if evidence == "" {
 				evidence = string(EvidenceFeed)
 			}
-			c.reporter.ReportObservation(ctx, domain, state, evidence, false)
+			if c.shareReports.Load() {
+				c.reporter.ReportObservation(ctx, domain, state, evidence, false)
+			}
 			// A refresh that comes back allowed is real evidence: record it
 			// locally so this device stops routing the domain.
 			now := time.Now()

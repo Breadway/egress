@@ -163,7 +163,7 @@ func TestSettingsPatchIsPartialAndPersistent(t *testing.T) {
 	if got.RelayFallback || got.Mode != ModeDirect {
 		t.Fatalf("patch not applied: %+v", got)
 	}
-	if !got.SmartRouting || got.RelayRegion != "automatic" {
+	if got.RelayRegion != "automatic" {
 		t.Fatalf("partial patch reset unrelated fields: %+v", got)
 	}
 

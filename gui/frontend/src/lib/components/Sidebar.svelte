@@ -73,6 +73,6 @@
       <div class="device-meta"><strong>{self?.name ?? "This laptop"}</strong><span>This device</span></div>
       <i class="dot" class:off={!app.connected}></i>
     </div>
-    <div class="side-version">egress {app.version}<br />{app.live ? "Up to date" : "Demo data"}</div>
+    <div class="side-version">egress {app.version}<br />{app.live ? "Service connected" : "Demo data"}</div>
   </div>
 </aside>

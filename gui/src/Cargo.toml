@@ -1,6 +1,6 @@
 [package]
 name = "egress-gui"
-version = "0.1.0"
+version = "0.5.1"
 description = "User app for egress private networking"
 authors = ["Breadway"]
 edition = "2021"

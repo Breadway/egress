@@ -846,7 +846,7 @@ func cmdSupervise(args []string) error {
 	if gui != nil {
 		settings = gui.CurrentSettings()
 	}
-	applyRuntimeSettings(ctx, sup, peers, share, relay, settings)
+	applyRuntimeSettings(ctx, sup, peers, splitter, share, relay, settings)
 
 	go func() {
 		snap := func() portal.Snapshot {

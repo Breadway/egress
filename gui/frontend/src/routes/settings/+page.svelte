@@ -27,12 +27,6 @@
 <div class="panel-page">
   <div class="panel-tools">
     <span class="summary">Changes apply immediately.</span>
-    <div class="right">
-      <button class="btn small ghost" onclick={() => toast.show("Opening the help guide")}>Get help</button>
-      <button class="btn small" onclick={() => toast.show("Checking for updates")}>
-        <Icon name="refresh" cls="sm" /> Check for updates
-      </button>
-    </div>
   </div>
 
   <div class="settings-grid">
@@ -42,12 +36,6 @@
         <div class="copy"><strong>Connect automatically</strong><span>Start egress when you sign in.</span></div>
         <div class="control">
           <Toggle bind:checked={app.settings.connect_automatically} label="Connect automatically" onchange={() => save("connect_automatically")} />
-        </div>
-      </div>
-      <div class="setting">
-        <div class="copy"><strong>Smart routing</strong><span>Direct when possible, relay when needed.</span></div>
-        <div class="control">
-          <Toggle bind:checked={app.settings.smart_routing} label="Smart routing" onchange={() => save("smart_routing")} />
         </div>
       </div>
       <div class="setting">
@@ -156,15 +144,7 @@
         </div>
       </div>
       <div class="setting">
-        <div class="copy"><strong>Accent</strong><span>Follows your wallpaper through bread-theme.</span></div>
-        <div class="control">
-          <div class="swatches" aria-hidden="true">
-            <i style="background:#eab672"></i><i style="background:#e3a85c"></i><i style="background:#f6c477"></i><i style="background:#8fc3bd"></i>
-          </div>
-        </div>
-      </div>
-      <div class="setting">
-        <div class="copy"><strong>Text size</strong><span>Comfortable · Varela Round 14 px</span></div>
+        <div class="copy"><strong>Text size</strong><span>Changes text across the app.</span></div>
         <div class="control">
           <select class="select" bind:value={app.settings.text_size} onchange={() => save("text_size")}>
             <option value="comfortable">Comfortable</option>

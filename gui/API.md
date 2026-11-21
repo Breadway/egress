@@ -46,7 +46,7 @@ API and never reads root-owned state directly.
 }
 ```
 
-- `mode`: `automatic`, `direct`, `friend` (from settings).
+- `mode`: `automatic` or `direct` (from settings).
 - `path`: `direct`, `cloud`, `off`. It is `off` while paused. A peer exit is
   represented by `exit`; `path` describes the transport to the cloud relay.
 - `exit`: `Cloud relay`, or the circle member currently carrying blocked
@@ -164,7 +164,6 @@ or non-hostname value returns 400.
 ```json
 {
   "connect_automatically": true,
-  "smart_routing": true,
   "relay_fallback": true,
   "relay_region": "automatic",
   "share_connection": false,
@@ -197,6 +196,8 @@ field that has a backend:
   next month.
 - `hide_public_address` and `relay_only` stop direct peer links, so friends
   reach this device through the relay or the Aegis star.
+- `share_reports` controls outbound blocked-site learning. Turning it off keeps
+  the circle's incoming learning working.
 - `relay_region` selects the DERP region (`sydney` = `syd`,
   `singapore` = `sin`, `los_angeles` = `lax`, `automatic` = the built-in
   default). It is read when the relay connection starts, so a change applies on

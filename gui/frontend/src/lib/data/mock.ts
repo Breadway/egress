@@ -153,7 +153,6 @@ export const events: ActivityEvent[] = [
 
 export const settings: Settings = {
   connect_automatically: true,
-  smart_routing: true,
   relay_fallback: true,
   relay_region: "automatic",
   share_connection: false,

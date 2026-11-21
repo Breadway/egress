@@ -32,7 +32,6 @@ type Mode string
 const (
 	ModeAutomatic Mode = "automatic"
 	ModeDirect    Mode = "direct"
-	ModeFriend    Mode = "friend"
 )
 
 // Status is the Home screen's whole model.
@@ -112,7 +111,6 @@ type Activity struct {
 // stored for the screens that own them.
 type Settings struct {
 	ConnectAutomatically bool   `json:"connect_automatically"`
-	SmartRouting         bool   `json:"smart_routing"`
 	RelayFallback        bool   `json:"relay_fallback"`
 	RelayRegion          string `json:"relay_region"`
 	ShareConnection      bool   `json:"share_connection"`
@@ -132,7 +130,6 @@ type Settings struct {
 func DefaultSettings() Settings {
 	return Settings{
 		ConnectAutomatically: true,
-		SmartRouting:         true,
 		RelayFallback:        true,
 		RelayRegion:          "automatic",
 		ShareConnection:      false,
@@ -635,7 +632,7 @@ func normalizeSettings(v Settings) Settings {
 		v.TextSize = def.TextSize
 	}
 	switch v.Mode {
-	case ModeAutomatic, ModeDirect, ModeFriend:
+	case ModeAutomatic, ModeDirect:
 	default:
 		v.Mode = def.Mode
 	}

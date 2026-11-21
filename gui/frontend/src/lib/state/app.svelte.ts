@@ -73,7 +73,6 @@ class AppState {
   }
   get modeLabel() {
     if (this.mode === "direct") return "Direct only";
-    if (this.mode === "friend") return "Through a friend";
     return "Automatic";
   }
   get duration() {
@@ -199,6 +198,11 @@ class AppState {
     if (event.kind === "connection" && this.settings.notify_drop && event.title.includes("Protection is paused")) {
       void notify("Protection paused", "Your normal connection is back.");
     }
+  }
+
+  async refreshAll() {
+    const ok = await this.load();
+    if (!ok) throw new Error(this.error ?? "Could not reach the egress service");
   }
 
   async toggle(): Promise<boolean> {
