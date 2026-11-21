@@ -88,6 +88,11 @@ func cmdExitServe(args []string) error {
 		if err != nil {
 			return fmt.Errorf("relay identity: %w", err)
 		}
+		// Publish the relay key before announcing the exit: the server rejects
+		// a DERP exit whose device has no relay key yet.
+		if err := announceDerpKey(ctx, relay.PublicKey()); err != nil {
+			appLogger().Printf("exit: publish relay key: %v", err)
+		}
 		go relay.Run(ctx)
 		appLogger().Printf("exit: serving through DERP, forwarding to 127.0.0.1:%d", wgPort)
 	} else {
