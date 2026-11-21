@@ -374,7 +374,10 @@ func (m *peerManager) demote(link *peerLink, now time.Time, reason string) {
 	if err := m.configure(link, "", []string{}); err != nil {
 		m.log.Printf("peers: demote %s: %v", link.ip, err)
 	}
-	if m.relay != nil {
+	// A relayed pair only meets if both ends stay registered while they are
+	// not actively handshaking. Keep the socket and the DERP connection for a
+	// peer that was on the relay; the next attempt reuses them.
+	if m.relay != nil && !wasDERP {
 		m.relay.Release(link.pubkey)
 	}
 	link.dialing = false
