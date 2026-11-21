@@ -92,6 +92,22 @@ func (s *server) apiDerpStatus(w http.ResponseWriter, r *http.Request) {
 			OK bool `json:"ok"`
 		}{OK: true})
 	case http.MethodGet:
+		circle, ok := s.callerCircle(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		devices, err := loadDevices(s.devicesPath())
+		if err != nil {
+			http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		inCircle := map[string]bool{}
+		for _, d := range devices.Devices {
+			if d.Status == "bound" && circleOf(d) == circle {
+				inCircle[d.ID] = true
+			}
+		}
 		derpStatusMu.Lock()
 		defer derpStatusMu.Unlock()
 		all, err := loadDerpStatus(s.derpStatusPath())
@@ -101,7 +117,9 @@ func (s *server) apiDerpStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		out := make([]DerpStatus, 0, len(all))
 		for _, st := range all {
-			out = append(out, st)
+			if inCircle[st.Device] {
+				out = append(out, st)
+			}
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Device < out[j].Device })
 		writeJSON(w, struct {
