@@ -196,6 +196,7 @@ func main() {
 	s.mux.HandleFunc("/api/peer-exits", s.apiPeerExits)
 	s.mux.HandleFunc("/api/exit/announce", s.apiExitAnnounce)
 	s.mux.HandleFunc("/api/exit/use", s.apiExitUse)
+	s.mux.HandleFunc("/api/exit/slot", s.apiExitSlot)
 	s.mux.HandleFunc("/api/exit/clients", s.apiExitClients)
 	s.mux.HandleFunc("/api/enroll", s.apiEnroll)
 	s.mux.HandleFunc("/admin/reports", s.adminReports)

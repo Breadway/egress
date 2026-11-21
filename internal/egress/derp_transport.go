@@ -38,6 +38,11 @@ type derpTransport struct {
 	priv   [32]byte
 	public string
 	region string
+	// announceKey publishes this identity through /api/derp-key. Slot
+	// identities are published through /api/exit/slot instead, so they must
+	// not overwrite the device's own relay key.
+	announceKey  bool
+	reportHealth bool
 
 	mu      sync.Mutex
 	client  *derp.Client
@@ -84,12 +89,20 @@ func newDERPTransport(logger *log.Logger) (*derpTransport, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newDERPTransportWithKey(logger, priv, true, true)
+}
+
+// newDERPTransportWithKey builds a connection with a chosen identity. Exit
+// slots use this with announce and reporting off: their key is published to the
+// assigned client, not as the device's relay key.
+func newDERPTransportWithKey(logger *log.Logger, priv [32]byte, announce, report bool) (*derpTransport, error) {
 	pub, err := derpPublicKey(priv)
 	if err != nil {
 		return nil, err
 	}
 	return &derpTransport{
 		log: logger, priv: priv, public: pub,
+		announceKey: announce, reportHealth: report,
 		routes: map[[32]byte]*derpLink{},
 	}, nil
 }
@@ -232,7 +245,9 @@ func (t *derpTransport) Run(ctx context.Context) {
 	status := time.NewTicker(time.Minute)
 	defer status.Stop()
 	report := func() { t.reportStatus(ctx) }
-	report()
+	if t.reportHealth {
+		report()
+	}
 	var lastAnnounceErr string
 	publish := func() {
 		if err := announceDerpKey(ctx, t.public); err != nil {
@@ -247,7 +262,9 @@ func (t *derpTransport) Run(ctx context.Context) {
 			lastAnnounceErr = ""
 		}
 	}
-	publish()
+	if t.announceKey {
+		publish()
+	}
 
 	backoff := time.Second
 	for {
@@ -257,9 +274,13 @@ func (t *derpTransport) Run(ctx context.Context) {
 		}
 		select {
 		case <-announce.C:
-			publish()
+			if t.announceKey {
+				publish()
+			}
 		case <-status.C:
-			report()
+			if t.reportHealth {
+				report()
+			}
 		default:
 		}
 		t.mu.Lock()
@@ -302,9 +323,13 @@ func (t *derpTransport) Run(ctx context.Context) {
 			t.log.Printf("derp: connection ended: %v", client.Err())
 			t.closeClient()
 		case <-announce.C:
-			publish()
+			if t.announceKey {
+				publish()
+			}
 		case <-status.C:
-			report()
+			if t.reportHealth {
+				report()
+			}
 		}
 	}
 }
