@@ -309,6 +309,10 @@ func TestPeerManagerRelayedPeerUsesDERP(t *testing.T) {
 	if last.endpoint != "" || !last.allowedN || len(last.allowed) != 0 {
 		t.Fatalf("demotion = %+v, want routes cleared", last)
 	}
+	// The registration stays so the pair can meet on the relay later.
+	if m.relay.byDerp[derpRaw] == nil {
+		t.Fatal("relay registration was dropped on demotion")
+	}
 }
 
 // A direct attempt that does not answer moves to DERP, not straight to the
