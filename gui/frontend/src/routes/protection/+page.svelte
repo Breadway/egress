@@ -78,7 +78,7 @@
         aria-label="Site to report"
         autocomplete="off"
       />
-      <button class="btn small primary" type="submit">Check</button>
+      <button class="btn small primary" type="submit" disabled={!reportDomain.trim()}>Check</button>
       <button class="btn small ghost" type="button" onclick={() => (reporting = false)}>Cancel</button>
     </form>
   {/if}

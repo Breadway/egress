@@ -108,6 +108,6 @@
 
   <p class="note">
     <Icon name="shield" />
-    <span><strong>Your circle is private.</strong> Only people you invite can join, and you can remove someone at any time. Sharing your connection is always optional.</span>
+    <span><strong>Your circle is private.</strong> Only people you invite can join. Sharing your connection is always optional.</span>
   </p>
 </div>

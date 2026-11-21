@@ -26,7 +26,7 @@
 
 <div class="panel-page">
   <div class="panel-tools">
-    <span class="summary">Changes apply immediately.</span>
+    <span class="summary">Changes save as you go.</span>
   </div>
 
   <div class="settings-grid">

@@ -66,7 +66,7 @@
   <div class="side-foot">
     <div class="protect" class:off={!app.connected}>
       <Icon name="shield" cls="sm" />
-      {app.connected ? "Protected · smart routing" : "Protection is off"}
+      {app.connected ? "Protected" : "Protection is off"}
     </div>
     <div class="device-card">
       <div class="avatar">{self?.name?.[0]?.toUpperCase() ?? "B"}</div>

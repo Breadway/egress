@@ -58,6 +58,18 @@ jobs:
           git clone --branch main https://git.breadway.dev/Breadway/bread-ecosystem.git "${ECOSYSTEM_CI_DIR}"
           TRACK=stable bash "${ECOSYSTEM_CI_DIR}/scripts/gen-index.sh"
 
+      - name: assert the package is in the index
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          with open("/srv/breadway-dl/index.json") as f:
+              data = json.load(f)
+          packages = data.get("packages", {})
+          assert "egress-gui" in packages, "egress-gui missing from index.json"
+          print("index contains egress-gui", packages["egress-gui"]["version"])
+          PY
+
       - name: upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
