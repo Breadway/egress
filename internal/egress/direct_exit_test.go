@@ -52,3 +52,24 @@ func TestDerpExitTunnelAttaches(t *testing.T) {
 		t.Fatal("stop did not detach the relay key")
 	}
 }
+
+// A DERP exit has no endpoint by design; reconcile must not reject it as an
+// empty address before it reaches the relay tunnel.
+func TestDirectExitAcceptsDerpExitWithoutEndpoint(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	relay := newTestRelay()
+	d := newDirectExit(plat, "wg0", relay, log.New(io.Discard, "", 0))
+	d.SetExits([]split.DirectExit{{
+		ID: "hestia", Transport: "derp", RelayKey: b64Key(4), PubKey: b64Key(5),
+	}})
+	d.SetPrefixes([]string{"203.0.113.9"})
+	d.reconcile(context.Background())
+	tunnel, ok := d.tunnel.(*derpExitTunnel)
+	if !ok {
+		t.Fatalf("tunnel = %T, want the DERP exit tunnel", d.tunnel)
+	}
+	tunnel.Stop()
+	if _, err := newDERPExitTunnel(b64Key(4), relay); err != nil {
+		t.Fatalf("tunnel should be constructible: %v", err)
+	}
+}
