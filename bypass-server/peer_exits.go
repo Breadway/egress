@@ -88,6 +88,7 @@ func (s *server) apiExitAnnounce(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not save the exit registry", http.StatusInternalServerError)
 			return
 		}
+		s.removeExitSlots(dev.ID, "")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	case http.MethodPost:
@@ -209,6 +210,7 @@ func (s *server) apiPeerExits(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "exit registry unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	slots := s.exitSlotMap()
 	type entry struct {
 		ID        string `json:"id"`
 		Label     string `json:"label,omitempty"`
@@ -223,9 +225,13 @@ func (s *server) apiPeerExits(w http.ResponseWriter, r *http.Request) {
 		if !inCircle[e.Device] || e.Device == self.ID {
 			continue
 		}
+		relayKey := e.RelayKey
+		if key, ok := slots[[2]string{e.Device, self.ID}]; ok {
+			relayKey = key
+		}
 		out = append(out, entry{
 			ID: e.Device, Label: e.Label, Transport: e.Transport,
-			Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey, RelayKey: e.RelayKey,
+			Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey, RelayKey: relayKey,
 		})
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -336,6 +342,8 @@ func (s *server) apiExitUse(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		uses.Uses = append(uses.Uses, exitUse{Client: dev.ID, Exit: strings.TrimSpace(req.Exit), Updated: time.Now().UTC().Format(time.RFC3339)})
+		// A client has one exit; slot keys on the previous exit are stale.
+		s.removeClientSlotsExcept(dev.ID, strings.TrimSpace(req.Exit))
 	} else if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -345,6 +353,7 @@ func (s *server) apiExitUse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
+		s.removeExitSlots("", dev.ID)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -408,12 +417,14 @@ func (s *server) apiExitClients(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	slots := s.exitSlotMap()
 	type client struct {
-		ID         string `json:"id"`
-		Label      string `json:"label,omitempty"`
-		IP         string `json:"ip"`
-		PubKey     string `json:"pubkey"`
-		DerpPubKey string `json:"derp_pubkey,omitempty"`
+		ID           string `json:"id"`
+		Label        string `json:"label,omitempty"`
+		IP           string `json:"ip"`
+		PubKey       string `json:"pubkey"`
+		DerpPubKey   string `json:"derp_pubkey,omitempty"`
+		SlotRelayKey string `json:"slot_relay_key,omitempty"`
 	}
 	out := make([]client, 0)
 	for _, u := range uses.Uses {
@@ -422,7 +433,8 @@ func (s *server) apiExitClients(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, d := range devices.Devices {
 			if d.ID == u.Client && d.Status == "bound" && d.IP != "" && d.PubKey != "" {
-				out = append(out, client{ID: d.ID, Label: d.Label, IP: d.IP, PubKey: d.PubKey, DerpPubKey: d.DerpPubKey})
+				slotKey := slots[[2]string{dev.ID, d.ID}]
+				out = append(out, client{ID: d.ID, Label: d.Label, IP: d.IP, PubKey: d.PubKey, DerpPubKey: d.DerpPubKey, SlotRelayKey: slotKey})
 				break
 			}
 		}

@@ -131,14 +131,18 @@ func cmdExitServe(args []string) error {
 		appLogger().Printf("exit: announce: %v", err)
 	}
 
-	active := map[string]string{}
-	links := map[string]*derpLink{}
+	active := map[string]exitClient{}
+	links := map[string]*activeExitLink{}
+	var slots *exitSlotManager
+	if *derpMode {
+		slots = newExitSlotManager(ctx, appLogger())
+	}
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
 	announce := time.NewTicker(4 * time.Minute)
 	defer announce.Stop()
 	for {
-		if err := reconcileExitClients(*dev, active, relay, wgPort, links, *derpMode); err != nil {
+		if err := reconcileExitClients(ctx, *dev, active, relay, slots, wgPort, links, *derpMode); err != nil {
 			appLogger().Printf("exit: clients: %v", err)
 		}
 		select {
@@ -146,8 +150,16 @@ func cmdExitServe(args []string) error {
 			for pubkey := range active {
 				_ = logx.RunLogged("wg", "set", *dev, "peer", pubkey, "remove")
 			}
-			for _, link := range links {
-				link.Close()
+			for _, cur := range links {
+				if cur.base != nil {
+					cur.base.Close()
+				}
+				if cur.slot != nil {
+					cur.slot.Close()
+				}
+			}
+			if slots != nil {
+				slots.close()
 			}
 			_ = withdrawSelfExit(context.Background())
 			if srv != nil {
@@ -172,13 +184,21 @@ type exitClient struct {
 	DerpPubKey string `json:"derp_pubkey"`
 }
 
+// activeExitLink tracks the two relay links a client may have: the shared base
+// identity it uses while a slot is being allocated, and its own slot. Both stay
+// open until the slot has actually carried traffic, so the switch never leaves
+// the client without a path.
+type activeExitLink struct {
+	base       *derpLink
+	slot       *derpLink
+	baseClosed bool
+}
+
 // reconcileExitClients adds a WireGuard peer for every device that chose this
-// exit, and removes peers for devices that stopped. Adding every circle member
-// would hijack the star route for people who are not using this exit. In DERP
-// mode it also keeps one relayed UDP link per client, connected to the local
-// WireGuard listener, which is what a CGNAT exit uses instead of a public
-// listener.
-func reconcileExitClients(dev string, active map[string]string, relay *derpTransport, wgPort int, links map[string]*derpLink, derpMode bool) error {
+// exit, and removes peers for devices that stopped. In DERP mode each client
+// gets a slot identity and its own relay connection, so one client's traffic
+// does not limit another's.
+func reconcileExitClients(ctx context.Context, dev string, active map[string]exitClient, relay *derpTransport, slots *exitSlotManager, wgPort int, links map[string]*activeExitLink, derpMode bool) error {
 	var out struct {
 		Clients []exitClient `json:"clients"`
 	}
@@ -192,7 +212,7 @@ func reconcileExitClients(dev string, active map[string]string, relay *derpTrans
 		}
 		want[c.PubKey] = c
 	}
-	for pubkey, ip := range active {
+	for pubkey, cur := range active {
 		if _, ok := want[pubkey]; ok {
 			continue
 		}
@@ -200,13 +220,21 @@ func reconcileExitClients(dev string, active map[string]string, relay *derpTrans
 			return err
 		}
 		if runtime.GOOS == "linux" {
-			_ = logx.RunLogged("ip", "route", "del", ip+"/32", "dev", dev)
+			_ = logx.RunLogged("ip", "route", "del", cur.IP+"/32", "dev", dev)
 		}
-		delete(active, pubkey)
 		if link := links[pubkey]; link != nil {
-			link.Close()
+			if link.base != nil {
+				link.base.Close()
+			}
+			if link.slot != nil {
+				link.slot.Close()
+			}
 			delete(links, pubkey)
 		}
+		if slots != nil {
+			slots.remove(cur.ID)
+		}
+		delete(active, pubkey)
 	}
 	for pubkey, c := range want {
 		if _, ok := active[pubkey]; !ok {
@@ -221,10 +249,10 @@ func reconcileExitClients(dev string, active map[string]string, relay *derpTrans
 					return fmt.Errorf("route %s via %s: %w", c.IP, dev, err)
 				}
 			}
-			active[pubkey] = c.IP
+			active[pubkey] = c
 			appLogger().Printf("exit: carrying traffic for %s (%s)", c.Label, c.IP)
 		}
-		if !derpMode || links[pubkey] != nil {
+		if !derpMode {
 			continue
 		}
 		key, err := decodeKey(c.DerpPubKey)
@@ -232,12 +260,48 @@ func reconcileExitClients(dev string, active map[string]string, relay *derpTrans
 			appLogger().Printf("exit: %s has no usable relay key: %v", c.Label, err)
 			continue
 		}
-		link, err := relay.AttachDial(key, fmt.Sprintf("127.0.0.1:%d", wgPort))
-		if err != nil {
-			return fmt.Errorf("relay link for %s: %w", c.Label, err)
+		target := fmt.Sprintf("127.0.0.1:%d", wgPort)
+		cur := links[pubkey]
+		if cur == nil {
+			cur = &activeExitLink{}
+			links[pubkey] = cur
 		}
-		links[pubkey] = link
-		appLogger().Printf("exit: relaying for %s over DERP", c.Label)
+		// Stay on the shared base identity until a slot exists.
+		if relay != nil && cur.base == nil && !cur.baseClosed {
+			link, berr := relay.AttachDial(key, target)
+			if berr != nil {
+				return fmt.Errorf("base relay link for %s: %w", c.Label, berr)
+			}
+			cur.base = link
+			appLogger().Printf("exit: base link for %s over DERP", c.Label)
+		}
+		if slots == nil {
+			continue
+		}
+		slot, serr := slots.ensure(c.ID)
+		if serr != nil {
+			appLogger().Printf("exit: slot for %s: %v", c.Label, serr)
+			continue
+		}
+		if cur.slot == nil {
+			link, lerr := slot.transport.AttachDial(key, target)
+			if lerr != nil {
+				return fmt.Errorf("slot relay link for %s: %w", c.Label, lerr)
+			}
+			cur.slot = link
+			appLogger().Printf("exit: slot link for %s over DERP", c.Label)
+		}
+		// Once the client has sent on its slot, the shared base link is no
+		// longer needed for it.
+		if cur.slot != nil && cur.slot.Used() && cur.base != nil {
+			cur.base.Close()
+			cur.base = nil
+			cur.baseClosed = true
+			appLogger().Printf("exit: %s is on its slot; closed the base link", c.Label)
+		}
+	}
+	if slots != nil {
+		slots.announce(ctx)
 	}
 	return nil
 }

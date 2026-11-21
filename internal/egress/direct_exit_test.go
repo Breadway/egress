@@ -73,3 +73,39 @@ func TestDirectExitAcceptsDerpExitWithoutEndpoint(t *testing.T) {
 		t.Fatalf("tunnel should be constructible: %v", err)
 	}
 }
+
+func TestDirectExitRecreatesTunnelOnSlotKeyChange(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	relay := newTestRelay()
+	d := newDirectExit(plat, "wg0", relay, log.New(io.Discard, "", 0))
+	firstKey := b64Key(4)
+	secondKey := b64Key(6)
+	mk := func(relayKey string) split.DirectExit {
+		return split.DirectExit{ID: "hestia", Transport: "derp", RelayKey: relayKey, PubKey: b64Key(5)}
+	}
+	d.SetExits([]split.DirectExit{mk(firstKey)})
+	d.SetPrefixes([]string{"203.0.113.9"})
+	d.reconcile(context.Background())
+	first := d.tunnel
+	if first == nil {
+		t.Fatal("no tunnel after the first exit")
+	}
+	rawFirst, _ := decodeKey(firstKey)
+	if relay.routes[rawFirst] == nil {
+		t.Fatal("first slot key is not attached")
+	}
+
+	d.SetExits([]split.DirectExit{mk(secondKey)})
+	d.reconcile(context.Background())
+	if d.tunnel == first {
+		t.Fatal("tunnel was not recreated for the new slot key")
+	}
+	if relay.routes[rawFirst] != nil {
+		t.Fatal("old slot key is still attached")
+	}
+	rawSecond, _ := decodeKey(secondKey)
+	if relay.routes[rawSecond] == nil {
+		t.Fatal("new slot key is not attached")
+	}
+	d.tunnel.Stop()
+}

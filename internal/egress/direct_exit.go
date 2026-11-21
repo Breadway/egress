@@ -60,6 +60,7 @@ type directExit struct {
 	tunnel     exitTunnel
 	pubkey     string
 	kind       string
+	relayKey   string
 	active     bool
 	lastErr    string
 
@@ -179,7 +180,8 @@ func (d *directExit) reconcile(ctx context.Context) {
 	}
 	d.mu.Lock()
 	previous := ""
-	if d.tunnel == nil || d.pubkey != ex.PubKey || d.kind != kind {
+	if d.tunnel == nil || d.pubkey != ex.PubKey || d.kind != kind ||
+		(kind == "derp" && d.relayKey != ex.RelayKey) {
 		if d.pubkey != "" && d.pubkey != ex.PubKey {
 			previous = d.pubkey
 		}
@@ -192,6 +194,7 @@ func (d *directExit) reconcile(ctx context.Context) {
 				d.tunnel = nil
 				d.pubkey = ex.PubKey
 				d.kind = kind
+				d.relayKey = ex.RelayKey
 				d.mu.Unlock()
 				d.noteError("exit relay: %v", terr)
 				d.fallback()
@@ -208,6 +211,7 @@ func (d *directExit) reconcile(ctx context.Context) {
 		}
 		d.pubkey = ex.PubKey
 		d.kind = kind
+		d.relayKey = ex.RelayKey
 	}
 	tunnel := d.tunnel
 	d.mu.Unlock()
