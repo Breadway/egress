@@ -1,8 +1,4 @@
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-bread" viewBox="0 0 24 24">
-    <path d="M4.6 10.3c0-3.5 3.3-6.3 7.4-6.3s7.4 2.8 7.4 6.3v6.1c0 1.4-1.1 2.6-2.6 2.6H7.2c-1.4 0-2.6-1.2-2.6-2.6z"/>
-    <path d="M8.1 9.7c1.1-.9 2.4-1.4 3.9-1.4s2.8.5 3.9 1.4M8.1 13h7.8M8.1 16h7.8"/>
-  </symbol>
   <symbol id="i-home" viewBox="0 0 24 24"><path d="m4 11 8-7 8 7v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19z"/><path d="M9.5 20v-6h5v6"/></symbol>
   <symbol id="i-nodes" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.2 11 15.8 7M8.2 13l7.6 4"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4.5 12h15M12 4c2.2 2.2 3.4 5 3.4 8s-1.2 5.8-3.4 8c-2.2-2.2-3.4-5-3.4-8s1.2-5.8 3.4-8z"/></symbol>

@@ -19,7 +19,7 @@
 
 <aside class="sidebar">
   <div class="brand">
-    <div class="brand-mark"><Icon name="bread" cls="lg" /></div>
+    <div class="brand-mark"><img src="/egress-icon.png" alt="" width="34" height="34" /></div>
     <div><div class="brand-name">egress</div><span class="brand-sub">private networking</span></div>
   </div>
 
