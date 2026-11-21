@@ -43,6 +43,20 @@ bakery install egress-gui
 It needs the egress daemon installed and enrolled on the machine. The daemon
 owns the tunnel, and the app reads its local API.
 
+### Windows
+
+A portable build ships with each release:
+
+- `https://dl.breadway.dev/egress-gui/<version>/egress-gui-<version>-windows-x86_64.zip`
+- `https://dl.breadway.dev/egress-gui/<version>/egress-gui-windows-x86_64.exe`
+
+It needs Windows 10 or 11 with the WebView2 runtime and the egress daemon
+0.5.1 or newer. The daemon writes the token under `%ProgramData%\egress-gui`.
+The build is unsigned, so SmartScreen may warn on first run.
+
+Build it from Linux with `./deploy/build-windows-gui.sh <version>`, which uses
+`cargo-xwin`. The release workflow runs the same steps for every tag.
+
 ## Development
 
 ```sh
