@@ -192,6 +192,10 @@ func (t *derpTransport) Run(ctx context.Context) {
 	t.loadRelays(ctx)
 	announce := time.NewTicker(5 * time.Minute)
 	defer announce.Stop()
+	status := time.NewTicker(time.Minute)
+	defer status.Stop()
+	report := func() { t.reportStatus(ctx) }
+	report()
 	var lastAnnounceErr string
 	publish := func() {
 		if err := announceDerpKey(ctx, t.public); err != nil {
@@ -217,6 +221,8 @@ func (t *derpTransport) Run(ctx context.Context) {
 		select {
 		case <-announce.C:
 			publish()
+		case <-status.C:
+			report()
 		default:
 		}
 		t.mu.Lock()
@@ -258,6 +264,10 @@ func (t *derpTransport) Run(ctx context.Context) {
 		case <-client.Done():
 			t.log.Printf("derp: connection ended: %v", client.Err())
 			t.closeClient()
+		case <-announce.C:
+			publish()
+		case <-status.C:
+			report()
 		}
 	}
 }
@@ -428,6 +438,33 @@ func fetchDERPRelays(ctx context.Context, want string) ([]derp.Relay, error) {
 		})
 	}
 	return relays, nil
+}
+
+// reportStatus sends the relay state to the server so the admin side can see
+// why a device is not reachable through DERP without reading its log.
+func (t *derpTransport) reportStatus(ctx context.Context) {
+	connected, relay, lastErr := t.Status()
+	t.mu.Lock()
+	region := t.region
+	peers := len(t.peers)
+	t.mu.Unlock()
+	body, err := json.Marshal(struct {
+		Connected bool   `json:"connected"`
+		Relay     string `json:"relay"`
+		Region    string `json:"region"`
+		Peers     int    `json:"peers"`
+		LastError string `json:"last_error"`
+		Version   string `json:"version"`
+	}{
+		Connected: connected, Relay: relay, Region: region,
+		Peers: peers, LastError: lastErr, Version: core.BuildVersion,
+	})
+	if err != nil {
+		return
+	}
+	if err := peerAPI(ctx, "POST", "/api/derp-status", body, nil); err != nil {
+		t.log.Printf("derp: status report: %v", err)
+	}
 }
 
 // Status reports the connection state for the local status page.

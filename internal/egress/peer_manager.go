@@ -70,6 +70,10 @@ const (
 	// peerHandshakeStale is when an active link is considered gone. Persistent
 	// keepalive rekeys about every two minutes.
 	peerHandshakeStale = 4 * time.Minute
+	// peerDERPRetry is the retry cadence for a relayed link. The relay may be
+	// up before the other side is, and a pair that just missed each other
+	// should try again soon rather than wait out an exponential backoff.
+	peerDERPRetry = 2 * time.Minute
 )
 
 // peerBackoff grows after repeated failures. A pair on a NAT that cannot punch
@@ -77,11 +81,11 @@ const (
 func peerBackoff(failures int) time.Duration {
 	switch {
 	case failures <= 1:
-		return time.Minute
+		return 30 * time.Second
 	case failures == 2:
-		return 5 * time.Minute
+		return 2 * time.Minute
 	default:
-		return 30 * time.Minute
+		return 5 * time.Minute
 	}
 }
 
@@ -366,6 +370,7 @@ func (m *peerManager) startDERP(link *peerLink, now time.Time) bool {
 // demote clears the peer's routes and returns it to the star, keeping the peer
 // itself so the next attempt does not have to recreate it.
 func (m *peerManager) demote(link *peerLink, now time.Time, reason string) {
+	wasDERP := link.derping || link.derped
 	if err := m.configure(link, "", []string{}); err != nil {
 		m.log.Printf("peers: demote %s: %v", link.ip, err)
 	}
@@ -377,7 +382,11 @@ func (m *peerManager) demote(link *peerLink, now time.Time, reason string) {
 	link.derping = false
 	link.derped = false
 	link.failures++
-	link.backoffUntil = now.Add(peerBackoff(link.failures))
+	if wasDERP {
+		link.backoffUntil = now.Add(peerDERPRetry)
+	} else {
+		link.backoffUntil = now.Add(peerBackoff(link.failures))
+	}
 	if reason != "" {
 		m.log.Printf("peers: %s %s; back on Aegis", link.ip, reason)
 	}
