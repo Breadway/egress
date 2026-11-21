@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=egress
+Comment=Private networking for your circle
+Exec=egress-gui
+Icon=network-vpn
+Terminal=false
+Type=Application
+Categories=Network;Utility;
+StartupWMClass=egress-gui

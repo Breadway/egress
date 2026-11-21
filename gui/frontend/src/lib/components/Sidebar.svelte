@@ -66,13 +66,13 @@
   <div class="side-foot">
     <div class="protect" class:off={!app.connected}>
       <Icon name="shield" cls="sm" />
-      {app.connected ? "Protected · smart routing" : "Protection is off"}
+      {app.connected ? "Protected" : "Protection is off"}
     </div>
     <div class="device-card">
       <div class="avatar">{self?.name?.[0]?.toUpperCase() ?? "B"}</div>
       <div class="device-meta"><strong>{self?.name ?? "This laptop"}</strong><span>This device</span></div>
       <i class="dot" class:off={!app.connected}></i>
     </div>
-    <div class="side-version">egress {app.version}<br />{app.live ? "Up to date" : "Demo data"}</div>
+    <div class="side-version">egress {app.version}<br />{app.live ? "Service connected" : "Demo data"}</div>
   </div>
 </aside>

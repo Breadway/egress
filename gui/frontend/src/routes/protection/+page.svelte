@@ -8,6 +8,8 @@
 
   let query = $state("");
   let filter = $state<Filter>("all");
+  let reporting = $state(false);
+  let reportDomain = $state("");
 
   let stats = $derived(app.protection.stats);
   let visible = $derived(
@@ -33,12 +35,15 @@
     }
   }
 
-  async function reportSite() {
-    const answer = window.prompt("Site address, for example example.com");
-    if (!answer) return;
+  async function reportSite(event: SubmitEvent) {
+    event.preventDefault();
+    const domain = reportDomain.trim();
+    if (!domain) return;
     try {
-      await app.report(answer);
-      toast.show(`Checking ${answer}`);
+      await app.report(domain);
+      toast.show(`Checking ${domain}`);
+      reporting = false;
+      reportDomain = "";
     } catch (err) {
       toast.show(err instanceof Error ? err.message : "Could not report that site");
     }
@@ -59,11 +64,24 @@
         <button class="chip" class:active={filter === "cloud"} onclick={() => (filter = "cloud")}>Via relay</button>
         <button class="chip" class:active={filter === "retry"} onclick={() => (filter = "retry")}>Needs retry</button>
       </div>
-      <button class="btn small" onclick={reportSite}>
+      <button class="btn small" onclick={() => (reporting = !reporting)}>
         <Icon name="plus" cls="sm" /> Report a site
       </button>
     </div>
   </div>
+
+  {#if reporting}
+    <form class="report-row" onsubmit={reportSite}>
+      <input
+        bind:value={reportDomain}
+        placeholder="example.com"
+        aria-label="Site to report"
+        autocomplete="off"
+      />
+      <button class="btn small primary" type="submit" disabled={!reportDomain.trim()}>Check</button>
+      <button class="btn small ghost" type="button" onclick={() => (reporting = false)}>Cancel</button>
+    </form>
+  {/if}
 
   <div class="card stats-pad">
     <div class="stats-card">

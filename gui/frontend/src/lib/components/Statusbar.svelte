@@ -9,7 +9,7 @@
   <span class="item"><Icon name="globe" cls="sm" /> {app.dataGb.toFixed(1)} GB used</span>
   <div class="right">
     <span>{app.duration}</span>
-    <span>{app.mode === "automatic" ? "Smart routing" : app.modeLabel}</span>
+    <span>{app.modeLabel}</span>
     <span class="mono">{app.version}</span>
   </div>
 </footer>

@@ -154,7 +154,7 @@ func newGUISources(
 		},
 		SetConnected: sup.SetConnected,
 		ApplySettings: func(s guiapi.Settings) error {
-			applyRuntimeSettings(ctx, sup, peers, share, relay, s)
+			applyRuntimeSettings(ctx, sup, peers, splitter, share, relay, s)
 			if s.ConnectAutomatically != !bootDisabled() {
 				if err := setBootStart(s.ConnectAutomatically); err != nil {
 					return fmt.Errorf("boot start: %w", err)
@@ -173,10 +173,13 @@ func newGUISources(
 // applyRuntimeSettings applies everything that can change while the service
 // runs. Boot start is separate because a manual CLI disable must survive a
 // daemon restart.
-func applyRuntimeSettings(ctx context.Context, sup *supervisor.Supervisor, peers *peerManager, share *exitShare, relay *derpTransport, s guiapi.Settings) {
+func applyRuntimeSettings(ctx context.Context, sup *supervisor.Supervisor, peers *peerManager, splitter *split.Controller, share *exitShare, relay *derpTransport, s guiapi.Settings) {
 	sup.SetFallback(s.RelayFallback && s.Mode != guiapi.ModeDirect)
 	if peers != nil {
 		peers.SetHiddenAddress(s.HidePublicAddress || s.RelayOnly)
+	}
+	if splitter != nil {
+		splitter.SetShareReports(s.ShareReports)
 	}
 	if share != nil {
 		opts := defaultExitServeOptions()

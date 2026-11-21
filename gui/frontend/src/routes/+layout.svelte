@@ -10,6 +10,14 @@
   let { children } = $props();
 
   app.start();
+
+  // The text size setting uses rem sizes, so moving the root font size is
+  // enough to scale every label without touching each component.
+  $effect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.textSize = app.settings.text_size;
+    }
+  });
 </script>
 
 <IconSprite />

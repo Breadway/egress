@@ -1,4 +1,4 @@
-export type Mode = "automatic" | "direct" | "friend";
+export type Mode = "automatic" | "direct";
 export type Path = "direct" | "relay" | "cloud" | "off";
 export type Transport = "direct" | "relay" | "offline";
 export type SiteVia = "friend" | "cloud" | "direct" | "none";
@@ -68,7 +68,6 @@ export interface ActivityResponse {
 
 export interface Settings {
   connect_automatically: boolean;
-  smart_routing: boolean;
   relay_fallback: boolean;
   relay_region: "automatic" | "sydney" | "singapore" | "los_angeles";
   share_connection: boolean;

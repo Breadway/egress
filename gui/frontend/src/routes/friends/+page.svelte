@@ -2,7 +2,6 @@
   import type { Person } from "$lib/api/types";
   import Icon from "$lib/components/Icon.svelte";
   import { app, relativeDay } from "$lib/state/app.svelte";
-  import { toast } from "$lib/state/toast.svelte";
 
   type Filter = "all" | "online" | "sharing";
 
@@ -49,10 +48,6 @@
   function initial(person: Person): string {
     return person.name ? person.name[0].toUpperCase() : "?";
   }
-
-  async function moreOptions(person: Person) {
-    toast.show(`${person.name} · ${person.kind === "device" ? "device" : "friend"} options`);
-  }
 </script>
 
 <div class="panel-page">
@@ -85,9 +80,6 @@
           <span class="pill">Offline</span>
         {/if}
         <span class="meta">{lastSeen(person)}</span>
-        <button class="more" aria-label={`More options for ${person.name}`} onclick={() => moreOptions(person)}>
-          <Icon name="more" cls="sm" />
-        </button>
       </div>
     {:else}
       <p class="empty">No devices match this filter.</p>
@@ -108,9 +100,6 @@
           <span class="pill">Offline</span>
         {/if}
         <span class="meta">{lastSeen(person)}</span>
-        <button class="more" aria-label={`More options for ${person.name}`} onclick={() => moreOptions(person)}>
-          <Icon name="more" cls="sm" />
-        </button>
       </div>
     {:else}
       <p class="empty">Nobody in your circle matches “{query}”.</p>
@@ -119,6 +108,6 @@
 
   <p class="note">
     <Icon name="shield" />
-    <span><strong>Your circle is private.</strong> Only people you invite can join, and you can remove someone at any time. Sharing your connection is always optional.</span>
+    <span><strong>Your circle is private.</strong> Only people you invite can join. Sharing your connection is always optional.</span>
   </p>
 </div>

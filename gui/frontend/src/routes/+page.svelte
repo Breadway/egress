@@ -8,8 +8,7 @@
 
   const modes: { id: Mode; label: string }[] = [
     { id: "automatic", label: "Automatic" },
-    { id: "direct", label: "Direct only" },
-    { id: "friend", label: "Through a friend" }
+    { id: "direct", label: "Direct only" }
   ];
 
   let friends = $derived(app.friends);
@@ -33,8 +32,6 @@
       await app.setMode(mode);
       if (mode === "direct") {
         toast.show("Direct only. Relay fallback is off");
-      } else if (mode === "friend") {
-        toast.show("Choose a friend from your circle to carry your connection");
       } else {
         toast.show("Automatic. Direct when possible, relay when needed");
       }
@@ -49,6 +46,17 @@
       toast.show(enabled ? "Sharing is on for your circle" : "Sharing is off");
     } catch (err) {
       toast.show(err instanceof Error ? err.message : "Could not change sharing");
+    }
+  }
+
+  async function copyInvite() {
+    const url = "https://bypass.breadway.dev/apply";
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.show("Application link copied");
+    } catch {
+      // A webview without clipboard permission still gets the real link.
+      toast.show(`Applications: ${url}`);
     }
   }
 
@@ -186,7 +194,7 @@
     <article class="card">
       <div class="card-head">
         <h2>Your circle</h2><span class="sub">{friends.length} people</span>
-        <div class="right"><button class="btn small ghost" onclick={() => toast.show("Invite link copied")}><Icon name="plus" cls="sm" /> Invite</button></div>
+        <div class="right"><button class="btn small ghost" onclick={copyInvite}><Icon name="plus" cls="sm" /> Invite</button></div>
       </div>
       <div class="people">
         {#each friends as person}

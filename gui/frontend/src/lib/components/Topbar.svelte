@@ -27,16 +27,13 @@
     }
   }
 
-  function testConnection() {
-    if (!app.live) {
-      toast.show("Showing demo data. Start the egress service to test");
-      return;
+  async function refresh() {
+    try {
+      await app.refreshAll();
+      toast.show("Updated");
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "Could not reach the egress service");
     }
-    toast.show(
-      app.connected
-        ? `Everything looks good. ${app.speed.toFixed(1)} Mbps right now`
-        : "The connection is paused"
-    );
   }
 </script>
 
@@ -46,8 +43,8 @@
     <p>{meta[1]}</p>
   </div>
   <div class="top-actions">
-    <button class="btn ghost" onclick={testConnection}>
-      <Icon name="bolt" cls="sm" /> Test connection
+    <button class="btn ghost" onclick={refresh}>
+      <Icon name="refresh" cls="sm" /> Refresh
     </button>
     <button class="btn primary" onclick={toggleConnection}>
       <Icon name="power" cls="sm" /> {app.connected ? "Disconnect" : "Connect"}

@@ -32,6 +32,17 @@ gui/
     icons/               generated from ../../assets/egress.png
 ```
 
+## Install
+
+The desktop app is a bakery-channel package:
+
+```sh
+bakery install egress-gui
+```
+
+It needs the egress daemon installed and enrolled on the machine. The daemon
+owns the tunnel, and the app reads its local API.
+
 ## Development
 
 ```sh
