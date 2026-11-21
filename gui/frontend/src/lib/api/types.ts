@@ -1,7 +1,7 @@
 export type Mode = "automatic" | "direct" | "friend";
 export type Path = "direct" | "relay" | "cloud" | "off";
 export type Transport = "direct" | "relay" | "offline";
-export type SiteVia = "hestia" | "cloud" | "direct" | "none";
+export type SiteVia = "friend" | "cloud" | "direct" | "none";
 export type EventKind = "connection" | "friend" | "protection";
 
 export interface Status {
@@ -37,7 +37,7 @@ export interface Circle {
 
 export interface ProtectionStats {
   unblocked: number;
-  via_hestia: number;
+  via_friend: number;
   via_cloud: number;
   retry: number;
 }
@@ -45,6 +45,7 @@ export interface ProtectionStats {
 export interface Site {
   domain: string;
   via: SiteVia;
+  label: string;
   at: string;
   retry: boolean;
 }
@@ -80,4 +81,5 @@ export interface Settings {
   notify_site: boolean;
   notify_drop: boolean;
   text_size: "comfortable" | "compact" | "large";
+  mode: Mode;
 }

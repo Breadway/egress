@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Person } from "$lib/api/types";
   import Icon from "$lib/components/Icon.svelte";
-  import { people } from "$lib/data/mock";
+  import { app, relativeDay } from "$lib/state/app.svelte";
   import { toast } from "$lib/state/toast.svelte";
 
   type Filter = "all" | "online" | "sharing";
@@ -9,8 +9,8 @@
   let query = $state("");
   let filter = $state<Filter>("all");
 
-  const devices = $derived(people.filter((p) => p.kind === "device"));
-  const friends = $derived(people.filter((p) => p.kind === "friend"));
+  let devices = $derived(app.devices);
+  let friends = $derived(app.friends);
 
   function matches(person: Person): boolean {
     if (filter === "online" && !person.online) return false;
@@ -20,15 +20,15 @@
   }
 
   function subtitle(person: Person): string {
-    if (person.self) return "This laptop · you";
+    if (person.self) return "This device · you";
     if (person.kind === "device") return "Your device";
     if (person.sharing) return "Friend · sharing their connection";
     return "Friend";
   }
 
   function lastSeen(person: Person): string {
-    if (!person.online) return "2 days ago";
-    return "Online now";
+    if (person.online) return "Online now";
+    return person.last_seen ? relativeDay(person.last_seen) : "Offline";
   }
 
   function tone(person: Person): string {
@@ -44,6 +44,14 @@
     if (person.transport === "direct") return "direct";
     if (person.transport === "relay") return "relay";
     return "";
+  }
+
+  function initial(person: Person): string {
+    return person.name ? person.name[0].toUpperCase() : "?";
+  }
+
+  async function moreOptions(person: Person) {
+    toast.show(`${person.name} · ${person.kind === "device" ? "device" : "friend"} options`);
   }
 </script>
 
@@ -68,7 +76,7 @@
     {#each devices.filter(matches) as person}
       <div class="friend-row">
         <div class="avatar sm {tone(person)}">
-          {#if person.sharing}<Icon name="home" cls="sm" />{:else}{person.self ? "B" : person.name[0].toUpperCase()}{/if}
+          {#if person.sharing}<Icon name="home" cls="sm" />{:else}{initial(person)}{/if}
         </div>
         <div class="who"><strong>{person.name}</strong><span>{subtitle(person)}</span></div>
         {#if pillState(person)}
@@ -77,10 +85,12 @@
           <span class="pill">Offline</span>
         {/if}
         <span class="meta">{lastSeen(person)}</span>
-        <button class="more" aria-label={`More options for ${person.name}`} onclick={() => toast.show(`${person.name} · device options`)}>
+        <button class="more" aria-label={`More options for ${person.name}`} onclick={() => moreOptions(person)}>
           <Icon name="more" cls="sm" />
         </button>
       </div>
+    {:else}
+      <p class="empty">No devices match this filter.</p>
     {/each}
   </div>
 
@@ -89,7 +99,7 @@
     {#each friends.filter(matches) as person}
       <div class="friend-row">
         <div class="avatar sm {tone(person)}">
-          {#if person.sharing}<Icon name="home" cls="sm" />{:else}{person.name[0]}{/if}
+          {#if person.sharing}<Icon name="home" cls="sm" />{:else}{initial(person)}{/if}
         </div>
         <div class="who"><strong>{person.name}</strong><span>{subtitle(person)}</span></div>
         {#if pillState(person)}
@@ -98,12 +108,12 @@
           <span class="pill">Offline</span>
         {/if}
         <span class="meta">{lastSeen(person)}</span>
-        <button class="more" aria-label={`More options for ${person.name}`} onclick={() => toast.show(`${person.name} · friend options`)}>
+        <button class="more" aria-label={`More options for ${person.name}`} onclick={() => moreOptions(person)}>
           <Icon name="more" cls="sm" />
         </button>
       </div>
     {:else}
-      <p class="empty">Nobody matches “{query}”.</p>
+      <p class="empty">Nobody in your circle matches “{query}”.</p>
     {/each}
   </div>
 

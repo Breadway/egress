@@ -5,6 +5,7 @@ use tauri::{Manager, WindowEvent};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![api_token])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Open egress", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -44,4 +45,19 @@ fn reveal(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+// api_token hands the webview the bearer token the daemon writes for the
+// signed-in user. The file is loopback-scoped; the webview never sees any
+// other daemon state.
+#[tauri::command]
+fn api_token() -> Result<String, String> {
+    let path = std::env::var("EGRESS_API_TOKEN_FILE")
+        .unwrap_or_else(|_| "/run/egress/api-token".to_string());
+    let raw = std::fs::read_to_string(&path).map_err(|err| format!("{path}: {err}"))?;
+    let token = raw.trim().to_string();
+    if token.is_empty() {
+        return Err(format!("{path} is empty"));
+    }
+    Ok(token)
 }

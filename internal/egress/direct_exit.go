@@ -95,6 +95,32 @@ func (d *directExit) ExitPubkey() string {
 	return d.pubkey
 }
 
+// ActiveExit describes the peer currently carrying blocked traffic, when one
+// is. The label comes from the published exit list so the GUI can name a
+// person instead of a key.
+func (d *directExit) ActiveExit() (label, kind, pubkey string, active bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.active {
+		return "", "", "", false
+	}
+	label = d.pubkey
+	for _, list := range [][]split.DirectExit{d.exits, d.peerExits} {
+		for _, e := range list {
+			if e.PubKey == d.pubkey {
+				if e.Label != "" {
+					label = e.Label
+				}
+				if e.Transport != "" {
+					kind = e.Transport
+				}
+				return label, kind, d.pubkey, true
+			}
+		}
+	}
+	return label, d.kind, d.pubkey, true
+}
+
 // SetPeerExits records the circle's offered exits and whether they should win
 // over the published ones.
 func (d *directExit) SetPeerExits(list []split.DirectExit, prefer bool) {

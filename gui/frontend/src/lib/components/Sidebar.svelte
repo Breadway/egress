@@ -1,15 +1,22 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import Icon from "$lib/components/Icon.svelte";
-  import { connection } from "$lib/state/connection.svelte";
+  import { app } from "$lib/state/app.svelte";
 
   const nav = [
     { href: "/", label: "Home", icon: "home" },
-    { href: "/friends", label: "Friends", icon: "nodes", badge: "4" },
-    { href: "/protection", label: "Protection", icon: "shield", badge: "58" },
+    { href: "/friends", label: "Friends", icon: "nodes" },
+    { href: "/protection", label: "Protection", icon: "shield" },
     { href: "/activity", label: "Activity", icon: "pulse" },
     { href: "/settings", label: "Settings", icon: "sliders" }
   ];
+
+  const badges = $derived<Record<string, string>>({
+    "/friends": String(app.friends.filter((p) => p.online).length),
+    "/protection": String(app.protection.stats.unblocked)
+  });
+
+  const self = $derived(app.people.find((p) => p.self));
 
   function active(href: string): boolean {
     const path = $page.url.pathname;
@@ -39,7 +46,7 @@
       >
         <Icon name={item.icon} />
         {item.label}
-        {#if item.badge}<span class="badge">{item.badge}</span>{/if}
+        {#if badges[item.href]}<span class="badge">{badges[item.href]}</span>{/if}
       </a>
     {/each}
     <div class="nav-label">System</div>
@@ -57,15 +64,15 @@
   </nav>
 
   <div class="side-foot">
-    <div class="protect" class:off={!connection.connected}>
+    <div class="protect" class:off={!app.connected}>
       <Icon name="shield" cls="sm" />
-      {connection.connected ? "Protected · smart routing" : "Protection is off"}
+      {app.connected ? "Protected · smart routing" : "Protection is off"}
     </div>
     <div class="device-card">
-      <div class="avatar">B</div>
-      <div class="device-meta"><strong>breadway</strong><span>This laptop</span></div>
-      <i class="dot" class:off={!connection.connected}></i>
+      <div class="avatar">{self?.name?.[0]?.toUpperCase() ?? "B"}</div>
+      <div class="device-meta"><strong>{self?.name ?? "This laptop"}</strong><span>This device</span></div>
+      <i class="dot" class:off={!app.connected}></i>
     </div>
-    <div class="side-version">egress {connection.version}<br />Up to date</div>
+    <div class="side-version">egress {app.version}<br />{app.live ? "Up to date" : "Demo data"}</div>
   </div>
 </aside>

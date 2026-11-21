@@ -60,13 +60,22 @@ The built site is written to `gui/frontend/build`, which is what
 
 ## Data
 
-Every screen reads through `frontend/src/lib/data/mock.ts` while the daemon
-endpoints are being added. `API.md` is the contract, and
-`frontend/src/lib/api/types.ts` is the shared shape. Switching to live data
-means calling `frontend/src/lib/api/client.ts` instead of the mock module.
+Every screen reads the live daemon API through `frontend/src/lib/api/client.ts`
+and the single store in `frontend/src/lib/state/app.svelte.ts`. `API.md` is the
+contract and `frontend/src/lib/api/types.ts` is the shared shape.
 
-The GUI talks to `http://127.0.0.1:7280/api/v1` with a bearer token written for
-the local user by the daemon. The Tauri CSP already allows that origin.
+The daemon writes a bearer token to `/run/egress/api-token` on Linux (or
+`EGRESS_API_TOKEN_FILE`). The Tauri shell reads it through the `api_token`
+command. For a plain browser during development, set `VITE_EGRESS_TOKEN` and
+optionally `VITE_EGRESS_API`:
+
+```sh
+VITE_EGRESS_TOKEN=$(cat /run/egress/api-token) npm run dev
+```
+
+The store starts on `frontend/src/lib/data/mock.ts` so the window renders before
+the daemon answers, then replaces it with live status, circle, protection,
+activity and settings. The footer shows "Demo data" while the mock is in use.
 
 ## Design reference
 
@@ -75,8 +84,14 @@ were ported from.
 
 ## Status
 
-- Home, Friends, Protection, Activity and Settings are ported.
-- Remaining: daemon `/api/v1` endpoints, then replacing mock data.
+- Home, Friends, Protection, Activity and Settings are ported and live.
+- The daemon serves `/api/v1/status`, `/connection`, `/circle`, `/protection`,
+  `/protection/retry`, `/activity`, `/settings` and the `/events` stream.
+- Connection control pauses and resumes the tunnel without restarting the
+  service. Site retry and settings persistence are wired.
+- Remaining backend work: sharing activation, relay region, address hiding and
+  native notifications. Those settings persist but do not change daemon
+  behaviour yet.
 
 `npm audit` reports advisories against SvelteKit 2 that are only fixed in
 SvelteKit 3. They cover server-side form actions, prerendered cache headers and

@@ -40,8 +40,9 @@ type Snapshot struct {
 	Domains   []Domain
 }
 
-// Serve listens on addr until ctx is cancelled.
-func Serve(ctx context.Context, addr string, snap func() Snapshot, logf func(string, ...any)) error {
+// Serve listens on addr until ctx is cancelled. Extra handlers are mounted
+// under /api/v1/ on the same listener; the GUI API is the only caller.
+func Serve(ctx context.Context, addr string, snap func() Snapshot, logf func(string, ...any), extra ...http.Handler) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -49,7 +50,7 @@ func Serve(ctx context.Context, addr string, snap func() Snapshot, logf func(str
 	if err != nil {
 		return fmt.Errorf("portal listen %s: %w", addr, err)
 	}
-	srv := &http.Server{Handler: newHandler(snap), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: newHandler(snap, extra...), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -63,9 +64,12 @@ func Serve(ctx context.Context, addr string, snap func() Snapshot, logf func(str
 	return nil
 }
 
-// newHandler serves the page and nothing else.
-func newHandler(snap func() Snapshot) http.Handler {
+// newHandler serves the page and nothing else, plus any mounted API.
+func newHandler(snap func() Snapshot, extra ...http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	for _, h := range extra {
+		mux.Handle("/api/v1/", h)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

@@ -1,13 +1,13 @@
 <script lang="ts">
   import type { ActivityEvent, EventKind } from "$lib/api/types";
   import Icon from "$lib/components/Icon.svelte";
-  import { events } from "$lib/data/mock";
+  import { app, eventTime } from "$lib/state/app.svelte";
 
   type Filter = "all" | EventKind;
 
   let filter = $state<Filter>("all");
 
-  const visible = $derived(filter === "all" ? events : events.filter((event) => event.kind === filter));
+  let visible = $derived(filter === "all" ? app.activity : app.activity.filter((event) => event.kind === filter));
 
   function icon(event: ActivityEvent): string {
     if (event.kind === "protection") return "shield";
@@ -41,7 +41,7 @@
   <div class="card">
     {#each visible as event}
       <div class="event">
-        <span class="time">{event.time}</span>
+        <span class="time">{eventTime(event.time)}</span>
         <span class="mark {tone(event)}"><Icon name={icon(event)} cls="sm" /></span>
         <div class="text">{event.title}<small>{event.detail}</small></div>
       </div>

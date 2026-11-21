@@ -7,9 +7,9 @@ import type {
   Status
 } from "../api/types";
 
-// Shape of the local API. These values mirror the design mockup until the
-// daemon endpoints land; every screen reads from this module so replacing it
-// with the real client is a one-file change.
+// Fallback data for development and for the first launch before the daemon
+// answers. Every screen reads the same store, so replacing this with live data
+// is a store update, not a screen change.
 export const status: Status = {
   version: "0.4.105",
   online: true,
@@ -90,61 +90,61 @@ export const people: Person[] = [
 
 export const protectionStats: ProtectionStats = {
   unblocked: 58,
-  via_hestia: 36,
+  via_friend: 36,
   via_cloud: 21,
   retry: 1
 };
 
 export const sites: Site[] = [
-  { domain: "speed.cloudflare.com", via: "hestia", at: "2026-11-21T10:25:00Z", retry: false },
-  { domain: "1lmnv6z-m.ns1pcdn.net", via: "cloud", at: "2026-11-21T10:23:00Z", retry: false },
-  { domain: "mega.nz", via: "hestia", at: "2026-11-21T10:21:00Z", retry: false },
-  { domain: "2.arch.pool.ntp.org", via: "none", at: "2026-11-21T10:16:00Z", retry: true },
-  { domain: "spd01-per.au.superloop.com", via: "cloud", at: "2026-11-21T10:14:00Z", retry: false },
-  { domain: "rr1.sn-2ontq5-59.googlevideo.com", via: "hestia", at: "2026-11-21T10:11:00Z", retry: false },
-  { domain: "addons.liberationuage.com", via: "cloud", at: "2026-11-21T10:07:00Z", retry: false },
-  { domain: "static.cloudflareinsights.com", via: "direct", at: "2026-11-21T10:03:00Z", retry: false }
+  { domain: "speed.cloudflare.com", via: "friend", label: "Hestia", at: "2026-11-21T10:25:00Z", retry: false },
+  { domain: "1lmnv6z-m.ns1pcdn.net", via: "cloud", label: "Cloud relay", at: "2026-11-21T10:23:00Z", retry: false },
+  { domain: "mega.nz", via: "friend", label: "Hestia", at: "2026-11-21T10:21:00Z", retry: false },
+  { domain: "2.arch.pool.ntp.org", via: "none", label: "Needs retry", at: "2026-11-21T10:16:00Z", retry: true },
+  { domain: "spd01-per.au.superloop.com", via: "cloud", label: "Cloud relay", at: "2026-11-21T10:14:00Z", retry: false },
+  { domain: "rr1.sn-2ontq5-59.googlevideo.com", via: "friend", label: "Hestia", at: "2026-11-21T10:11:00Z", retry: false },
+  { domain: "addons.liberationuage.com", via: "cloud", label: "Cloud relay", at: "2026-11-21T10:07:00Z", retry: false },
+  { domain: "static.cloudflareinsights.com", via: "direct", label: "Direct", at: "2026-11-21T10:03:00Z", retry: false }
 ];
 
 export const events: ActivityEvent[] = [
   {
-    time: "10:25",
+    time: "2026-11-21T10:25:00Z",
     kind: "friend",
     title: "Hestia is now helping with your connection",
     detail: "relayed through their home internet · 20.0 Mbps"
   },
   {
-    time: "10:25",
+    time: "2026-11-21T10:25:00Z",
     kind: "connection",
     title: "Your Windows PC got its own connection to Hestia",
     detail: "each device now gets its own connection"
   },
   {
-    time: "10:18",
+    time: "2026-11-21T10:18:00Z",
     kind: "connection",
     title: "Found a direct link to Caden",
     detail: "faster path without a relay"
   },
   {
-    time: "10:12",
+    time: "2026-11-21T10:12:00Z",
     kind: "connection",
     title: "Switched to the relay for your Windows PC",
     detail: "a direct path was not available"
   },
   {
-    time: "10:05",
+    time: "2026-11-21T10:05:00Z",
     kind: "connection",
     title: "Your Windows PC refreshed its connection to Hestia",
     detail: "the new route is ready"
   },
   {
-    time: "09:58",
+    time: "2026-11-21T09:58:00Z",
     kind: "protection",
     title: "Unblocked speed.cloudflare.com",
     detail: "learned by your circle · via Hestia"
   },
   {
-    time: "09:42",
+    time: "2026-11-21T09:42:00Z",
     kind: "friend",
     title: "Started using Hestia's connection",
     detail: "Hestia chose to share with you"
@@ -165,5 +165,6 @@ export const settings: Settings = {
   notify_friend: true,
   notify_site: false,
   notify_drop: true,
-  text_size: "comfortable"
+  text_size: "comfortable",
+  mode: "automatic"
 };

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type apiPeer struct {
 
 type peerLink struct {
 	pubkey   string
+	label    string
 	derpKey  string
 	ip       string
 	endpoint string
@@ -154,6 +156,47 @@ func (m *peerManager) Run(ctx context.Context) {
 	}
 }
 
+// PeerView is one circle member as the local GUI shows it. It carries no
+// public keys or tunnel addresses: the UI names people, not links.
+type PeerView struct {
+	Name      string
+	IP        string
+	PubKey    string // internal only, for matching the active exit
+	Transport string // direct, relay or offline
+	Online    bool
+}
+
+// Snapshot returns the current link picture. Safe to call from the API while
+// the reconcile loop runs.
+func (m *peerManager) Snapshot() []PeerView {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PeerView, 0, len(m.links))
+	for _, link := range m.links {
+		name := link.label
+		if name == "" {
+			name = link.ip
+		}
+		fresh := link.direct || link.derped || link.derpPassive || m.handshakeFresh(link)
+		transport := "offline"
+		switch {
+		case link.direct:
+			transport = "direct"
+		case link.derped || link.derpPassive || (fresh && !link.derping):
+			transport = "relay"
+		}
+		out = append(out, PeerView{
+			Name:      name,
+			IP:        link.ip,
+			PubKey:    link.pubkey,
+			Transport: transport,
+			Online:    fresh,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // shutdown drops every peer this manager configured so a restart starts from
 // the published list rather than a stale mix of links.
 func (m *peerManager) shutdown() {
@@ -225,6 +268,7 @@ func (m *peerManager) setDesired(peers []apiPeer) {
 		}
 		link.ip, link.endpoint = p.IP, p.Endpoint
 		link.derpKey = p.DerpPubKey
+		link.label = p.Label
 		link.dialable = dialable(p.Endpoint)
 	}
 }

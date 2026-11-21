@@ -1,15 +1,15 @@
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
-  import { connection } from "$lib/state/connection.svelte";
+  import { app } from "$lib/state/app.svelte";
 </script>
 
 <footer class="statusbar">
-  <span class="item"><i class="dot" class:off={!connection.connected}></i> {connection.statusLabel}</span>
-  <span class="item"><Icon name="shield" cls="sm" /> {connection.unblocked} sites unblocked today</span>
-  <span class="item"><Icon name="globe" cls="sm" /> {connection.dataGb} GB used</span>
+  <span class="item"><i class="dot" class:off={!app.connected}></i> {app.statusLabel}</span>
+  <span class="item"><Icon name="shield" cls="sm" /> {app.unblocked} sites unblocked today</span>
+  <span class="item"><Icon name="globe" cls="sm" /> {app.dataGb.toFixed(1)} GB used</span>
   <div class="right">
-    <span>3h 12m</span>
-    <span>{connection.mode === "automatic" ? "Smart routing" : connection.modeLabel}</span>
-    <span class="mono">{connection.version}</span>
+    <span>{app.duration}</span>
+    <span>{app.mode === "automatic" ? "Smart routing" : app.modeLabel}</span>
+    <span class="mono">{app.version}</span>
   </div>
 </footer>

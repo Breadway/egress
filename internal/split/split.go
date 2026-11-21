@@ -203,6 +203,26 @@ func (c *Controller) startProbe(domain string, minAge time.Duration) {
 	go c.probe(domain)
 }
 
+// Retry queues one verification attempt for a known domain. The GUI's retry
+// button uses it when a site could not be served.
+func (c *Controller) Retry(domain string) bool {
+	c.mu.Lock()
+	_, known := c.profile.Entries[domain]
+	c.mu.Unlock()
+	if !known {
+		return false
+	}
+	c.startProbe(domain, 0)
+	return true
+}
+
+// Observe queues a first probe for a site the user reported. The result is
+// recorded like any other observation, so a blocked report joins the profile
+// and an allowed one does not.
+func (c *Controller) Observe(domain string) {
+	c.startProbe(domain, 0)
+}
+
 func (c *Controller) probe(domain string) {
 	c.sem <- struct{}{}
 	opts := ProbeOptions{

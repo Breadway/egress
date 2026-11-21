@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import Icon from "$lib/components/Icon.svelte";
-  import { connection } from "$lib/state/connection.svelte";
+  import { app } from "$lib/state/app.svelte";
   import { toast } from "$lib/state/toast.svelte";
 
   const pages: Record<string, [string, string]> = {
@@ -14,12 +14,28 @@
 
   let meta = $derived(pages[$page.url.pathname] ?? pages["/"]);
 
-  function toggleConnection() {
-    connection.toggle();
+  async function toggleConnection() {
+    try {
+      const connected = await app.toggle();
+      toast.show(
+        connected
+          ? "Reconnected. You are protected again"
+          : "Disconnected. Your normal connection is back"
+      );
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "Could not change the connection");
+    }
+  }
+
+  function testConnection() {
+    if (!app.live) {
+      toast.show("Showing demo data. Start the egress service to test");
+      return;
+    }
     toast.show(
-      connection.connected
-        ? "Reconnected. You are protected again"
-        : "Disconnected. Your normal connection is back"
+      app.connected
+        ? `Everything looks good. ${app.speed.toFixed(1)} Mbps right now`
+        : "The connection is paused"
     );
   }
 </script>
@@ -30,11 +46,11 @@
     <p>{meta[1]}</p>
   </div>
   <div class="top-actions">
-    <button class="btn ghost" onclick={() => toast.show("Everything looks good. Direct 18 ms, relay 54 ms")}>
+    <button class="btn ghost" onclick={testConnection}>
       <Icon name="bolt" cls="sm" /> Test connection
     </button>
     <button class="btn primary" onclick={toggleConnection}>
-      <Icon name="power" cls="sm" /> {connection.connected ? "Disconnect" : "Connect"}
+      <Icon name="power" cls="sm" /> {app.connected ? "Disconnect" : "Connect"}
     </button>
   </div>
 </header>

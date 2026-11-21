@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -42,6 +43,13 @@ type Supervisor struct {
 	// preferRelay starts the loop on the WebSocket path because the stored
 	// protocol picture says UDP is blocked on this network.
 	PreferRelay bool
+
+	// connMu guards the pause flag and the published path. The GUI can pause
+	// protection without stopping the service, so the same process keeps
+	// serving the local API and can resume on the next request.
+	connMu sync.Mutex
+	paused bool
+	path   string
 
 	Iface   string
 	Gateway string
@@ -100,7 +108,73 @@ func New(plat platform.Interface, resolver *doh.Resolver, wst Tunneler, logger *
 		log:            logger,
 		manageTunnel:   manageTunnel,
 		manageFallback: manageFallback,
+		path:           "direct",
 	}
+}
+
+// SetConnected pauses or resumes protection. Pausing stops the WireGuard
+// interface but leaves the resolver, the portal and this API running, so the
+// user can reconnect without a service restart. Resuming starts the tunnel;
+// the normal loop then re-pins the endpoint and re-applies routes.
+func (s *Supervisor) SetConnected(on bool) error {
+	s.connMu.Lock()
+	was := !s.paused
+	s.paused = !on
+	s.connMu.Unlock()
+	switch {
+	case was && !on:
+		return s.plat.StopTunnel()
+	case !was && on:
+		return s.plat.StartTunnel()
+	}
+	return nil
+}
+
+// Connected reports whether protection is on and the tunnel interface is up.
+func (s *Supervisor) Connected() bool {
+	s.connMu.Lock()
+	paused := s.paused
+	s.connMu.Unlock()
+	return !paused && s.plat.TunnelUp()
+}
+
+// Paused reports the paused flag alone, so callers can tell "user turned it
+// off" from "tunnel is still coming up".
+func (s *Supervisor) Paused() bool {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.paused
+}
+
+// Path is the transport currently carrying the tunnel: "direct" for the UDP
+// path, "cloud" for the WebSocket fallback. Both are the same backend; the
+// label is what the user sees.
+func (s *Supervisor) Path() string {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.path
+}
+
+func (s *Supervisor) setPath(path string) {
+	s.connMu.Lock()
+	s.path = path
+	s.connMu.Unlock()
+}
+
+// SetFallback allows or forbids the WebSocket fallback at runtime. Turning it
+// off while the fallback carries traffic leaves the current path alone; the
+// next failure will not enter it.
+func (s *Supervisor) SetFallback(on bool) {
+	s.connMu.Lock()
+	s.manageFallback = on
+	s.connMu.Unlock()
+}
+
+// Fallback reports whether the fallback is allowed.
+func (s *Supervisor) Fallback() bool {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.manageFallback
 }
 
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -136,11 +210,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 func (s *Supervisor) loop(ctx context.Context) error {
 	state := pathUDP
 	failures := 0
-	if s.PreferRelay && s.manageFallback {
+	if s.PreferRelay && s.Fallback() {
 		if err := s.enterWebSocket(ctx); err != nil {
 			s.log.Printf("relay start failed, trying udp: %v", err)
 		} else {
 			state = pathWebSocket
+			s.setPath("cloud")
 			s.log.Printf("starting on the websocket path: the profile says udp is blocked")
 		}
 	}
@@ -177,6 +252,18 @@ func (s *Supervisor) loop(ctx context.Context) error {
 
 		logx.Debugf("tick: state=%d failures=%d tunnel=%v iface=%s gateway=%s",
 			state, failures, s.plat.TunnelUp(), s.Iface, s.Gateway)
+
+		// A paused supervisor keeps the process, resolver and local API alive
+		// but owns no tunnel. The loop stays on its ticker so resume is a flag
+		// flip rather than a service restart.
+		if s.Paused() {
+			if s.plat.TunnelUp() {
+				if err := s.plat.StopTunnel(); err != nil {
+					s.log.Printf("pause: could not stop the tunnel: %v", err)
+				}
+			}
+			continue
+		}
 
 		// changed tracks a fresh route flip for this tick only. The first
 		// probe after a flip fails over immediately instead of waiting out
@@ -275,7 +362,7 @@ func (s *Supervisor) loop(ctx context.Context) error {
 			if changed {
 				threshold = 1
 			}
-			if failures < threshold || !s.manageFallback {
+			if failures < threshold || !s.Fallback() {
 				continue
 			}
 			if err := s.enterWebSocket(ctx); err != nil {
@@ -284,6 +371,7 @@ func (s *Supervisor) loop(ctx context.Context) error {
 				continue
 			}
 			state = pathWebSocket
+			s.setPath("cloud")
 			lastTrial = time.Now()
 			s.log.Printf("udp path is blocked, using the websocket fallback")
 
@@ -309,6 +397,7 @@ func (s *Supervisor) loop(ctx context.Context) error {
 				lastTrial = time.Now()
 				if s.trialUDP(ctx) {
 					state = pathUDP
+					s.setPath("direct")
 					failures = 0
 					s.log.Printf("udp path is back")
 				}
