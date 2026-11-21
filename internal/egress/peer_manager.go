@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type apiPeer struct {
 
 type peerLink struct {
 	pubkey   string
+	label    string
 	derpKey  string
 	ip       string
 	endpoint string
@@ -112,6 +114,9 @@ type peerManager struct {
 	mu        sync.Mutex
 	links     map[string]*peerLink
 	lastCount int
+	// hidden keeps this device's own address out of peer links. Friends then
+	// reach it through the relay or the Aegis star, never a direct dial.
+	hidden bool
 }
 
 func newPeerManager(plat peerPlatform, dev string, logger *log.Logger, exclude func() string, relay *derpTransport) *peerManager {
@@ -152,6 +157,50 @@ func (m *peerManager) Run(ctx context.Context) {
 		}
 		m.reconcile()
 	}
+}
+
+// PeerView is one circle member as the local GUI shows it. It carries no
+// public keys or tunnel addresses: the UI names people, not links.
+type PeerView struct {
+	Name      string
+	IP        string
+	PubKey    string // internal only, for matching the active exit
+	Transport string // direct, relay or offline
+	Online    bool
+}
+
+// Snapshot returns the current link picture. Safe to call from the API while
+// the reconcile loop runs.
+func (m *peerManager) Snapshot() []PeerView {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PeerView, 0, len(m.links))
+	for _, link := range m.links {
+		// The published list always carries a label. An unlabeled link would
+		// otherwise be named by its tunnel address, which the user UI must
+		// never expose.
+		if link.label == "" {
+			continue
+		}
+		name := link.label
+		fresh := link.direct || link.derped || link.derpPassive || m.handshakeFresh(link)
+		transport := "offline"
+		switch {
+		case link.direct:
+			transport = "direct"
+		case link.derped || link.derpPassive || (fresh && !link.derping):
+			transport = "relay"
+		}
+		out = append(out, PeerView{
+			Name:      name,
+			IP:        link.ip,
+			PubKey:    link.pubkey,
+			Transport: transport,
+			Online:    fresh,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // shutdown drops every peer this manager configured so a restart starts from
@@ -225,6 +274,7 @@ func (m *peerManager) setDesired(peers []apiPeer) {
 		}
 		link.ip, link.endpoint = p.IP, p.Endpoint
 		link.derpKey = p.DerpPubKey
+		link.label = p.Label
 		link.dialable = dialable(p.Endpoint)
 	}
 }
@@ -241,6 +291,14 @@ func dialable(endpoint string) bool {
 	return host != "" && host != "127.0.0.1" && host != "::1"
 }
 
+// SetHiddenAddress forbids direct peer links when the user asked friends to
+// see only a relayed connection.
+func (m *peerManager) SetHiddenAddress(hidden bool) {
+	m.mu.Lock()
+	m.hidden = hidden
+	m.mu.Unlock()
+}
+
 func (m *peerManager) reconcile() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -250,6 +308,13 @@ func (m *peerManager) reconcile() {
 	budget := 1
 	for _, link := range m.links {
 		if m.owned(link.pubkey) {
+			continue
+		}
+		if m.hidden && (link.direct || link.dialing) {
+			if m.startDERP(link, now) {
+				continue
+			}
+			m.demote(link, now, "the address is hidden")
 			continue
 		}
 		if !link.present {
@@ -334,7 +399,7 @@ func (m *peerManager) reconcile() {
 			if now.Before(link.backoffUntil) {
 				continue
 			}
-			if link.dialable {
+			if link.dialable && !m.hidden {
 				if budget == 0 {
 					continue
 				}

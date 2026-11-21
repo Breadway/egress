@@ -4,6 +4,7 @@ import (
 	"context"
 	"egress/internal/core"
 	"egress/internal/doh"
+	"egress/internal/guiapi"
 	"egress/internal/health"
 	"egress/internal/logx"
 	"egress/internal/portal"
@@ -746,7 +747,8 @@ func cmdSupervise(args []string) error {
 	// One relay connection per device serves peer links, an exit this device
 	// uses, and clients using this device as an exit.
 	var relay *derpTransport
-	if t, derr := newDERPTransport(appLogger()); derr == nil {
+	startupSettings := guiapi.LoadSettings()
+	if t, derr := newDERPTransportRegion(appLogger(), relayRegionCode(startupSettings.RelayRegion)); derr == nil {
 		relay = t
 	} else {
 		appLogger().Printf("derp: unavailable: %v", derr)
@@ -789,14 +791,16 @@ func cmdSupervise(args []string) error {
 	}
 	// A split install has no direct tunnel of its own but does own wg0ws, which
 	// is where its peers live; the same condition the splitter uses applies.
-	if peers, ok := plat.(peerPlatform); ok && (!*noTunnel || *relayTunnel) {
+	var peers *peerManager
+	if pp, ok := plat.(peerPlatform); ok && (!*noTunnel || *relayTunnel) {
 		var exitOwner func() string
 		if direct != nil {
 			exitOwner = direct.ExitPubkey
 		}
 		// DERP is preferred over the Aegis star for peer links that cannot be
 		// dialled directly. It is a fallback only; a direct path always wins.
-		go newPeerManager(peers, splitDev, appLogger(), exitOwner, relay).Run(ctx)
+		peers = newPeerManager(pp, splitDev, appLogger(), exitOwner, relay)
+		go peers.Run(ctx)
 	}
 	if *relayTunnel {
 		// The relay tunnel is the path for learned-blocked destinations on
@@ -827,6 +831,23 @@ func cmdSupervise(args []string) error {
 			}
 		}()
 	}
+	var gui *guiapi.Server
+	share := newExitShare()
+	defer share.Stop()
+	sources := newGUISources(ctx, sup, peers, splitter, direct, plat, newLinkMeter(splitDev), share, relay)
+	if srv, gerr := guiapi.New(sources, apiTokenPath()); gerr != nil {
+		appLogger().Printf("gui api: %v", gerr)
+	} else {
+		gui = srv
+		go srv.Run(ctx)
+		appLogger().Printf("gui api: http://%s/api/v1 (token file %s)", core.PortalListenAddr, apiTokenPath())
+	}
+	settings := startupSettings
+	if gui != nil {
+		settings = gui.CurrentSettings()
+	}
+	applyRuntimeSettings(ctx, sup, peers, share, relay, settings)
+
 	go func() {
 		snap := func() portal.Snapshot {
 			out := portal.Snapshot{Generated: time.Now(), Version: reportVersion(), Online: plat.TunnelUp() || aegisReachable()}
@@ -842,7 +863,13 @@ func cmdSupervise(args []string) error {
 			}
 			return out
 		}
-		if err := portal.Serve(ctx, core.PortalListenAddr, snap, appLogger().Printf); err != nil {
+		var err error
+		if gui != nil {
+			err = portal.Serve(ctx, core.PortalListenAddr, snap, appLogger().Printf, gui.Handler())
+		} else {
+			err = portal.Serve(ctx, core.PortalListenAddr, snap, appLogger().Printf)
+		}
+		if err != nil {
 			appLogger().Printf("portal: %v", err)
 		}
 	}()
