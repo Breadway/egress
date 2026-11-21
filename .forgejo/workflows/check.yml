@@ -84,6 +84,25 @@ jobs:
           go vet ./...
           go test -count=1 ./...
 
+  gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+      - name: install
+        run: npm ci
+        working-directory: gui/frontend
+      - name: check
+        run: npm run check
+        working-directory: gui/frontend
+      - name: build
+        run: npm run build
+        working-directory: gui/frontend
+
   dnscloak:
     runs-on: ubuntu-latest
     steps:

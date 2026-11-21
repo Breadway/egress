@@ -497,6 +497,7 @@ root holds the build scripts, the entry point and the subprojects.
 | `deploy/bypass-provisioner.service` | systemd unit for the provisioner |
 | `bypass-server/` | enrollment applications + password-gated downloads (Aegis, Caddy) |
 | `dnscloak/` | answer Microsoft names with the relay IP (Aegis, doh-proxy to dnsproxy) |
+| `gui/` | user desktop app (Tauri 2 + SvelteKit); see `gui/README.md` |
 | `docs/DESIGN.md` | architecture and protocol details |
 
 `go test ./...` runs the local tests, including live requests to the DoH

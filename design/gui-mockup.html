@@ -1,0 +1,1032 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>egress · private networking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
+<style>
+/* Bread Design System tokens. Background, surface, overlay and foreground
+   are the fixed BOS dark base; the accent is the bread-toned wallpaper slot. */
+:root {
+  --bg: #0c0c0c;
+  --surface: #1a1a1a;
+  --surface-2: #202020;
+  --surface-3: #262626;
+  --fg: #e8e8e8;
+  --muted: #9a9a9a;
+  --faint: #6d6d6d;
+  --overlay: #d8d8d8;
+  --accent: #eab672;
+  --accent-2: #f6c477;
+  --accent-ink: #1b1206;
+  --green: #93c47d;
+  --red: #e08a7a;
+  --teal: #8fc3bd;
+  --pink: #d9a0b4;
+  --line: rgba(232, 232, 232, .08);
+  --line-strong: rgba(232, 232, 232, .14);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --ring: 999px;
+  --sans: "Varela Round", ui-rounded, "Nunito", system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  padding: 20px;
+  background:
+    radial-gradient(900px 520px at 12% -10%, rgba(234, 182, 114, .10), transparent 60%),
+    radial-gradient(700px 460px at 96% 8%, rgba(143, 195, 189, .06), transparent 55%),
+    #060606;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select { font-family: inherit; font-size: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+::selection { background: rgba(234, 182, 114, .28); }
+
+.icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.icon.sm { width: 15px; height: 15px; }
+.icon.lg { width: 22px; height: 22px; }
+
+.app {
+  width: 100%;
+  max-width: 1480px;
+  height: calc(100vh - 40px);
+  min-height: 720px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  background: var(--bg);
+  border: 1px solid #2a2a2a;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 2px 0 rgba(255, 255, 255, .03) inset;
+}
+
+/* ---------- sidebar ---------- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 18px 14px 14px;
+  background: linear-gradient(180deg, #1a1a1a 0%, #141414 100%);
+  border-right: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 18px; }
+.brand-mark {
+  display: grid; place-items: center;
+  width: 34px; height: 34px;
+  color: var(--accent);
+  background: rgba(234, 182, 114, .10);
+  border: 1px solid rgba(234, 182, 114, .22);
+  border-radius: 9px;
+}
+.brand-name { font-size: 20px; letter-spacing: .2px; line-height: 1; }
+.brand-sub { display: block; margin-top: 4px; font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+
+.circle-chip {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 4px 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .015);
+  font-size: 12px;
+  color: var(--muted);
+}
+.circle-dots { display: flex; }
+.circle-dots i {
+  width: 16px; height: 16px; margin-left: -4px;
+  border-radius: 50%;
+  border: 2px solid #161616;
+  background: var(--surface-3);
+}
+.circle-dots i:first-child { margin-left: 0; }
+.circle-dots i:nth-child(1) { background: #b98749; }
+.circle-dots i:nth-child(2) { background: #8fc3bd; }
+.circle-dots i:nth-child(3) { background: #d9a0b4; }
+.circle-dots i:nth-child(4) { background: #93c47d; }
+.circle-chip span { margin-left: auto; color: var(--fg); }
+
+.nav { display: flex; flex-direction: column; gap: 3px; }
+.nav-label { padding: 10px 10px 6px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.nav-item {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  transition: background .16s ease, color .16s ease;
+}
+.nav-item:hover { background: rgba(255, 255, 255, .04); color: var(--fg); }
+.nav-item.active { background: rgba(234, 182, 114, .11); color: var(--fg); }
+.nav-item.active::before {
+  content: "";
+  position: absolute; left: -14px; top: 9px; bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+.nav-item .icon { opacity: .9; }
+.nav-item.active .icon { color: var(--accent); }
+.badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--ring);
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+.nav-item.active .badge { background: rgba(234, 182, 114, .18); color: var(--accent-2); }
+
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.protect {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(147, 196, 125, .22);
+  background: rgba(147, 196, 125, .07);
+  border-radius: var(--radius-sm);
+  color: #b9d9a8;
+  font-size: 12px;
+}
+.protect .icon { color: var(--green); }
+.device-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .015);
+}
+.avatar {
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: rgba(234, 182, 114, .16);
+  color: var(--accent-2);
+  font-size: 12px;
+  flex: none;
+}
+.device-meta { min-width: 0; }
+.device-meta strong { display: block; font-weight: 400; font-size: 13px; }
+.device-meta span { display: block; color: var(--faint); font-size: 11px; }
+.device-card .dot { margin-left: auto; }
+.side-version { padding: 0 4px; font-size: 11px; color: var(--faint); line-height: 1.6; }
+
+/* ---------- main ---------- */
+.main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.topbar {
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 20px 24px 12px;
+}
+.topbar h1 { margin: 0; font-size: 20px; font-weight: 400; letter-spacing: .1px; }
+.topbar p { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; }
+.top-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 8px 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--fg);
+  transition: background .16s ease, border-color .16s ease, transform .1s ease;
+}
+.btn:hover { background: rgba(255, 255, 255, .05); border-color: rgba(232, 232, 232, .22); }
+.btn:active { transform: translateY(1px); }
+.btn.primary {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { border-color: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--fg); background: rgba(255, 255, 255, .04); }
+.btn.small { padding: 5px 9px; font-size: 12px; border-radius: var(--radius-sm); }
+
+.scroll { min-height: 0; flex: 1; overflow: auto; padding: 0 24px 16px; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 8px; }
+
+.panel { display: none; animation: rise .28s ease both; }
+.panel.active { display: block; }
+@keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+.dashboard { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, 1fr); gap: 12px; }
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.card {
+  position: relative;
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color .18s ease;
+}
+.card:hover { border-color: rgba(234, 182, 114, .20); }
+.card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.card-head h2, .card-head h3 { margin: 0; font-size: 14px; font-weight: 400; }
+.card-head .sub { color: var(--faint); font-size: 11.5px; margin-left: 2px; }
+.card-head .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.card-link { color: var(--accent); font-size: 12px; }
+.card-link:hover { text-decoration: underline; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.tiny { font-size: 11px; }
+
+/* hero */
+.hero {
+  background:
+    radial-gradient(120% 150% at 0% 0%, rgba(234, 182, 114, .15), transparent 58%),
+    var(--surface);
+  border-color: rgba(234, 182, 114, .24);
+  padding-bottom: 8px;
+}
+.hero-top { display: flex; align-items: center; gap: 10px; }
+.status-line { display: inline-flex; align-items: center; gap: 8px; color: var(--green); font-size: 13px; }
+.status-line.off { color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(147, 196, 125, .14); flex: none; }
+.dot.pulse { animation: pulse 2.4s ease-out infinite; }
+.dot.off { background: var(--faint); box-shadow: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 3px rgba(147, 196, 125, .16); } 60% { box-shadow: 0 0 0 7px rgba(147, 196, 125, 0); } 100% { box-shadow: 0 0 0 3px rgba(147, 196, 125, 0); } }
+.hero-top .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.hero-main { display: flex; align-items: flex-end; gap: 14px; margin: 8px 0 0; }
+.big { font-size: 42px; line-height: 1.05; letter-spacing: -.02em; font-weight: 700; }
+.big .unit { font-size: 15px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-left: 5px; }
+.hero-label { color: var(--muted); font-size: 12.5px; margin-bottom: 9px; }
+.hero-metrics { display: flex; gap: 24px; margin: 10px 0 2px; flex-wrap: wrap; }
+.metric span { display: block; color: var(--faint); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
+.metric strong { font-size: 16px; font-weight: 400; }
+.metric strong em { font-style: normal; font-size: 11px; color: var(--muted); margin-left: 2px; }
+.spark { width: 100%; height: 58px; display: block; margin-top: 2px; }
+.hero-art { position: absolute; right: 18px; top: 52px; color: var(--accent); opacity: .045; transform: rotate(-6deg); pointer-events: none; }
+.hero-art .icon { width: 120px; height: 120px; stroke-width: 1.2; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  justify-self: start;
+  padding: 3px 8px;
+  border-radius: var(--ring);
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pill .icon { width: 11px; height: 11px; }
+.pill.direct { color: #b9d9a8; background: rgba(147, 196, 125, .09); border-color: rgba(147, 196, 125, .22); }
+.pill.relay { color: var(--accent-2); background: rgba(234, 182, 114, .10); border-color: rgba(234, 182, 114, .25); }
+.pill.cloud { color: #c9c9c9; background: rgba(216, 216, 216, .07); border-color: rgba(216, 216, 216, .15); }
+.pill.share { color: #b9dcd6; background: rgba(143, 195, 189, .10); border-color: rgba(143, 195, 189, .24); }
+.pill.warn { color: #f0b39f; background: rgba(224, 138, 122, .10); border-color: rgba(224, 138, 122, .24); }
+.pill.accent { color: var(--accent-2); background: rgba(234, 182, 114, .12); border-color: rgba(234, 182, 114, .28); }
+
+/* connection */
+.segmented {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #151515;
+}
+.segmented button {
+  padding: 7px 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  transition: background .16s ease, color .16s ease;
+}
+.segmented button:hover { color: var(--fg); }
+.segmented button.active { background: rgba(234, 182, 114, .14); color: var(--accent-2); }
+.path { display: flex; flex-direction: column; margin: 8px 0 4px; }
+.path-step { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.path-step .node {
+  display: grid; place-items: center;
+  width: 25px; height: 25px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  color: var(--faint);
+  background: var(--surface-2);
+}
+.path-step.active .node { color: var(--accent-ink); background: var(--accent); border-color: transparent; }
+.path-step.direct .node { color: var(--green); }
+.path-step .label { font-size: 12.5px; }
+.path-note { margin-left: auto; font-size: 11px; color: var(--faint); }
+.path-step.active .path-note { color: var(--accent-2); }
+.path-line { width: 2px; height: 8px; margin-left: 12px; background: var(--line); }
+.path-hint { margin: 4px 0 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+
+/* people */
+.people { display: flex; flex-direction: column; }
+.person-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.person-row:first-of-type { border-top: 0; }
+.person-row .who { min-width: 0; }
+.person-row .who strong { display: block; font-weight: 400; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.person-row .who span { display: block; color: var(--faint); font-size: 10.5px; }
+.avatar.sm { width: 28px; height: 28px; font-size: 10px; }
+.avatar.green { background: rgba(147, 196, 125, .13); color: #b9d9a8; }
+.avatar.teal { background: rgba(143, 195, 189, .13); color: #b9dcd6; }
+.avatar.pink { background: rgba(217, 160, 180, .13); color: #e7bccb; }
+.avatar.grey { background: rgba(216, 216, 216, .08); color: #cfcfcf; }
+.avatar.home { background: rgba(143, 195, 189, .13); color: #b9dcd6; }
+.share-row { display: flex; align-items: center; gap: 10px; padding-top: 10px; margin-top: 6px; border-top: 1px solid var(--line); }
+.share-row .copy { min-width: 0; }
+.share-row .copy strong { display: block; font-weight: 400; font-size: 12px; }
+.share-row .copy span { display: block; color: var(--faint); font-size: 10.5px; }
+.share-row .control { margin-left: auto; }
+
+/* sites */
+.summary-bar { display: flex; height: 7px; border-radius: var(--ring); overflow: hidden; background: #282828; margin: 4px 0 10px; }
+.summary-bar i { display: block; height: 100%; }
+.summary-bar .a { background: linear-gradient(90deg, #7fae9f, var(--teal)); }
+.summary-bar .b { background: linear-gradient(90deg, #b98749, var(--accent)); }
+.summary-bar .c { background: #4a4a4a; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.legend i { width: 7px; height: 7px; border-radius: 2px; }
+.site-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.site-row .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #d6d6d6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.site-row .when { color: var(--faint); font-size: 10.5px; }
+
+/* activity */
+.timeline { display: flex; flex-direction: column; }
+.event { display: grid; grid-template-columns: 46px 18px minmax(0, 1fr); gap: 9px; padding: 8px 0; border-top: 1px solid var(--line); align-items: start; }
+.event:first-child { border-top: 0; }
+.event .time { color: var(--faint); font-size: 10.5px; padding-top: 1px; }
+.event .mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--surface-3); color: var(--muted); }
+.event .mark.green { color: #b9d9a8; background: rgba(147, 196, 125, .10); }
+.event .mark.accent { color: var(--accent-2); background: rgba(234, 182, 114, .10); }
+.event .mark.teal { color: #b9dcd6; background: rgba(143, 195, 189, .10); }
+.event .text { font-size: 12px; color: #d2d2d2; }
+.event .text small { display: block; color: var(--faint); font-size: 10.5px; margin-top: 1px; }
+
+/* footer strip */
+.statusbar {
+  display: flex; align-items: center; gap: 18px;
+  padding: 9px 24px;
+  border-top: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 11px;
+  background: rgba(0, 0, 0, .12);
+}
+.statusbar .item { display: inline-flex; align-items: center; gap: 7px; }
+.statusbar .right { margin-left: auto; display: flex; gap: 18px; }
+.statusbar .dot { width: 6px; height: 6px; box-shadow: none; }
+
+/* panels and tables */
+.panel-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.panel-tools .summary { color: var(--muted); font-size: 12px; }
+.panel-tools .right { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 11px;
+  width: 230px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface);
+}
+.search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--fg); }
+.search input::placeholder { color: var(--faint); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  padding: 4px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--ring);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+.chip.active { color: var(--accent-ink); background: var(--accent); border-color: transparent; }
+.chip:hover:not(.active) { color: var(--fg); border-color: rgba(232, 232, 232, .22); }
+
+.section-label { margin: 2px 0 8px; color: var(--faint); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; }
+.list-card { padding: 4px 16px; }
+.list-card + .section-label { margin-top: 16px; }
+.friend-row { display: grid; grid-template-columns: 30px minmax(0, 1.5fr) minmax(0, 1fr) auto 20px; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+.friend-row:first-of-type { border-top: 0; }
+.friend-row .who { min-width: 0; }
+.friend-row .who strong { display: block; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.friend-row .who span { display: block; color: var(--faint); font-size: 10.5px; }
+.friend-row .meta { color: var(--faint); font-size: 10.5px; }
+.friend-row .more { color: var(--faint); text-align: right; }
+.friend-row .more:hover { color: var(--fg); }
+
+.stats-card { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 4px 0; }
+.stat-block { padding: 8px 16px 10px; border-left: 1px solid var(--line); }
+.stat-block:first-child { border-left: 0; padding-left: 0; }
+.stat-block span { display: block; color: var(--faint); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.stat-block strong { display: block; font-size: 22px; font-weight: 400; margin-top: 2px; }
+.stat-block strong em { font-style: normal; font-size: 11px; color: var(--muted); margin-left: 3px; }
+
+.note {
+  display: flex; gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(234, 182, 114, .18);
+  background: rgba(234, 182, 114, .055);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.note .icon { color: var(--accent); margin-top: 1px; }
+.note strong { color: var(--fg); font-weight: 400; }
+
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.setting { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-top: 1px solid var(--line); }
+.setting:first-of-type { border-top: 0; padding-top: 0; }
+.setting .copy { min-width: 0; }
+.setting .copy strong { display: block; font-weight: 400; font-size: 12.5px; }
+.setting .copy span { display: block; color: var(--faint); font-size: 11px; margin-top: 1px; }
+.setting .control { margin-left: auto; flex: none; }
+.toggle {
+  position: relative;
+  width: 38px; height: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--ring);
+  background: #2a2a2a;
+  transition: background .16s ease, border-color .16s ease;
+}
+.toggle::after {
+  content: "";
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #cfcfcf;
+  transition: transform .16s ease, background .16s ease;
+}
+.toggle.on { background: rgba(234, 182, 114, .85); border-color: transparent; }
+.toggle.on::after { transform: translateX(16px); background: var(--accent-ink); }
+.select {
+  padding: 6px 26px 6px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  font-size: 12px;
+}
+.input {
+  width: 110px;
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+  outline: 0;
+  font-size: 12px;
+}
+.input:focus { border-color: rgba(234, 182, 114, .55); box-shadow: 0 0 0 3px rgba(234, 182, 114, .10); }
+.swatches { display: flex; gap: 5px; }
+.swatches i { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .25); }
+
+.toast {
+  position: fixed; left: 50%; bottom: 30px;
+  transform: translate(-50%, 12px);
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #222;
+  color: var(--fg);
+  font-size: 12px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+  z-index: 20;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast .icon { color: var(--green); }
+
+@media (max-width: 1120px) {
+  .dashboard { grid-template-columns: 1fr; }
+  .settings-grid { grid-template-columns: 1fr; }
+  .stats-card { grid-template-columns: repeat(2, 1fr); }
+  .stat-block:nth-child(3) { border-left: 0; padding-left: 0; }
+}
+@media (max-width: 820px) {
+  body { padding: 0; }
+  .app { height: 100vh; border-radius: 0; border: 0; grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .hero-metrics { gap: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bread" viewBox="0 0 24 24">
+    <path d="M4.6 10.3c0-3.5 3.3-6.3 7.4-6.3s7.4 2.8 7.4 6.3v6.1c0 1.4-1.1 2.6-2.6 2.6H7.2c-1.4 0-2.6-1.2-2.6-2.6z"/>
+    <path d="M8.1 9.7c1.1-.9 2.4-1.4 3.9-1.4s2.8.5 3.9 1.4M8.1 13h7.8M8.1 16h7.8"/>
+  </symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m4 11 8-7 8 7v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19z"/><path d="M9.5 20v-6h5v6"/></symbol>
+  <symbol id="i-nodes" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.2 11 15.8 7M8.2 13l7.6 4"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4.5 12h15M12 4c2.2 2.2 3.4 5 3.4 8s-1.2 5.8-3.4 8c-2.2-2.2-3.4-5-3.4-8s1.2-5.8 3.4-8z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 19 6v5.2c0 4.2-2.8 7.6-7 9.3-4.2-1.7-7-5.1-7-9.3V6z"/><path d="m9 12 2.1 2.1L15.2 10"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3.5 12h4l2.2-5.5 4.1 11L16 12h4.5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h6M14 7h6M4 12h10M18 12h2M4 17h3M11 17h9"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19 8.5V4m0 0h-4.5M19 4l-3.1 3.1A7.2 7.2 0 1 0 19 15"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.5 15.5 4 4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4.5 21 20H3z"/><path d="M12 10v4.5M12 17.5h.01"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5 13h5l-1 8 8-10h-5z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 14 4-4M8.5 16.5l-1 1a3.5 3.5 0 0 1-5-5l2.2-2.2a3.5 3.5 0 0 1 5 0M15.5 7.5l1-1a3.5 3.5 0 0 1 5 5l-2.2 2.2a3.5 3.5 0 0 1-5 0"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg class="icon lg"><use href="#i-bread"/></svg></div>
+      <div><div class="brand-name">egress</div><span class="brand-sub">private networking</span></div>
+    </div>
+
+    <div class="circle-chip">
+      <span class="circle-dots"><i></i><i></i><i></i><i></i></span>
+      <span>bread</span>
+    </div>
+
+    <nav class="nav" role="tablist" aria-label="Sections">
+      <div class="nav-label">Your network</div>
+      <button class="nav-item active" data-tab="home" role="tab" aria-selected="true">
+        <svg class="icon"><use href="#i-home"/></svg> Home
+      </button>
+      <button class="nav-item" data-tab="friends" role="tab" aria-selected="false">
+        <svg class="icon"><use href="#i-nodes"/></svg> Friends <span class="badge">4</span>
+      </button>
+      <button class="nav-item" data-tab="protection" role="tab" aria-selected="false">
+        <svg class="icon"><use href="#i-shield"/></svg> Protection <span class="badge">58</span>
+      </button>
+      <div class="nav-label">System</div>
+      <button class="nav-item" data-tab="activity" role="tab" aria-selected="false">
+        <svg class="icon"><use href="#i-pulse"/></svg> Activity
+      </button>
+      <button class="nav-item" data-tab="settings" role="tab" aria-selected="false">
+        <svg class="icon"><use href="#i-sliders"/></svg> Settings
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <div class="protect"><svg class="icon sm"><use href="#i-shield"/></svg> Protected · smart routing</div>
+      <div class="device-card">
+        <div class="avatar">B</div>
+        <div class="device-meta"><strong>breadway</strong><span>This laptop</span></div>
+        <i class="dot"></i>
+      </div>
+      <div class="side-version">egress 0.4.105<br>Up to date</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="page-title">Home</h1>
+        <p id="page-sub">Your private connection at a glance.</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn ghost" id="test-btn"><svg class="icon sm"><use href="#i-bolt"/></svg> Test connection</button>
+        <button class="btn primary" id="connect-btn"><svg class="icon sm"><use href="#i-power"/></svg> Disconnect</button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <!-- HOME -->
+      <section class="panel active" id="panel-home" role="tabpanel">
+        <div class="dashboard">
+          <div class="col">
+            <article class="card hero" id="hero">
+              <div class="hero-art"><svg class="icon"><use href="#i-shield"/></svg></div>
+              <div class="hero-top">
+                <span class="status-line" id="status-line"><i class="dot pulse" id="status-dot"></i> <span id="status-text">Protected</span></span>
+                <span class="pill accent" id="route-pill">Relayed via Hestia</span>
+                <span class="right"><a class="card-link" data-open="activity">Details</a></span>
+              </div>
+              <div class="hero-main">
+                <div class="big">58<span class="unit">sites</span></div>
+                <div class="hero-label">unblocked today</div>
+              </div>
+              <div class="hero-metrics">
+                <div class="metric"><span>Speed</span><strong id="live-speed">20.0<em>Mbps</em></strong></div>
+                <div class="metric"><span>Connected</span><strong>3h 12m</strong></div>
+                <div class="metric"><span>Data</span><strong>1.2<em>GB</em></strong></div>
+                <div class="metric"><span>Circle</span><strong>5<em>online</em></strong></div>
+              </div>
+              <svg class="spark" viewBox="0 0 600 58" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#eab672" stop-opacity=".28"/>
+                    <stop offset="1" stop-color="#eab672" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <path d="M0 42 C18 38 26 32 40 34 S62 44 78 40 S102 24 120 28 S146 38 164 34 S190 16 208 22 S234 36 252 32 S278 46 296 40 S320 22 340 26 S366 38 384 32 S410 20 430 24 S456 42 474 36 S500 28 518 32 S544 22 562 26 S586 34 600 28 L600 58 L0 58 Z" fill="url(#spark-fill)"/>
+                <path d="M0 42 C18 38 26 32 40 34 S62 44 78 40 S102 24 120 28 S146 38 164 34 S190 16 208 22 S234 36 252 32 S278 46 296 40 S320 22 340 26 S366 38 384 32 S410 20 430 24 S456 42 474 36 S500 28 518 32 S544 22 562 26 S586 34 600 28" fill="none" stroke="#eab672" stroke-width="1.8" stroke-linecap="round"/>
+                <circle cx="600" cy="28" r="3" fill="#f6c477"/>
+              </svg>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <h2>Sites unblocked today</h2><span class="sub">58 total</span>
+                <div class="right"><a class="card-link" data-open="protection">See all</a></div>
+              </div>
+              <div class="summary-bar" aria-hidden="true"><i class="a" style="width:62%"></i><i class="b" style="width:36%"></i><i class="c" style="width:2%"></i></div>
+              <div class="legend">
+                <span><i style="background:var(--teal)"></i> Via Hestia · 36</span>
+                <span><i style="background:var(--accent)"></i> Via cloud relay · 21</span>
+                <span><i style="background:#4a4a4a"></i> Needs a retry · 1</span>
+              </div>
+              <div class="site-row"><span class="name">speed.cloudflare.com</span><span class="pill share">Via Hestia</span><span class="when">now</span></div>
+              <div class="site-row"><span class="name">1lmnv6z-m.ns1pcdn.net</span><span class="pill cloud">Via cloud relay</span><span class="when">2 min</span></div>
+              <div class="site-row"><span class="name">mega.nz</span><span class="pill share">Via Hestia</span><span class="when">4 min</span></div>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <h2>Recent activity</h2>
+                <div class="right"><a class="card-link" data-open="activity">See all</a></div>
+              </div>
+              <div class="timeline">
+                <div class="event"><span class="time">10:25</span><span class="mark teal"><svg class="icon sm"><use href="#i-check"/></svg></span><div class="text">Hestia is now helping with your connection<small>your traffic is relayed through their home internet</small></div></div>
+                <div class="event"><span class="time">10:18</span><span class="mark green"><svg class="icon sm"><use href="#i-bolt"/></svg></span><div class="text">Found a direct link to Caden<small>faster path, no relay</small></div></div>
+                <div class="event"><span class="time">09:58</span><span class="mark accent"><svg class="icon sm"><use href="#i-shield"/></svg></span><div class="text">Unblocked speed.cloudflare.com<small>via Hestia</small></div></div>
+              </div>
+            </article>
+          </div>
+
+          <div class="col">
+            <article class="card">
+              <div class="card-head"><h2>Your connection</h2><span class="pill accent">Automatic</span></div>
+              <div class="segmented" id="connection-mode">
+                <button class="active">Automatic</button><button>Direct only</button><button>Through a friend</button>
+              </div>
+              <div class="path">
+                <div class="path-step direct">
+                  <div class="node"><svg class="icon sm"><use href="#i-bolt"/></svg></div>
+                  <div class="label">Direct</div><div class="path-note">preferred</div>
+                </div>
+                <div class="path-line"></div>
+                <div class="path-step active">
+                  <div class="node"><svg class="icon sm"><use href="#i-globe"/></svg></div>
+                  <div class="label">Relay</div><div class="path-note">via Hestia</div>
+                </div>
+                <div class="path-line"></div>
+                <div class="path-step">
+                  <div class="node"><svg class="icon sm"><use href="#i-server"/></svg></div>
+                  <div class="label">Cloud backup</div><div class="path-note">if needed</div>
+                </div>
+              </div>
+              <p class="path-hint">A direct path was not available on this network. Hestia is carrying your connection, so your traffic leaves through their home internet.</p>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <h2>Your circle</h2><span class="sub">4 people</span>
+                <div class="right"><button class="btn small ghost"><svg class="icon sm"><use href="#i-plus"/></svg> Invite</button></div>
+              </div>
+              <div class="people">
+                <div class="person-row">
+                  <div class="avatar sm home"><svg class="icon sm"><use href="#i-home"/></svg></div>
+                  <div class="who"><strong>Hestia</strong><span>Sharing their connection</span></div>
+                  <span class="pill share">Sharing</span>
+                </div>
+                <div class="person-row">
+                  <div class="avatar sm pink">C</div>
+                  <div class="who"><strong>Caden</strong><span>Friend · online</span></div>
+                  <span class="pill direct">Direct</span>
+                </div>
+                <div class="person-row">
+                  <div class="avatar sm grey">E</div>
+                  <div class="who"><strong>Ethan</strong><span>Friend · online</span></div>
+                  <span class="pill relay">Relayed</span>
+                </div>
+                <div class="person-row">
+                  <div class="avatar sm grey">N</div>
+                  <div class="who"><strong>Nathan</strong><span>Last seen 2 days ago</span></div>
+                  <span class="pill">Offline</span>
+                </div>
+              </div>
+              <div class="share-row">
+                <div class="copy"><strong>Share my connection</strong><span>Help friends when they are blocked.</span></div>
+                <div class="control"><button class="toggle" role="switch" aria-checked="false" aria-label="Share my connection"></button></div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- FRIENDS -->
+      <section class="panel" id="panel-friends" role="tabpanel" style="max-width:1000px">
+        <div class="panel-tools">
+          <span class="summary">Only people you invite can see you.</span>
+          <div class="right">
+            <label class="search"><svg class="icon sm"><use href="#i-search"/></svg><input id="friend-search" placeholder="Search friends"></label>
+            <div class="chips" id="friend-filters"><button class="chip active">All</button><button class="chip">Online</button><button class="chip">Sharing</button></div>
+          </div>
+        </div>
+
+        <div class="section-label">Your devices</div>
+        <div class="card list-card">
+          <div class="friend-row" data-state="online">
+            <div class="avatar sm">B</div>
+            <div class="who"><strong>breadway</strong><span>This laptop · you</span></div>
+            <span class="pill accent">This device</span>
+            <span class="meta">Online now</span>
+            <a class="more" aria-label="More"><svg class="icon sm"><use href="#i-more"/></svg></a>
+          </div>
+          <div class="friend-row" data-state="online">
+            <div class="avatar sm teal">V</div>
+            <div class="who"><strong>vm-test</strong><span>Windows PC · your device</span></div>
+            <span class="pill relay">Relayed</span>
+            <span class="meta">Online now</span>
+            <a class="more" aria-label="More"><svg class="icon sm"><use href="#i-more"/></svg></a>
+          </div>
+        </div>
+
+        <div class="section-label">Friends</div>
+        <div class="card list-card">
+          <div class="friend-row" data-state="online sharing">
+            <div class="avatar sm home"><svg class="icon sm"><use href="#i-home"/></svg></div>
+            <div class="who"><strong>Hestia</strong><span>Friend · sharing their connection</span></div>
+            <span class="pill share">Sharing</span>
+            <span class="meta">Online now</span>
+            <a class="more" aria-label="More"><svg class="icon sm"><use href="#i-more"/></svg></a>
+          </div>
+          <div class="friend-row" data-state="online">
+            <div class="avatar sm pink">C</div>
+            <div class="who"><strong>Caden</strong><span>Friend</span></div>
+            <span class="pill direct">Direct</span>
+            <span class="meta">Online now</span>
+            <a class="more" aria-label="More"><svg class="icon sm"><use href="#i-more"/></svg></a>
+          </div>
+          <div class="friend-row" data-state="online">
+            <div class="avatar sm grey">E</div>
+            <div class="who"><strong>Ethan</strong><span>Friend</span></div>
+            <span class="pill relay">Relayed</span>
+            <span class="meta">Online now</span>
+            <a class="more" aria-label="More"><svg class="icon sm"><use href="#i-more"/></svg></a>
+          </div>
+          <div class="friend-row" data-state="offline">
+            <div class="avatar sm grey">N</div>
+            <div class="who"><strong>Nathan</strong><span>Friend</span></div>
+            <span class="pill">Offline</span>
+            <span class="meta">2 days ago</span>
+            <a class="more" aria-label="More"><svg class="icon sm"><use href="#i-more"/></svg></a>
+          </div>
+        </div>
+
+        <p class="note" style="margin-top:12px"><svg class="icon"><use href="#i-shield"/></svg><span><strong>Your circle is private.</strong> Only people you invite can join, and you can remove someone at any time. Sharing your connection is always optional.</span></p>
+      </section>
+
+      <!-- PROTECTION -->
+      <section class="panel" id="panel-protection" role="tabpanel">
+        <div class="panel-tools">
+          <span class="summary">58 sites unblocked today</span>
+          <div class="right">
+            <label class="search"><svg class="icon sm"><use href="#i-search"/></svg><input id="site-search" placeholder="Search sites"></label>
+            <div class="chips"><button class="chip active">All</button><button class="chip">Via Hestia</button><button class="chip">Via relay</button><button class="chip">Needs retry</button></div>
+            <button class="btn small"><svg class="icon sm"><use href="#i-plus"/></svg> Report a site</button>
+          </div>
+        </div>
+
+        <div class="card" style="padding-bottom:10px">
+          <div class="stats-card">
+            <div class="stat-block"><span>Unblocked</span><strong>58</strong></div>
+            <div class="stat-block"><span>Via Hestia</span><strong>36</strong></div>
+            <div class="stat-block"><span>Via cloud relay</span><strong>21</strong></div>
+            <div class="stat-block"><span>Needs retry</span><strong>1<em>site</em></strong></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <div class="card-head"><h2>Sites</h2><span class="sub">today</span></div>
+          <div class="site-row"><span class="name">speed.cloudflare.com</span><span class="pill share">Via Hestia</span><span class="when">just now</span></div>
+          <div class="site-row"><span class="name">1lmnv6z-m.ns1pcdn.net</span><span class="pill cloud">Via cloud relay</span><span class="when">2 min</span></div>
+          <div class="site-row"><span class="name">mega.nz</span><span class="pill share">Via Hestia</span><span class="when">4 min</span></div>
+          <div class="site-row"><span class="name">2.arch.pool.ntp.org</span><span class="pill warn">Needs retry</span><span class="when">9 min</span></div>
+          <div class="site-row"><span class="name">spd01-per.au.superloop.com</span><span class="pill cloud">Via cloud relay</span><span class="when">11 min</span></div>
+          <div class="site-row"><span class="name">rr1.sn-2ontq5-59.googlevideo.com</span><span class="pill share">Via Hestia</span><span class="when">14 min</span></div>
+          <div class="site-row"><span class="name">addons.liberationuage.com</span><span class="pill cloud">Via cloud relay</span><span class="when">18 min</span></div>
+        </div>
+
+        <p class="note" style="margin-top:12px"><svg class="icon"><use href="#i-shield"/></svg><span><strong>Only blocked sites take the private path.</strong> Everything else stays on your normal connection. egress learns what your network blocks and shares that with your circle, never your browsing history.</span></p>
+      </section>
+
+      <!-- ACTIVITY -->
+      <section class="panel" id="panel-activity" role="tabpanel">
+        <div class="panel-tools">
+          <span class="summary">Recent events on your connection</span>
+          <div class="right"><div class="chips" id="activity-filters"><button class="chip active">All</button><button class="chip">Connections</button><button class="chip">Friends</button><button class="chip">Protection</button></div></div>
+        </div>
+        <div class="card">
+          <div class="event"><span class="time">10:25</span><span class="mark teal"><svg class="icon sm"><use href="#i-check"/></svg></span><div class="text">Hestia is now helping with your connection<small>relayed through their home internet · 20.0 Mbps</small></div></div>
+          <div class="event"><span class="time">10:25</span><span class="mark teal"><svg class="icon sm"><use href="#i-nodes"/></svg></span><div class="text">Your Windows PC got its own connection to Hestia<small>each device now gets its own connection</small></div></div>
+          <div class="event"><span class="time">10:18</span><span class="mark green"><svg class="icon sm"><use href="#i-bolt"/></svg></span><div class="text">Found a direct link to Caden<small>faster path without a relay</small></div></div>
+          <div class="event"><span class="time">10:12</span><span class="mark"><svg class="icon sm"><use href="#i-refresh"/></svg></span><div class="text">Switched to the relay for your Windows PC<small>a direct path was not available</small></div></div>
+          <div class="event"><span class="time">10:05</span><span class="mark"><svg class="icon sm"><use href="#i-refresh"/></svg></span><div class="text">Your Windows PC refreshed its connection to Hestia<small>the new route is ready</small></div></div>
+          <div class="event"><span class="time">09:58</span><span class="mark accent"><svg class="icon sm"><use href="#i-shield"/></svg></span><div class="text">Unblocked speed.cloudflare.com<small>learned by your circle · via Hestia</small></div></div>
+          <div class="event"><span class="time">09:42</span><span class="mark accent"><svg class="icon sm"><use href="#i-globe"/></svg></span><div class="text">Started using Hestia's connection<small>Hestia chose to share with you</small></div></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="panel" id="panel-settings" role="tabpanel">
+        <div class="panel-tools">
+          <span class="summary">Changes apply immediately.</span>
+          <div class="right"><button class="btn small ghost">Get help</button><button class="btn small" id="update-btn">Check for updates</button></div>
+        </div>
+        <div class="settings-grid">
+          <article class="card">
+            <div class="card-head"><h3>Connection</h3></div>
+            <div class="setting"><div class="copy"><strong>Connect automatically</strong><span>Start egress when you sign in.</span></div><div class="control"><button class="toggle on" role="switch" aria-checked="true"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Smart routing</strong><span>Direct when possible, relay when needed.</span></div><div class="control"><button class="toggle on" role="switch" aria-checked="true"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Allow relay fallback</strong><span>Use a trusted relay if a direct path fails.</span></div><div class="control"><button class="toggle on" role="switch" aria-checked="true"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Relay region</strong><span>Choose the closest cloud relay.</span></div><div class="control"><select class="select"><option selected>Automatic</option><option>Sydney</option><option>Singapore</option><option>Los Angeles</option></select></div></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Sharing</h3></div>
+            <div class="setting"><div class="copy"><strong>Share my connection</strong><span>Let friends in your circle use your internet.</span></div><div class="control"><button class="toggle" role="switch" aria-checked="false"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Who can use it</strong><span>People in your circle only.</span></div><div class="control"><select class="select"><option selected>Friends only</option><option>Close friends</option><option>Nobody</option></select></div></div>
+            <div class="setting"><div class="copy"><strong>Monthly limit</strong><span>Stop sharing after this much data.</span></div><div class="control"><input class="input" value="50 GB"></div></div>
+            <div class="setting"><div class="copy"><strong>Sharing uses your data</strong><span>Friends' traffic counts toward your home plan.</span></div><div class="control"><svg class="icon sm faint"><use href="#i-alert"/></svg></div></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Privacy</h3></div>
+            <div class="setting"><div class="copy"><strong>Hide my public address</strong><span>Friends only see a relayed connection.</span></div><div class="control"><button class="toggle" role="switch" aria-checked="false"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Relay only</strong><span>Never try a direct connection.</span></div><div class="control"><button class="toggle" role="switch" aria-checked="false"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Share blocked-site reports</strong><span>Help your circle learn which sites are blocked.</span></div><div class="control"><button class="toggle on" role="switch" aria-checked="true"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Clear my activity</strong><span>Remove the local history on this device.</span></div><div class="control"><button class="btn small ghost">Clear</button></div></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Notifications and appearance</h3></div>
+            <div class="setting"><div class="copy"><strong>Friend comes online</strong><span>Know when someone in your circle is around.</span></div><div class="control"><button class="toggle on" role="switch" aria-checked="true"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Site unblocked</strong><span>A quiet note when egress fixes a site.</span></div><div class="control"><button class="toggle" role="switch" aria-checked="false"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Connection drops</strong><span>Tell me if protection stops.</span></div><div class="control"><button class="toggle on" role="switch" aria-checked="true"></button></div></div>
+            <div class="setting"><div class="copy"><strong>Accent</strong><span>Follows your wallpaper through bread-theme.</span></div><div class="control"><div class="swatches"><i style="background:#eab672"></i><i style="background:#e3a85c"></i><i style="background:#f6c477"></i><i style="background:#8fc3bd"></i></div></div></div>
+            <div class="setting"><div class="copy"><strong>Text size</strong><span>Comfortable · Varela Round 14 px</span></div><div class="control"><select class="select"><option selected>Comfortable</option><option>Compact</option><option>Large</option></select></div></div>
+          </article>
+
+        </div>
+      </section>
+    </div>
+
+    <footer class="statusbar">
+      <span class="item"><i class="dot" id="footer-dot"></i> <span id="footer-status">Protected</span></span>
+      <span class="item"><svg class="icon sm"><use href="#i-shield"/></svg> 58 sites unblocked today</span>
+      <span class="item"><svg class="icon sm"><use href="#i-globe"/></svg> 1.2 GB used</span>
+      <div class="right">
+        <span>3h 12m</span>
+        <span>Smart routing</span>
+        <span class="mono">0.4.105</span>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<div class="toast" id="toast"><svg class="icon sm"><use href="#i-check"/></svg><span id="toast-text">Everything looks good</span></div>
+
+<script>
+const titles = {
+  home: ["Home", "Your private connection at a glance."],
+  friends: ["Friends", "People and devices in your circle."],
+  protection: ["Protection", "Sites egress has unblocked for you."],
+  activity: ["Activity", "What happened on your connection."],
+  settings: ["Settings", "Connection, sharing and privacy."]
+};
+const nav = [...document.querySelectorAll(".nav-item")];
+const panels = [...document.querySelectorAll(".panel")];
+function show(tab) {
+  nav.forEach(n => { const on = n.dataset.tab === tab; n.classList.toggle("active", on); n.setAttribute("aria-selected", on); });
+  panels.forEach(p => p.classList.toggle("active", p.id === "panel-" + tab));
+  const [t, s] = titles[tab] || titles.home;
+  document.getElementById("page-title").textContent = t;
+  document.getElementById("page-sub").textContent = s;
+}
+nav.forEach(n => n.addEventListener("click", () => { show(n.dataset.tab); history.replaceState(null, "", "#" + n.dataset.tab); }));
+window.addEventListener("hashchange", () => show(location.hash.slice(1) || "home"));
+if (location.hash) show(location.hash.slice(1));
+document.querySelectorAll("[data-open]").forEach(a => a.addEventListener("click", () => { show(a.dataset.open); history.replaceState(null, "", "#" + a.dataset.open); }));
+
+document.querySelectorAll(".toggle").forEach(t => {
+  t.addEventListener("click", () => {
+    t.classList.toggle("on");
+    t.setAttribute("aria-checked", t.classList.contains("on"));
+  });
+});
+
+document.querySelectorAll("#connection-mode button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#connection-mode button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    if (b.textContent.trim() === "Through a friend") say("Choose a friend from your circle to carry your connection");
+    if (b.textContent.trim() === "Direct only") say("Relay fallback is off. Some sites may not be reachable");
+  });
+});
+
+let toastTimer;
+const toast = document.getElementById("toast");
+const toastText = document.getElementById("toast-text");
+function say(text) {
+  toastText.textContent = text;
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
+}
+document.getElementById("test-btn").addEventListener("click", () => say("Everything looks good. Direct 18 ms, relay 54 ms"));
+document.getElementById("update-btn").addEventListener("click", () => say("You are on the latest version, 0.4.105"));
+
+const connectBtn = document.getElementById("connect-btn");
+const statusLine = document.getElementById("status-line");
+const statusDot = document.getElementById("status-dot");
+const statusText = document.getElementById("status-text");
+const routePill = document.getElementById("route-pill");
+const footerDot = document.getElementById("footer-dot");
+const footerStatus = document.getElementById("footer-status");
+let connected = true;
+connectBtn.addEventListener("click", () => {
+  connected = !connected;
+  statusLine.classList.toggle("off", !connected);
+  statusDot.classList.toggle("off", !connected);
+  statusDot.classList.toggle("pulse", connected);
+  statusText.textContent = connected ? "Protected" : "Disconnected";
+  routePill.textContent = connected ? "Relayed via Hestia" : "Not connected";
+  routePill.classList.toggle("accent", connected);
+  connectBtn.innerHTML = connected
+    ? '<svg class="icon sm"><use href="#i-power"/></svg> Disconnect'
+    : '<svg class="icon sm"><use href="#i-power"/></svg> Connect';
+  footerDot.classList.toggle("off", !connected);
+  footerStatus.textContent = connected ? "Protected" : "Disconnected";
+  say(connected ? "Reconnected. You are protected again" : "Disconnected. Your normal connection is back");
+});
+
+const friendSearch = document.getElementById("friend-search");
+if (friendSearch) friendSearch.addEventListener("input", () => {
+  const q = friendSearch.value.toLowerCase();
+  document.querySelectorAll("#panel-friends .friend-row").forEach(r => { r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none"; });
+});
+const siteSearch = document.getElementById("site-search");
+if (siteSearch) siteSearch.addEventListener("input", () => {
+  const q = siteSearch.value.toLowerCase();
+  document.querySelectorAll("#panel-protection .site-row").forEach(r => { r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none"; });
+});
+document.querySelectorAll(".chips").forEach(group => {
+  group.addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    group.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    const f = chip.textContent.trim().toLowerCase();
+    if (group.id === "friend-filters") {
+      document.querySelectorAll("#panel-friends .friend-row").forEach(r => {
+        const state = (r.dataset.state || "").toLowerCase();
+        r.style.display = (f === "all" || state.includes(f === "online" ? "online" : "sharing")) ? "" : "none";
+      });
+    }
+  });
+});
+
+const speed = document.getElementById("live-speed");
+let speedVal = 20.0;
+setInterval(() => {
+  if (!connected) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  speedVal = Math.min(21.2, Math.max(18.9, speedVal + (Math.random() - 0.5) * 0.5));
+  speed.innerHTML = speedVal.toFixed(1) + '<em>Mbps</em>';
+}, 2400);
+</script>
+</body>
+</html>
