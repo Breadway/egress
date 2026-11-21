@@ -131,7 +131,7 @@ func cmdExitServe(args []string) error {
 		appLogger().Printf("exit: announce: %v", err)
 	}
 
-	active := map[string]bool{}
+	active := map[string]string{}
 	links := map[string]*derpLink{}
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
@@ -178,7 +178,7 @@ type exitClient struct {
 // mode it also keeps one relayed UDP link per client, connected to the local
 // WireGuard listener, which is what a CGNAT exit uses instead of a public
 // listener.
-func reconcileExitClients(dev string, active map[string]bool, relay *derpTransport, wgPort int, links map[string]*derpLink, derpMode bool) error {
+func reconcileExitClients(dev string, active map[string]string, relay *derpTransport, wgPort int, links map[string]*derpLink, derpMode bool) error {
 	var out struct {
 		Clients []exitClient `json:"clients"`
 	}
@@ -192,12 +192,15 @@ func reconcileExitClients(dev string, active map[string]bool, relay *derpTranspo
 		}
 		want[c.PubKey] = c
 	}
-	for pubkey := range active {
+	for pubkey, ip := range active {
 		if _, ok := want[pubkey]; ok {
 			continue
 		}
 		if err := logx.RunLogged("wg", "set", dev, "peer", pubkey, "remove"); err != nil {
 			return err
+		}
+		if runtime.GOOS == "linux" {
+			_ = logx.RunLogged("ip", "route", "del", ip+"/32", "dev", dev)
 		}
 		delete(active, pubkey)
 		if link := links[pubkey]; link != nil {
@@ -206,11 +209,19 @@ func reconcileExitClients(dev string, active map[string]bool, relay *derpTranspo
 		}
 	}
 	for pubkey, c := range want {
-		if !active[pubkey] {
+		if _, ok := active[pubkey]; !ok {
 			if err := logx.RunLogged("wg", "set", dev, "peer", pubkey, "allowed-ips", c.IP+"/32"); err != nil {
 				return fmt.Errorf("add %s (%s): %w", c.Label, c.IP, err)
 			}
-			active[pubkey] = true
+			// The exit's own route must point the client's return traffic at
+			// this interface, especially when it is not the one that owns the
+			// tunnel subnet.
+			if runtime.GOOS == "linux" {
+				if err := logx.RunLogged("ip", "route", "replace", c.IP+"/32", "dev", dev); err != nil {
+					return fmt.Errorf("route %s via %s: %w", c.IP, dev, err)
+				}
+			}
+			active[pubkey] = c.IP
 			appLogger().Printf("exit: carrying traffic for %s (%s)", c.Label, c.IP)
 		}
 		if !derpMode || links[pubkey] != nil {

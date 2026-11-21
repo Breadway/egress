@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"egress/internal/core"
@@ -32,6 +33,20 @@ type peerExitInfo struct {
 // the person using it should make.
 func peerExitPrefPath() string {
 	return filepath.Join(filepath.Dir(core.DeviceIdentityPath()), "prefer-peer-exit")
+}
+
+// peerExitChoicePath pins one offered exit by id. An empty file means the
+// first exit in the server's order, which is the default.
+func peerExitChoicePath() string {
+	return filepath.Join(filepath.Dir(core.DeviceIdentityPath()), "peer-exit-id")
+}
+
+func peerExitChoice() string {
+	data, err := os.ReadFile(peerExitChoicePath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func peerExitPreferred() bool {
@@ -60,12 +75,36 @@ func cmdPeerExit(args []string) error {
 		}
 		fmt.Println("peer exits disabled; blocked traffic will use the published exit")
 		return nil
+	case "use":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return errors.New("usage: egress peer-exit use <exit-id>")
+		}
+		id := strings.TrimSpace(args[1])
+		if err := os.MkdirAll(filepath.Dir(peerExitChoicePath()), 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(peerExitChoicePath(), []byte(id+"\n"), 0644); err != nil {
+			return err
+		}
+		fmt.Printf("preferred peer exit: %s\n", id)
+		return nil
+	case "auto":
+		if err := os.Remove(peerExitChoicePath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Println("peer exit choice cleared; the first offered exit is used")
+		return nil
 	case "status":
 		state := "off"
 		if peerExitPreferred() {
 			state = "on"
 		}
 		fmt.Printf("peer exits: %s\n", state)
+		if choice := peerExitChoice(); choice != "" {
+			fmt.Printf("preferred: %s\n", choice)
+		} else {
+			fmt.Println("preferred: auto")
+		}
 		exits, err := fetchPeerExits(context.Background())
 		if err != nil {
 			return err
@@ -135,23 +174,40 @@ func (p *peerExitPoller) refresh(ctx context.Context) {
 		p.direct.SetPeerExits(nil, false)
 		return
 	}
+	chosen := exits[0]
+	if want := peerExitChoice(); want != "" {
+		for _, e := range exits {
+			if e.ID == want {
+				chosen = e
+				break
+			}
+		}
+	}
+	// The direct exit manager uses the first entry, so put the chosen exit
+	// there and keep the rest as fallbacks.
 	list := make([]split.DirectExit, 0, len(exits))
-	for _, e := range exits {
+	add := func(e peerExitInfo) {
 		list = append(list, split.DirectExit{
 			ID: e.ID, Label: e.Label, Transport: e.Transport,
 			Endpoint: e.Endpoint, Path: e.Path, PubKey: e.PubKey, RelayKey: e.RelayKey,
 		})
 	}
+	add(chosen)
+	for _, e := range exits {
+		if e.ID != chosen.ID {
+			add(e)
+		}
+	}
 	p.direct.SetPeerExits(list, true)
 	// Announce on every refresh: the record is idempotent, and re-sending it
 	// recovers the exit's peer list after a server restart.
-	if err := announceExitUse(ctx, exits[0].ID); err != nil {
+	if err := announceExitUse(ctx, chosen.ID); err != nil {
 		p.log.Printf("peer exits: announce use: %v", err)
 		return
 	}
-	if exits[0].ID != p.used {
-		p.log.Printf("peer exits: using %s (%s)", exits[0].ID, exits[0].Endpoint)
-		p.used = exits[0].ID
+	if chosen.ID != p.used {
+		p.log.Printf("peer exits: using %s (%s)", chosen.ID, chosen.Endpoint)
+		p.used = chosen.ID
 	}
 }
 
