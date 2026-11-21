@@ -313,6 +313,16 @@ func TestPeerManagerRelayedPeerUsesDERP(t *testing.T) {
 	if m.relay.byDerp[derpRaw] == nil {
 		t.Fatal("relay registration was dropped on demotion")
 	}
+	if !link.derpPassive {
+		t.Fatal("link should be registered passively after demotion")
+	}
+	// The other side connects later; the idle registration sees the handshake
+	// and promotes without waiting for another attempt.
+	m.handshake = func(dev, pubkey string) (time.Duration, bool) { return 5 * time.Second, true }
+	m.reconcile()
+	if !link.derped || link.derpPassive {
+		t.Fatalf("idle registration should promote on a handshake: %+v", link)
+	}
 }
 
 // A direct attempt that does not answer moves to DERP, not straight to the
