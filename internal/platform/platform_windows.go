@@ -905,13 +905,18 @@ func (p windowsPlatform) EnsureRelayPeer(dev, pubkey, endpoint string, allowed [
 	}
 	conf := string(data)
 	had := hasPeer(conf, pubkey)
+	before := peerAllowedIPs(conf, pubkey)
 	updated, changed := renderRelayPeer(conf, pubkey, endpoint, allowed)
 	if changed {
 		if err := os.WriteFile(path, []byte(updated), 0600); err != nil {
 			return false, fmt.Errorf("write %s: %w", path, err)
 		}
 	}
-	if had {
+	// The Windows tunnel builds its inbound filters when the service starts.
+	// A peer that gains a destination after start-up would carry outbound
+	// traffic but drop the replies until the service reloads the config, so
+	// restart when the allowed set expands. Removals need no restart.
+	if had && !allowedAdds(before, allowed) {
 		return false, nil
 	}
 	uninstallTunnel(dev)
@@ -941,99 +946,6 @@ func (p windowsPlatform) RemoveRelayPeer(dev, pubkey string) error {
 		return nil
 	}
 	return os.WriteFile(path, []byte(updated), 0600)
-}
-
-func hasPeer(conf, pubkey string) bool {
-	_, peers := splitPeerBlocks(conf)
-	for _, block := range peers {
-		if peerPublicKey(block) == pubkey {
-			return true
-		}
-	}
-	return false
-}
-
-func renderRelayPeer(conf, pubkey, endpoint string, allowed []string) (string, bool) {
-	prelude, peers := splitPeerBlocks(conf)
-	// A passive peer carries no routes and no endpoint: it exists only so an
-	// inbound handshake from the other side is accepted and its address learned.
-	exitBlock := "[Peer]\nPublicKey = " + pubkey
-	if len(allowed) > 0 {
-		exitBlock += "\nAllowedIPs = " + strings.Join(allowed, ",")
-	}
-	if endpoint != "" {
-		exitBlock += "\nEndpoint = " + endpoint + "\nPersistentKeepalive = 25"
-	}
-	var out []string
-	if strings.TrimSpace(prelude) != "" {
-		out = append(out, strings.TrimRight(prelude, "\n"))
-	}
-	for _, block := range peers {
-		if peerPublicKey(block) == pubkey {
-			out = append(out, exitBlock)
-			continue
-		}
-		out = append(out, strings.TrimRight(block, "\n"))
-	}
-	if !hasPeer(conf, pubkey) {
-		out = append(out, exitBlock)
-	}
-	updated := strings.Join(out, "\n\n") + "\n"
-	return updated, updated != conf
-}
-
-func removePeerBlock(conf, pubkey string) (string, bool) {
-	prelude, peers := splitPeerBlocks(conf)
-	var out []string
-	if strings.TrimSpace(prelude) != "" {
-		out = append(out, strings.TrimRight(prelude, "\n"))
-	}
-	changed := false
-	for _, block := range peers {
-		if peerPublicKey(block) == pubkey {
-			changed = true
-			continue
-		}
-		out = append(out, strings.TrimRight(block, "\n"))
-	}
-	if !changed {
-		return conf, false
-	}
-	return strings.Join(out, "\n\n") + "\n", true
-}
-
-func splitPeerBlocks(conf string) (string, []string) {
-	var prelude, peers, cur []string
-	inPeer := false
-	for _, line := range strings.Split(conf, "\n") {
-		if strings.EqualFold(strings.TrimSpace(line), "[Peer]") {
-			if inPeer && len(cur) > 0 {
-				peers = append(peers, strings.Join(cur, "\n"))
-			}
-			cur = []string{line}
-			inPeer = true
-			continue
-		}
-		if inPeer {
-			cur = append(cur, line)
-		} else {
-			prelude = append(prelude, line)
-		}
-	}
-	if inPeer && len(cur) > 0 {
-		peers = append(peers, strings.Join(cur, "\n"))
-	}
-	return strings.Join(prelude, "\n"), peers
-}
-
-func peerPublicKey(block string) string {
-	for _, line := range strings.Split(block, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok && strings.EqualFold(strings.TrimSpace(key), "PublicKey") {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 // RemovePeer drops a peer, which also removes the destinations it carried.
