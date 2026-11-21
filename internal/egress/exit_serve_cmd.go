@@ -151,7 +151,12 @@ func cmdExitServe(args []string) error {
 				_ = logx.RunLogged("wg", "set", *dev, "peer", pubkey, "remove")
 			}
 			for _, cur := range links {
-				cur.link.Close()
+				if cur.base != nil {
+					cur.base.Close()
+				}
+				if cur.slot != nil {
+					cur.slot.Close()
+				}
 			}
 			if slots != nil {
 				slots.close()
@@ -179,11 +184,14 @@ type exitClient struct {
 	DerpPubKey string `json:"derp_pubkey"`
 }
 
-// activeExitLink records which relay transport carries a client's UDP link.
-// A client starts on the exit's base identity and moves to its own slot.
+// activeExitLink tracks the two relay links a client may have: the shared base
+// identity it uses while a slot is being allocated, and its own slot. Both stay
+// open until the slot has actually carried traffic, so the switch never leaves
+// the client without a path.
 type activeExitLink struct {
-	link      *derpLink
-	transport *derpTransport
+	base       *derpLink
+	slot       *derpLink
+	baseClosed bool
 }
 
 // reconcileExitClients adds a WireGuard peer for every device that chose this
@@ -215,7 +223,12 @@ func reconcileExitClients(ctx context.Context, dev string, active map[string]exi
 			_ = logx.RunLogged("ip", "route", "del", cur.IP+"/32", "dev", dev)
 		}
 		if link := links[pubkey]; link != nil {
-			link.link.Close()
+			if link.base != nil {
+				link.base.Close()
+			}
+			if link.slot != nil {
+				link.slot.Close()
+			}
 			delete(links, pubkey)
 		}
 		if slots != nil {
@@ -242,36 +255,50 @@ func reconcileExitClients(ctx context.Context, dev string, active map[string]exi
 		if !derpMode {
 			continue
 		}
-		wantTransport := relay
-		if slots != nil {
-			slot, serr := slots.ensure(c.ID)
-			if serr != nil {
-				appLogger().Printf("exit: slot for %s: %v", c.Label, serr)
-			} else {
-				wantTransport = slot.transport
-			}
-		}
-		if wantTransport == nil {
-			continue
-		}
-		if cur := links[pubkey]; cur != nil {
-			if cur.transport == wantTransport {
-				continue
-			}
-			// The slot was just created; move the link to its own identity.
-			cur.link.Close()
-		}
 		key, err := decodeKey(c.DerpPubKey)
 		if err != nil {
 			appLogger().Printf("exit: %s has no usable relay key: %v", c.Label, err)
 			continue
 		}
-		link, err := wantTransport.AttachDial(key, fmt.Sprintf("127.0.0.1:%d", wgPort))
-		if err != nil {
-			return fmt.Errorf("relay link for %s: %w", c.Label, err)
+		target := fmt.Sprintf("127.0.0.1:%d", wgPort)
+		cur := links[pubkey]
+		if cur == nil {
+			cur = &activeExitLink{}
+			links[pubkey] = cur
 		}
-		links[pubkey] = &activeExitLink{link: link, transport: wantTransport}
-		appLogger().Printf("exit: relaying for %s over DERP", c.Label)
+		// Stay on the shared base identity until a slot exists.
+		if relay != nil && cur.base == nil && !cur.baseClosed {
+			link, berr := relay.AttachDial(key, target)
+			if berr != nil {
+				return fmt.Errorf("base relay link for %s: %w", c.Label, berr)
+			}
+			cur.base = link
+			appLogger().Printf("exit: base link for %s over DERP", c.Label)
+		}
+		if slots == nil {
+			continue
+		}
+		slot, serr := slots.ensure(c.ID)
+		if serr != nil {
+			appLogger().Printf("exit: slot for %s: %v", c.Label, serr)
+			continue
+		}
+		if cur.slot == nil {
+			link, lerr := slot.transport.AttachDial(key, target)
+			if lerr != nil {
+				return fmt.Errorf("slot relay link for %s: %w", c.Label, lerr)
+			}
+			cur.slot = link
+			appLogger().Printf("exit: slot link for %s over DERP", c.Label)
+		}
+		// Once the client has sent on its slot, the shared base link is no
+		// longer needed for it.
+		if cur.slot != nil && cur.slot.Used() && cur.base != nil {
+			cur.base.Close()
+			cur.base = nil
+			cur.baseClosed = true
+			appLogger().Printf("exit: %s is on its slot; closed the base link", c.Label)
+		}
 	}
 	if slots != nil {
 		slots.announce(ctx)

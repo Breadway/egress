@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"egress/internal/core"
@@ -61,6 +62,7 @@ type derpLink struct {
 	conn      *net.UDPConn
 	dialed    bool
 	last      addrSlot
+	lastRecv  atomic.Int64
 	once      sync.Once
 }
 
@@ -178,6 +180,10 @@ func (t *derpTransport) unregister(link *derpLink) {
 	t.mu.Unlock()
 }
 
+// Used reports whether any datagram has arrived from WireGuard on this link.
+// An exit uses it to tell whether a client has moved to its slot.
+func (l *derpLink) Used() bool { return l.lastRecv.Load() != 0 }
+
 // LocalAddr is the address to give WireGuard.
 func (l *derpLink) LocalAddr() string { return l.conn.LocalAddr().String() }
 
@@ -199,6 +205,7 @@ func (l *derpLink) readLoop() {
 		if !l.dialed {
 			l.last.store(addr)
 		}
+		l.lastRecv.Store(time.Now().UnixNano())
 		l.transport.send(l.remote, buf[:n])
 	}
 }
