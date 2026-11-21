@@ -743,13 +743,21 @@ func cmdSupervise(args []string) error {
 	}
 	var splitter *split.Controller
 	var direct *directExit
+	// One relay connection per device serves peer links, an exit this device
+	// uses, and clients using this device as an exit.
+	var relay *derpTransport
+	if t, derr := newDERPTransport(appLogger()); derr == nil {
+		relay = t
+	} else {
+		appLogger().Printf("derp: unavailable: %v", derr)
+	}
 	if !*noTunnel || *relayTunnel {
 		routes := split.NewRouteManager(splitDev, appLogger())
 		if ps, ok := plat.(peerSetter); ok {
 			// Direct exits carry blocked traffic themselves; this owns the peer
 			// set for both the exit and Aegis, so the routed destinations and
 			// the peer allowed-ips move together.
-			direct = newDirectExit(ps, splitDev, appLogger())
+			direct = newDirectExit(ps, splitDev, relay, appLogger())
 			routes.OnChange(direct.SetPrefixes)
 		}
 		splitter = split.NewController(split.NetworkKey("", gateway), iface, routes, appLogger())
@@ -772,6 +780,9 @@ func cmdSupervise(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if relay != nil {
+		go relay.Run(ctx)
+	}
 	if direct != nil {
 		go direct.Run(ctx)
 		go newPeerExitPoller(direct, appLogger()).Run(ctx)
@@ -785,13 +796,6 @@ func cmdSupervise(args []string) error {
 		}
 		// DERP is preferred over the Aegis star for peer links that cannot be
 		// dialled directly. It is a fallback only; a direct path always wins.
-		var relay *derpTransport
-		if t, derr := newDERPTransport(appLogger()); derr == nil {
-			relay = t
-			go t.Run(ctx)
-		} else {
-			appLogger().Printf("derp: unavailable: %v", derr)
-		}
 		go newPeerManager(peers, splitDev, appLogger(), exitOwner, relay).Run(ctx)
 	}
 	if *relayTunnel {

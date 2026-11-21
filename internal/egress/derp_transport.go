@@ -28,9 +28,11 @@ const (
 	derpDefaultRegion = "syd"
 )
 
-// derpTransport keeps one DERP connection for this device and a loopback UDP
-// socket per peer. WireGuard sends to that socket; the transport relays the
-// datagrams to the peer's relay key, which is separate from its WireGuard key.
+// derpTransport is one DERP connection per device, shared by everything that
+// needs the relay: peer links, an exit this device consumes, and clients using
+// this device as an exit. A second connection with the same node key would be
+// a duplicate key, and the relay would shadow one of them, so there is exactly
+// one client and a route table keyed by the remote relay key.
 type derpTransport struct {
 	log    *log.Logger
 	priv   [32]byte
@@ -39,21 +41,24 @@ type derpTransport struct {
 
 	mu      sync.Mutex
 	client  *derp.Client
-	peers   map[[32]byte]*derpPeer
-	byDerp  map[[32]byte]*derpPeer
+	routes  map[[32]byte]*derpLink
 	relays  []derp.Relay
 	next    int
 	lastErr string
 }
 
-type derpPeer struct {
-	wgText  string
-	derpKey [32]byte
-	conn    *net.UDPConn
-	last    addrSlot
+// derpLink is one local UDP socket attached to a remote relay key. WireGuard
+// writes to the socket (Attach), or the socket dials the WireGuard listener
+// (AttachDial), and the link carries those datagrams over the shared relay.
+type derpLink struct {
+	transport *derpTransport
+	remote    [32]byte
+	conn      *net.UDPConn
+	dialed    bool
+	last      addrSlot
+	once      sync.Once
 }
 
-// addrSlot stores the source address WireGuard last sent from.
 type addrSlot struct {
 	mu  sync.Mutex
 	udp *net.UDPAddr
@@ -85,50 +90,12 @@ func newDERPTransport(logger *log.Logger) (*derpTransport, error) {
 	}
 	return &derpTransport{
 		log: logger, priv: priv, public: pub,
-		peers: map[[32]byte]*derpPeer{}, byDerp: map[[32]byte]*derpPeer{},
+		routes: map[[32]byte]*derpLink{},
 	}, nil
 }
 
-// PublicKey is the relay identity this device publishes.
-func (t *derpTransport) PublicKey() string { return t.public }
-
-// Endpoint returns the loopback address WireGuard should use for this peer.
-// wgPubkey identifies the WireGuard peer; derpPubkey is the relay address the
-// datagrams are sent to.
-func (t *derpTransport) Endpoint(wgPubkey, derpPubkey string) (string, error) {
-	wgRaw, err := decodeKey(wgPubkey)
-	if err != nil {
-		return "", fmt.Errorf("peer key: %w", err)
-	}
-	derpRaw, err := decodeKey(derpPubkey)
-	if err != nil {
-		return "", fmt.Errorf("relay key: %w", err)
-	}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if peer, ok := t.peers[wgRaw]; ok {
-		if peer.derpKey == derpRaw {
-			return peer.conn.LocalAddr().String(), nil
-		}
-		// The peer re-announced a different relay key; stop routing the old
-		// one before the new socket takes over.
-		delete(t.byDerp, peer.derpKey)
-		peer.derpKey = derpRaw
-		t.byDerp[derpRaw] = peer
-		return peer.conn.LocalAddr().String(), nil
-	}
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		return "", fmt.Errorf("derp local socket: %w", err)
-	}
-	peer := &derpPeer{wgText: wgPubkey, derpKey: derpRaw, conn: conn}
-	t.peers[wgRaw] = peer
-	t.byDerp[derpRaw] = peer
-	go t.readPeer(peer)
-	return conn.LocalAddr().String(), nil
-}
-
+// decodeKey parses a base64 32-byte key, which is how peer and relay keys
+// travel in JSON.
 func decodeKey(text string) ([32]byte, error) {
 	var out [32]byte
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(text))
@@ -139,39 +106,109 @@ func decodeKey(text string) ([32]byte, error) {
 	return out, nil
 }
 
-// Release closes the peer's local socket.
-func (t *derpTransport) Release(wgPubkey string) {
-	raw, err := decodeKey(wgPubkey)
+// PublicKey is the relay identity this device publishes.
+func (t *derpTransport) PublicKey() string { return t.public }
+
+// Attach returns a loopback socket that WireGuard should use as a peer
+// endpoint. Datagrams read from it go to the remote relay key; datagrams from
+// that key are written back to the last WireGuard source address.
+func (t *derpTransport) Attach(remote [32]byte) (*derpLink, error) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
-		return
+		return nil, fmt.Errorf("derp local socket: %w", err)
 	}
-	t.mu.Lock()
-	peer := t.peers[raw]
-	delete(t.peers, raw)
-	if peer != nil {
-		delete(t.byDerp, peer.derpKey)
+	link := &derpLink{transport: t, remote: remote, conn: conn}
+	if err := t.register(link); err != nil {
+		conn.Close()
+		return nil, err
 	}
-	t.mu.Unlock()
-	if peer != nil {
-		peer.conn.Close()
-	}
+	go link.readLoop()
+	return link, nil
 }
 
-func (t *derpTransport) readPeer(peer *derpPeer) {
+// AttachDial returns a socket connected to target. Replies from target go to
+// the remote relay key. It is the exit side: WireGuard listens on target, and
+// the link speaks for one relayed client.
+func (t *derpTransport) AttachDial(remote [32]byte, target string) (*derpLink, error) {
+	addr, err := net.ResolveUDPAddr("udp", target)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("derp exit socket: %w", err)
+	}
+	link := &derpLink{transport: t, remote: remote, conn: conn, dialed: true}
+	if err := t.register(link); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	go link.readLoop()
+	return link, nil
+}
+
+func (t *derpTransport) register(link *derpLink) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if existing, ok := t.routes[link.remote]; ok && existing != link {
+		return errors.New("that relay key is already attached")
+	}
+	t.routes[link.remote] = link
+	return nil
+}
+
+func (t *derpTransport) unregister(link *derpLink) {
+	t.mu.Lock()
+	if t.routes[link.remote] == link {
+		delete(t.routes, link.remote)
+	}
+	t.mu.Unlock()
+}
+
+// LocalAddr is the address to give WireGuard.
+func (l *derpLink) LocalAddr() string { return l.conn.LocalAddr().String() }
+
+// Close ends the link and removes its route.
+func (l *derpLink) Close() {
+	l.once.Do(func() {
+		l.conn.Close()
+		l.transport.unregister(l)
+	})
+}
+
+func (l *derpLink) readLoop() {
 	buf := make([]byte, 65535)
 	for {
-		n, addr, err := peer.conn.ReadFromUDP(buf)
+		n, addr, err := l.conn.ReadFromUDP(buf)
 		if err != nil {
 			return
 		}
-		peer.last.store(addr)
-		client := t.currentClient()
-		if client == nil {
-			continue
+		if !l.dialed {
+			l.last.store(addr)
 		}
-		if err := client.Send(peer.derpKey, buf[:n]); err != nil {
-			t.log.Printf("derp: send to %x: %v", peer.derpKey[:4], err)
-		}
+		l.transport.send(l.remote, buf[:n])
+	}
+}
+
+func (l *derpLink) deliver(pkt []byte) {
+	if l.dialed {
+		_, _ = l.conn.Write(pkt)
+		return
+	}
+	addr := l.last.load()
+	if addr == nil {
+		return
+	}
+	_, _ = l.conn.WriteToUDP(pkt, addr)
+}
+
+func (t *derpTransport) send(remote [32]byte, pkt []byte) {
+	client := t.currentClient()
+	if client == nil {
+		return
+	}
+	if err := client.Send(remote, pkt); err != nil {
+		t.log.Printf("derp: send to %x: %v", remote[:4], err)
 	}
 }
 
@@ -181,9 +218,9 @@ func (t *derpTransport) currentClient() *derp.Client {
 	return t.client
 }
 
-// Run keeps the relay identity published and a DERP connection while at least
-// one peer is using it. Connection loss is retried with backoff, and the node
-// list is rotated so one unreachable relay does not disable the fallback.
+// Run keeps the relay identity published and one DERP connection while at
+// least one route needs it. Connection loss is retried with backoff, and the
+// node list rotates so one unreachable relay does not disable everything.
 func (t *derpTransport) Run(ctx context.Context) {
 	if os.Getenv("EGRESS_DERP") == "off" {
 		t.log.Printf("derp: disabled by EGRESS_DERP=off")
@@ -226,7 +263,7 @@ func (t *derpTransport) Run(ctx context.Context) {
 		default:
 		}
 		t.mu.Lock()
-		need := len(t.peers) > 0
+		need := len(t.routes) > 0
 		client := t.client
 		t.mu.Unlock()
 		if !need {
@@ -329,23 +366,16 @@ func (t *derpTransport) connect(ctx context.Context) error {
 
 func (t *derpTransport) onPacket(src [32]byte, pkt []byte) {
 	t.mu.Lock()
-	peer := t.byDerp[src]
+	link := t.routes[src]
 	t.mu.Unlock()
-	if peer == nil {
-		return
-	}
-	addr := peer.last.load()
-	if addr == nil {
-		return
-	}
-	if _, err := peer.conn.WriteToUDP(pkt, addr); err != nil {
-		t.log.Printf("derp: deliver from %x: %v", src[:4], err)
+	if link != nil {
+		link.deliver(pkt)
 	}
 }
 
-// loadRelays builds the node list for the preferred region. The public map is
-// unauthenticated; if it cannot be read, the known Sydney nodes are used so a
-// transient control-plane failure does not disable the fallback.
+// loadRelays builds the node list for the preferred region. If the public map
+// cannot be read, the known Sydney nodes are used so a transient
+// control-plane failure does not disable the fallback.
 func (t *derpTransport) loadRelays(ctx context.Context) {
 	region := strings.TrimSpace(os.Getenv("EGRESS_DERP_REGION"))
 	if region == "" {
@@ -354,11 +384,7 @@ func (t *derpTransport) loadRelays(ctx context.Context) {
 	relays, err := fetchDERPRelays(ctx, region)
 	if err != nil || len(relays) == 0 {
 		t.log.Printf("derp: map unavailable (%v); using Sydney defaults", err)
-		relays = []derp.Relay{
-			{Host: "derp5e.tailscale.com", Port: "443", Region: "syd", Node: "5e"},
-			{Host: "derp5f.tailscale.com", Port: "443", Region: "syd", Node: "5f"},
-			{Host: "derp5g.tailscale.com", Port: "443", Region: "syd", Node: "5g"},
-		}
+		relays = defaultDERPRelays()
 	}
 	t.mu.Lock()
 	if len(t.relays) == 0 {
@@ -366,6 +392,14 @@ func (t *derpTransport) loadRelays(ctx context.Context) {
 		t.region = relays[0].Region
 	}
 	t.mu.Unlock()
+}
+
+func defaultDERPRelays() []derp.Relay {
+	return []derp.Relay{
+		{Host: "derp5e.tailscale.com", Port: "443", Region: "syd", Node: "5e"},
+		{Host: "derp5f.tailscale.com", Port: "443", Region: "syd", Node: "5f"},
+		{Host: "derp5g.tailscale.com", Port: "443", Region: "syd", Node: "5g"},
+	}
 }
 
 func fetchDERPRelays(ctx context.Context, want string) ([]derp.Relay, error) {
@@ -440,33 +474,6 @@ func fetchDERPRelays(ctx context.Context, want string) ([]derp.Relay, error) {
 	return relays, nil
 }
 
-// reportStatus sends the relay state to the server so the admin side can see
-// why a device is not reachable through DERP without reading its log.
-func (t *derpTransport) reportStatus(ctx context.Context) {
-	connected, relay, lastErr := t.Status()
-	t.mu.Lock()
-	region := t.region
-	peers := len(t.peers)
-	t.mu.Unlock()
-	body, err := json.Marshal(struct {
-		Connected bool   `json:"connected"`
-		Relay     string `json:"relay"`
-		Region    string `json:"region"`
-		Peers     int    `json:"peers"`
-		LastError string `json:"last_error"`
-		Version   string `json:"version"`
-	}{
-		Connected: connected, Relay: relay, Region: region,
-		Peers: peers, LastError: lastErr, Version: core.BuildVersion,
-	})
-	if err != nil {
-		return
-	}
-	if err := peerAPI(ctx, "POST", "/api/derp-status", body, nil); err != nil {
-		t.log.Printf("derp: status report: %v", err)
-	}
-}
-
 // Status reports the connection state for the local status page.
 func (t *derpTransport) Status() (connected bool, relay string, err string) {
 	t.mu.Lock()
@@ -478,4 +485,31 @@ func (t *derpTransport) Status() (connected bool, relay string, err string) {
 		return true, t.client.Relay().Host, ""
 	}
 	return false, "", t.lastErr
+}
+
+// reportStatus sends the relay state to the server so the admin side can see
+// why a device is not reachable through DERP without reading its log.
+func (t *derpTransport) reportStatus(ctx context.Context) {
+	connected, relay, lastErr := t.Status()
+	t.mu.Lock()
+	region := t.region
+	routes := len(t.routes)
+	t.mu.Unlock()
+	body, err := json.Marshal(struct {
+		Connected bool   `json:"connected"`
+		Relay     string `json:"relay"`
+		Region    string `json:"region"`
+		Peers     int    `json:"peers"`
+		LastError string `json:"last_error"`
+		Version   string `json:"version"`
+	}{
+		Connected: connected, Relay: relay, Region: region,
+		Peers: routes, LastError: lastErr, Version: core.BuildVersion,
+	})
+	if err != nil {
+		return
+	}
+	if err := peerAPI(ctx, "POST", "/api/derp-status", body, nil); err != nil {
+		t.log.Printf("derp: status report: %v", err)
+	}
 }

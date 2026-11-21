@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"context"
 	"io"
 	"log"
 	"testing"
@@ -23,5 +24,31 @@ func TestDirectExitPrefersPeerExitOnlyWhenAsked(t *testing.T) {
 	d.SetPeerExits(nil, true)
 	if ex, ok := d.first(); !ok || ex.ID != "charon" {
 		t.Fatalf("first = %+v, want the published exit as fallback", ex)
+	}
+}
+
+func TestDerpExitTunnelAttaches(t *testing.T) {
+	relay := newTestRelay()
+	key := b64Key(3)
+	tunnel, err := newDERPExitTunnel(key, relay)
+	if err != nil {
+		t.Fatalf("new tunnel: %v", err)
+	}
+	if err := tunnel.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if tunnel.LocalAddr() == "" {
+		t.Fatal("no local address")
+	}
+	raw, _ := decodeKey(key)
+	if relay.routes[raw] == nil {
+		t.Fatal("relay key is not attached")
+	}
+	if tunnel.Connected() {
+		t.Fatal("tunnel should not claim a connection without a relay client")
+	}
+	tunnel.Stop()
+	if relay.routes[raw] != nil {
+		t.Fatal("stop did not detach the relay key")
 	}
 }

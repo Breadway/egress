@@ -13,6 +13,16 @@ import (
 	"egress/internal/wgtunnel"
 )
 
+// exitTunnel is the data path to an exit. The TLS implementation dials a
+// public listener; the DERP implementation uses the shared relay connection,
+// which is the only option for an exit behind CGNAT.
+type exitTunnel interface {
+	Ensure(context.Context) error
+	Stop()
+	Connected() bool
+	LocalAddr() string
+}
+
 // peerSetter is the platform's peer control, kept as an interface so the
 // manager stays testable and Linux, which needs none of this, simply does not
 // implement it.
@@ -34,9 +44,10 @@ type relayPeerConfigurer interface {
 // fallback: when the exit is not connected, or nothing is routed yet, the same
 // destinations go to the Aegis peer.
 type directExit struct {
-	plat peerSetter
-	dev  string
-	log  *log.Logger
+	plat  peerSetter
+	dev   string
+	log   *log.Logger
+	relay *derpTransport
 
 	mu    sync.Mutex
 	exits []split.DirectExit
@@ -46,8 +57,9 @@ type directExit struct {
 	peerExits  []split.DirectExit
 	preferPeer bool
 	prefixes   []string
-	tunnel     *wgtunnel.Tunnel
+	tunnel     exitTunnel
 	pubkey     string
+	kind       string
 	active     bool
 	lastErr    string
 
@@ -58,8 +70,8 @@ type directExit struct {
 // WireGuard service. 7108 belongs to the Aegis relay.
 const directExitLocal = "127.0.0.1:7109"
 
-func newDirectExit(plat peerSetter, dev string, logger *log.Logger) *directExit {
-	return &directExit{plat: plat, dev: dev, log: logger, wake: make(chan struct{}, 1)}
+func newDirectExit(plat peerSetter, dev string, relay *derpTransport, logger *log.Logger) *directExit {
+	return &directExit{plat: plat, dev: dev, relay: relay, log: logger, wake: make(chan struct{}, 1)}
 }
 
 // SetExits records the exits published with the feed.
@@ -159,22 +171,41 @@ func (d *directExit) reconcile(ctx context.Context) {
 		return
 	}
 
+	kind := ex.Transport
+	if kind == "" {
+		kind = "tls"
+	}
 	d.mu.Lock()
 	previous := ""
-	if d.tunnel == nil || d.pubkey != ex.PubKey {
+	if d.tunnel == nil || d.pubkey != ex.PubKey || d.kind != kind {
 		if d.pubkey != "" && d.pubkey != ex.PubKey {
 			previous = d.pubkey
 		}
 		if d.tunnel != nil {
 			d.tunnel.Stop()
 		}
-		d.tunnel = wgtunnel.NewWithOptions(wgtunnel.Options{
-			Local: directExitLocal,
-			Host:  host,
-			Port:  port,
-			Path:  ex.Path,
-		}, d.log)
+		if kind == "derp" {
+			tunnel, terr := newDERPExitTunnel(ex.RelayKey, d.relay)
+			if terr != nil {
+				d.tunnel = nil
+				d.pubkey = ex.PubKey
+				d.kind = kind
+				d.mu.Unlock()
+				d.noteError("exit relay: %v", terr)
+				d.fallback()
+				return
+			}
+			d.tunnel = tunnel
+		} else {
+			d.tunnel = wgtunnel.NewWithOptions(wgtunnel.Options{
+				Local: directExitLocal,
+				Host:  host,
+				Port:  port,
+				Path:  ex.Path,
+			}, d.log)
+		}
 		d.pubkey = ex.PubKey
+		d.kind = kind
 	}
 	tunnel := d.tunnel
 	d.mu.Unlock()
@@ -202,8 +233,14 @@ func (d *directExit) reconcile(ctx context.Context) {
 	for _, p := range prefixes {
 		allowed = append(allowed, p+"/32")
 	}
+	local := tunnel.LocalAddr()
+	if local == "" {
+		d.noteError("exit tunnel has no local address")
+		d.fallback()
+		return
+	}
 	if cfg, ok := d.plat.(relayPeerConfigurer); ok {
-		restarted, err := cfg.EnsureRelayPeer(d.dev, ex.PubKey, directExitLocal, allowed)
+		restarted, err := cfg.EnsureRelayPeer(d.dev, ex.PubKey, local, allowed)
 		if err != nil {
 			d.noteError("exit config: %v", err)
 			d.fallback()
@@ -213,7 +250,7 @@ func (d *directExit) reconcile(ctx context.Context) {
 			d.log.Printf("split: tunnel restarted with the exit peer in its config")
 		}
 	}
-	if err := d.plat.SetPeer(d.dev, ex.PubKey, directExitLocal, allowed); err != nil {
+	if err := d.plat.SetPeer(d.dev, ex.PubKey, local, allowed); err != nil {
 		d.noteError("exit peer: %v", err)
 		d.fallback()
 		return
