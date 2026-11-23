@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconEvent;
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
 
 struct TrayState {
@@ -27,30 +28,36 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![api_token, set_tray_state])
         .setup(move |app| {
             let menu = tray_menu(app.handle(), false, "egress")?;
-            let tray = app
-                .tray_by_id("main")
-                .ok_or_else(|| "tray icon is not configured".to_string())?;
-            tray.set_menu(Some(menu))?;
-            tray.on_menu_event(|app, event| match event.id.as_ref() {
-                "show" => reveal(app),
-                "hide" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.hide();
+            // Build the icon here from an embedded transparent PNG. Relying on
+            // the config path alone made the dark app tile invisible on a
+            // dark Linux bar, and a missing runtime file leaves no tray at all.
+            let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+            let tray = TrayIconBuilder::with_id("main")
+                .icon(icon)
+                .tooltip("egress")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => reveal(app),
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
+                        }
                     }
-                }
-                "toggle" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("tray-toggle", ());
+                    "toggle" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("tray-toggle", ());
+                        }
                     }
-                }
-                "quit" => app.exit(0),
-                _ => {}
-            });
-            tray.on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::DoubleClick { .. } = event {
-                    reveal(tray.app_handle());
-                }
-            });
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::DoubleClick { .. } = event {
+                        reveal(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+            let _ = tray;
 
             if !start_hidden {
                 if let Some(window) = app.get_webview_window("main") {

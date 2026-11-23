@@ -1,6 +1,6 @@
 [package]
 name = "egress-gui"
-version = "0.5.2"
+version = "0.5.3"
 description = "User app for egress private networking"
 authors = ["Breadway"]
 edition = "2021"
@@ -20,7 +20,7 @@ default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
