@@ -1,25 +1,48 @@
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconEvent;
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
+
+struct TrayState {
+    connected: bool,
+    label: String,
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let start_hidden = std::env::args().any(|arg| arg == "--tray");
     tauri::Builder::default()
+        // Registered first so a second launch is handed to this instance
+        // before anything else starts a window or a tray icon.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            reveal(app);
+        }))
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![api_token])
-        .setup(|app| {
-            let show = MenuItem::with_id(app, "show", "Open egress", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
-
+        .manage(Mutex::new(TrayState {
+            connected: false,
+            label: "egress".to_string(),
+        }))
+        .invoke_handler(tauri::generate_handler![api_token, set_tray_state])
+        .setup(move |app| {
+            let menu = tray_menu(app.handle(), false, "egress")?;
             let tray = app
                 .tray_by_id("main")
                 .ok_or_else(|| "tray icon is not configured".to_string())?;
             tray.set_menu(Some(menu))?;
             tray.on_menu_event(|app, event| match event.id.as_ref() {
                 "show" => reveal(app),
+                "hide" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
+                "toggle" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.emit("tray-toggle", ());
+                    }
+                }
                 "quit" => app.exit(0),
                 _ => {}
             });
@@ -28,18 +51,67 @@ pub fn run() {
                     reveal(tray.app_handle());
                 }
             });
+
+            if !start_hidden {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps the tray icon and the app running. The
-            // daemon owns the tunnel, so hiding the UI never drops protection.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            // Closing the window quits the app. The daemon owns the tunnel,
+            // so protection is unaffected, and a closed app should not leave
+            // an invisible process behind. Use the tray's Hide item when you
+            // want the app to keep running.
+            if let WindowEvent::CloseRequested { .. } = event {
+                window.app_handle().exit(0);
             }
         })
         .run(tauri::generate_context!())
         .expect("error while running egress");
+}
+
+fn tray_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    connected: bool,
+    label: &str,
+) -> tauri::Result<Menu<R>> {
+    let status = MenuItem::with_id(app, "status", label, false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "show", "Open egress", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "Hide to tray", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(
+        app,
+        "toggle",
+        if connected { "Disconnect" } else { "Connect" },
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    Menu::with_items(app, &[&status, &open, &hide, &toggle, &quit])
+}
+
+// set_tray_state keeps the tray menu in step with the live connection. The
+// frontend calls it whenever status changes.
+#[tauri::command]
+fn set_tray_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<TrayState>>,
+    connected: bool,
+    label: String,
+) -> Result<(), String> {
+    {
+        let mut current = state
+            .lock()
+            .map_err(|_| "tray state is poisoned".to_string())?;
+        current.connected = connected;
+        current.label = label.clone();
+    }
+    let menu = tray_menu(&app, connected, &label).map_err(|err| err.to_string())?;
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(menu)).map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn reveal(app: &tauri::AppHandle) {
