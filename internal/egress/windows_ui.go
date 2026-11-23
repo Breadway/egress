@@ -6,6 +6,7 @@ import (
 	"context"
 	"egress/internal/core"
 	"egress/internal/split"
+	"egress/internal/winlog"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -300,6 +301,12 @@ func trayWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 			go copyTrayStatus()
 		case 12:
 			openURL("http://" + core.PortalListenAddr + "/")
+		case 15:
+			go func() {
+				if err := launchGUI(false); err != nil {
+					winlog.Notify("error", err.Error())
+				}
+			}()
 		default:
 			if id := wparam & 0xffff; id >= 100 {
 				if spec, ok := trayDomainMenu[id]; ok {
@@ -449,6 +456,7 @@ func showTrayMenu(hwnd uintptr) {
 		addGray(line)
 	}
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+	addItem(15, "Open egress app")
 	addItem(12, "Open portal")
 	addItem(3, "Open log")
 	addItem(4, "Open data folder")

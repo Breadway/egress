@@ -130,6 +130,8 @@ func realMain() error {
 		return cmdPeerExit(args)
 	case "exit":
 		return cmdExit(args)
+	case "gui":
+		return cmdGUI(args)
 	case "tray":
 		return cmdTray(args)
 	case "supervise":
@@ -199,6 +201,8 @@ Commands:
   probe        classify domains over the direct path (split-mode foundation)
   scan         bulk-probe a domain list to seed a new network (root, or --preview)
   portal       open the local page that explains blocked sites
+  gui          open the desktop app (--tray starts hidden in the tray)
+  tray         run the notification icon (Windows)
   proxy        run the per-user split proxy and PAC (Windows split mode)
   update       check for or apply a signed update over the tunnel
   update-sign  sign a release manifest (publisher side)

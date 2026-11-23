@@ -43,6 +43,14 @@ bakery install egress-gui
 It needs the egress daemon installed and enrolled on the machine. The daemon
 owns the tunnel, and the app reads its local API.
 
+Launch it from the app menu, with `egress gui`, or from the egress tray menu.
+`egress gui --tray` starts hidden in the tray. The window's close button quits
+the app; use the tray's **Hide to tray** item to keep it running.
+
+The daemon is a root service, so it cannot own a tray in your desktop session.
+On Linux the tray belongs to the GUI process. On Windows the daemon tray also
+has **Open egress app**, which runs `egress gui`.
+
 ### Windows
 
 A portable build ships with each release:
