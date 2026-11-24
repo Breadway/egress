@@ -192,29 +192,46 @@ func (s *server) adminExits(w http.ResponseWriter, r *http.Request) {
 		for _, exit := range reg.Exits {
 			live := byID[exit.ID]
 			state := "disabled"
-			if exit.Enabled {
-				state = "enabled"
-				if live.Healthy {
-					state = "healthy"
-				} else if live.ID != "" {
-					state = "no handshake"
-				}
-			}
 			handshake := "never"
-			if live.Handshake > 0 {
-				handshake = time.Since(time.Unix(live.Handshake, 0)).Round(time.Second).String() + " ago"
+			prefixes := fmt.Sprintf("%d", live.Prefixes)
+			sites := fmt.Sprintf("%d", live.Sites)
+			if exit.Enabled {
+				if exit.Direct {
+					// Direct exits are dialled by each client. They have no
+					// Aegis WireGuard peer, so a handshake here is meaningless.
+					state = "direct"
+					handshake = "client-side"
+					prefixes = "-"
+					sites = "-"
+				} else {
+					state = "enabled"
+					if live.Healthy {
+						state = "healthy"
+					} else if live.ID != "" {
+						state = "no handshake"
+					}
+					if live.Handshake > 0 {
+						handshake = time.Since(time.Unix(live.Handshake, 0)).Round(time.Second).String() + " ago"
+					}
+				}
 			}
 			action, label := "disable", "Disable"
 			if !exit.Enabled {
 				action, label = "enable", "Enable"
 			}
-			fmt.Fprintf(&b, `<tr><td><code>%s</code><br><span class="muted">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%d</td><td><form method="post" action="/admin/exits"><input type="hidden" name="id" value="%s"><input type="hidden" name="action" value="%s"><button type="submit">%s</button></form></td></tr>`,
+			fmt.Fprintf(&b, `<tr><td><code>%s</code><br><span class="muted">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><form method="post" action="/admin/exits"><input type="hidden" name="id" value="%s"><input type="hidden" name="action" value="%s"><button type="submit">%s</button></form></td></tr>`,
 				template.HTMLEscapeString(exit.ID), template.HTMLEscapeString(exit.Label),
 				template.HTMLEscapeString(exit.Host), template.HTMLEscapeString(state),
-				template.HTMLEscapeString(handshake), live.Prefixes, live.Sites,
+				template.HTMLEscapeString(handshake), prefixes, sites,
 				template.HTMLEscapeString(exit.ID), action, label)
 		}
 		b.WriteString(`</tbody></table>`)
+		for _, exit := range reg.Exits {
+			if exit.Direct {
+				b.WriteString(`<p class="muted">Direct exits are dialled by each client; Aegis has no handshake, prefix count or site count for them.</p>`)
+				break
+			}
+		}
 	}
 
 	if len(status.Assignments) > 0 {
