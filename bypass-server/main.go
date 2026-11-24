@@ -209,6 +209,7 @@ func main() {
 	s.mux.HandleFunc("/admin/api/pending", s.adminPending)
 	s.mux.HandleFunc("/admin/api/claim", s.adminClaim)
 	s.mux.HandleFunc("/admin/api/release", s.adminRelease)
+	s.mux.HandleFunc("/admin/api/reissue", s.adminReissue)
 
 	srv := &http.Server{
 		Addr:         addr,
@@ -1394,6 +1395,13 @@ func (s *server) adminApplications(w http.ResponseWriter, r *http.Request) {
 			app.Reviewed = true
 			app.ClaimedAt = ""
 			app.ProvisionError = ""
+		case "reissue":
+			app.Reviewed = true
+			app.ClaimedAt = ""
+			app.ProvisionError = ""
+			if err := s.reissueApplication(&app); err != nil {
+				app.ProvisionError = err.Error()
+			}
 		case "delete":
 			s.appsMu.Unlock()
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

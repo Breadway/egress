@@ -64,6 +64,17 @@ func (s *server) provisionApplication(app *application) error {
 	if app.DeviceID != "" {
 		return nil
 	}
+	return s.issueApplicationDevice(app)
+}
+
+// reissueApplication replaces the invite on the same application. The status
+// link and cookie stay valid, but the next archive carries a fresh one-time
+// token and the current installer.
+func (s *server) reissueApplication(app *application) error {
+	return s.issueApplicationDevice(app)
+}
+
+func (s *server) issueApplicationDevice(app *application) error {
 	if _, _, ok := s.genericInstaller(); !ok {
 		return errors.New("no generic Windows installer in the binaries directory")
 	}
