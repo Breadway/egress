@@ -539,7 +539,12 @@ func fetchPeers(ctx context.Context, self string) ([]apiPeer, error) {
 		return nil, err
 	}
 	applyPeerAuth(req, self)
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := (&http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			DialContext: core.ControlDialContext,
+		},
+	}).Do(req)
 	if err != nil {
 		return nil, err
 	}

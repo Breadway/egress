@@ -133,11 +133,16 @@ func SpoolReport(data []byte) {
 // then dials the known Aegis address directly with the right SNI, so a
 // poisoned local resolver cannot block the report on a filtered network.
 func SendReport(data []byte) error {
+	// Prefer the authenticated tunnel: a filtered network can block the
+	// public report host while the tunnel is up.
+	if err := postReport(data, core.ControlDialContext); err == nil {
+		return nil
+	}
 	directErr := postReport(data, nil)
 	if directErr == nil {
 		return nil
 	}
-	for _, ip := range []string{core.AegisIPv4} {
+	for _, ip := range []string{core.AegisTunnelIP, core.AegisIPv4} {
 		transport := &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				d := &net.Dialer{Timeout: 8 * time.Second}

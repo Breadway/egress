@@ -180,6 +180,13 @@ func (r *Resolver) targets() []string {
 	return append([]string(nil), r.addrs...)
 }
 
+// dialTargets puts the authenticated tunnel address first. It stays reachable
+// when a restrictive network blocks Aegis's public address; TLS still verifies
+// dns.breadway.dev, so a wrong address fails closed.
+func (r *Resolver) dialTargets() []string {
+	return append([]string{core.AegisTunnelIP}, r.targets()...)
+}
+
 // dial ignores the address the transport asks for and connects to one of the
 // resolved Aegis addresses instead. TLS still verifies dns.breadway.dev, so a
 // wrong address fails closed.
@@ -187,7 +194,7 @@ func (r *Resolver) dial(ctx context.Context, network, addr string) (net.Conn, er
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	var lastErr error
 
-	for _, ip := range r.targets() {
+	for _, ip := range r.dialTargets() {
 		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
 		if err == nil {
 			return conn, nil
@@ -202,7 +209,7 @@ func (r *Resolver) dial(ctx context.Context, network, addr string) (net.Conn, er
 		return nil, lastErr
 	}
 
-	for _, ip := range r.targets() {
+	for _, ip := range r.dialTargets() {
 		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
 		if err == nil {
 			return conn, nil
