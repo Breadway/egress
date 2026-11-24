@@ -66,6 +66,15 @@ func CheckSupervisorLive(p platform.Interface, maxAge time.Duration) error {
 	}
 	pid, age, err := readReadyMarker()
 	if err != nil {
+		// A hardened install directory can leave the marker unreadable to the
+		// installing account even though SYSTEM wrote it. The service is
+		// already known to be active and the DNS probe follows, so on Windows
+		// treat permission denied as inconclusive rather than failing install
+		// and leaving the previous build running (Xavier, 2026-11-24).
+		if runtime.GOOS == "windows" && os.IsPermission(err) {
+			logx.Debugf("readiness marker is unreadable; relying on the service state and DNS probe")
+			return nil
+		}
 		return fmt.Errorf("no readiness marker from the supervisor: %w", err)
 	}
 	if maxAge > 0 && age > maxAge {
