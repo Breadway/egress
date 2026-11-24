@@ -232,3 +232,38 @@ func TestSetupArchiveCountsTheDownload(t *testing.T) {
 		t.Error("setup download time not recorded")
 	}
 }
+
+func TestReissueRotatesInviteOnTheSameApplication(t *testing.T) {
+	s := claimTestServer(t)
+	t.Setenv("BYPASS_GENERIC_WINDOWS", filepath.Join(s.state, "binaries", "egress-test.exe"))
+	id := "0123456789abcdef"
+	app, ok := s.applicationByID(id)
+	if !ok {
+		t.Fatal("missing test application")
+	}
+	if err := s.provisionApplication(&app); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	first := app.EnrollToken
+	if first == "" || app.DeviceID == "" {
+		t.Fatalf("no invite issued: %+v", app)
+	}
+	if err := s.reissueApplication(&app); err != nil {
+		t.Fatalf("reissue: %v", err)
+	}
+	if app.EnrollToken == first {
+		t.Fatal("reissue kept the old token")
+	}
+	reg, err := loadDevices(s.devicesPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Devices) != 2 {
+		t.Fatalf("devices = %d, want the old invite plus the new one", len(reg.Devices))
+	}
+	for _, d := range reg.Devices {
+		if d.Label != app.Name || d.Status != "issued" {
+			t.Fatalf("unexpected invite %+v", d)
+		}
+	}
+}

@@ -101,6 +101,9 @@ func (s *server) adminApplicationDetail(w http.ResponseWriter, r *http.Request) 
 	if app.ProvisionError != "" {
 		fmt.Fprintf(&b, `<form method="post" action="/admin/applications"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="action" value="retry"><button class="btn ghost" type="submit">Retry</button></form>`, s.csrfToken(r), esc(app.ID))
 	}
+	if app.DeviceID != "" {
+		fmt.Fprintf(&b, `<form method="post" action="/admin/applications" onsubmit="return confirm('Reissue the setup invite? The same status link will serve a fresh token and the current installer.')"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="action" value="reissue"><button class="btn ghost" type="submit">Reissue invite</button></form>`, s.csrfToken(r), esc(app.ID))
+	}
 	fmt.Fprintf(&b, `<form method="post" action="/admin/applications" onsubmit="return confirm('Delete this application?')"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="action" value="delete"><button class="btn danger" type="submit">Delete</button></form>`, s.csrfToken(r), esc(app.ID))
 	b.WriteString(`</div></div>`)
 	s.renderNav(w, true, "applications", app.Name, b.String())

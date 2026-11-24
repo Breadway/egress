@@ -112,6 +112,59 @@ func (s *server) adminClaim(w http.ResponseWriter, r *http.Request) {
 
 // adminRelease clears a claim. A non-empty error parks the application so it
 // stops retrying and shows up for a human; retrying clears it.
+// adminReissue rotates an existing application's invite. The status link and
+// cookie stay the same; the next setup archive carries a fresh token and the
+// current installer.
+func (s *server) adminReissue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.bearerOK(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "unreadable", http.StatusBadRequest)
+		return
+	}
+	id := r.FormValue("id")
+	if !validID.MatchString(id) {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+
+	s.appsMu.Lock()
+	defer s.appsMu.Unlock()
+	a, ok := s.applicationByID(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if !a.Reviewed {
+		http.Error(w, "not approved", http.StatusConflict)
+		return
+	}
+	a.ClaimedAt = ""
+	a.ProvisionError = ""
+	if err := s.reissueApplication(&a); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.saveApplication(&a); err != nil {
+		http.Error(w, "could not save", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(struct {
+		ID            string `json:"id"`
+		DeviceID      string `json:"device_id"`
+		ProvisionedAt string `json:"provisioned_at"`
+	}{ID: a.ID, DeviceID: a.DeviceID, ProvisionedAt: a.ProvisionedAt})
+}
+
 func (s *server) adminRelease(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
