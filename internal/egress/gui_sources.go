@@ -97,12 +97,6 @@ func newGUISources(
 				})
 			}
 		}
-		if exitLabel := activeExitName(direct); exitLabel != "" && !hasName(people, exitLabel) {
-			people = append(people, guiapi.Person{
-				ID: personID(exitLabel), Name: exitLabel, Kind: "friend",
-				Online: true, Sharing: true, Transport: "relay",
-			})
-		}
 		return guiapi.Circle{Circle: "bread", People: people}
 	}
 
@@ -228,15 +222,6 @@ func activeExitName(direct *directExit) string {
 		return ""
 	}
 	return label
-}
-
-func hasName(people []guiapi.Person, name string) bool {
-	for _, p := range people {
-		if strings.EqualFold(p.Name, name) {
-			return true
-		}
-	}
-	return false
 }
 
 // personID is a stable, lowercase handle for a circle member. It never leaves
