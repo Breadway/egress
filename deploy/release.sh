@@ -82,6 +82,19 @@ note "publishing manifests"
 ./deploy/publish-update.sh --binary "dist/egress-linux-amd64-$version" \
     --os linux --arch amd64 --version "$version" --notes "release $version"
 
+# Approved applications download a shared generic Windows installer. It was
+# left at whatever file was newest in the bypass binaries directory, which is
+# how a new device still got 0.4.82 after 0.5.x was current. Keep that file
+# current with every release.
+aegis_host="${AEGIS_HOST:-aegis}"
+note "updating the approved-request Windows installer"
+scp -q "dist/egress-windows-amd64-$version.exe" \
+    "${aegis_host}:/tmp/egress-windows-amd64-$version.exe"
+ssh "$aegis_host" "sudo -n install -o bypass -g bypass -m 0600 \
+    /tmp/egress-windows-amd64-$version.exe \
+    /var/lib/bypass/binaries/egress-windows-amd64-$version.exe && \
+    rm -f /tmp/egress-windows-amd64-$version.exe"
+
 if [ -n "$device" ]; then
     [ -n "$ip" ] && [ -n "$key" ] && [ -n "$socks_user" ] && [ -n "$socks_pass" ] \
         || die "--device needs --ip, --key, --socks-user and --socks-pass"
