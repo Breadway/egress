@@ -21,6 +21,9 @@ import urllib.request
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 API = os.environ.get("BYPASS_API", "https://aegis-1.tail4806cb.ts.net:7221")
+UPDATE_MANIFEST = os.environ.get(
+    "EGRESS_UPDATE_MANIFEST", "https://dns.breadway.dev/updates/manifest"
+)
 POLL_SECONDS = int(os.environ.get("BYPASS_POLL_SECONDS", "30"))
 ONLY = os.environ.get("BYPASS_ONLY", "")
 DEBUG_BUILD = os.environ.get("BYPASS_DEBUG_BUILD", "") not in ("", "0", "false", "no")
@@ -90,6 +93,26 @@ def api(path, data=None):
         return None
 
 
+def release_version(goos, goarch):
+    """Return the version this device build should embed.
+
+    The provisioner used to get this from a hand-set EGRESS_VERSION in the
+    unit, which stayed at 0.4.21 long after releases moved on. Read the signed
+    release manifest instead; the environment variable remains an explicit
+    override for debugging.
+    """
+    override = os.environ.get("EGRESS_VERSION", "").strip()
+    if override:
+        return override
+    url = f"{UPDATE_MANIFEST}?os={urllib.parse.quote(goos)}&arch={urllib.parse.quote(goarch)}"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            return str(json.load(response)["version"])
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+        log(f"release manifest unavailable: {exc}")
+        return ""
+
+
 def label_for(app):
     slug = re.sub(r"[^a-z0-9]+", "-", app["name"].lower()).strip("-")[:24].strip("-")
     return f"{slug or 'user'}-{app['id'][:6]}"
@@ -151,7 +174,21 @@ def main():
         target_arch = claimed.get("arch") or (
             "arm64" if target_os == "darwin" else "amd64"
         )
-        log(f"provisioning {claimed['id']} as {label} ({target_os}/{target_arch})")
+        version = release_version(target_os, target_arch)
+        if not version:
+            log("no release version available; releasing the application")
+            api(
+                "/admin/api/release",
+                {
+                    "id": claimed["id"],
+                    "error": "no release version available; check the update manifest",
+                },
+            )
+            continue
+        log(
+            f"provisioning {claimed['id']} as {label} "
+            f"({target_os}/{target_arch}, egress {version})"
+        )
         new_device_args = [
             "./new-device.sh",
             "--name",
@@ -160,6 +197,8 @@ def main():
             target_os,
             "--arch",
             target_arch,
+            "--version",
+            version,
         ]
         if DEBUG_BUILD:
             new_device_args.append("--debug-build")
