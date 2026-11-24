@@ -262,7 +262,12 @@ func peerAPI(ctx context.Context, method, path string, body []byte, out any) err
 		return err
 	}
 	applyPeerAuth(req, devicePubkey())
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			DialContext: core.ControlDialContext,
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

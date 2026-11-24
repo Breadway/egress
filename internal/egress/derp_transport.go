@@ -473,7 +473,12 @@ func fetchDERPRelays(ctx context.Context, want string) ([]derp.Relay, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(req)
+	resp, err := (&http.Client{
+		Timeout: 12 * time.Second,
+		Transport: &http.Transport{
+			DialContext: core.ControlDialContext,
+		},
+	}).Do(req)
 	if err != nil {
 		return nil, err
 	}

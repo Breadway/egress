@@ -141,15 +141,23 @@ func checkManifestVersion(current string, m update.Manifest) error {
 // resolve the update host, which is exactly the case where the updater has to
 // work anyway: the resolver it is failing on may be the one being replaced.
 func doAegisRequest(req *http.Request, timeout time.Duration) (*http.Response, error) {
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			d := &net.Dialer{Timeout: 10 * time.Second}
-			return d.DialContext(ctx, "tcp", net.JoinHostPort(core.AegisIPv4, "443"))
-		},
-		TLSClientConfig: &tls.Config{ServerName: core.DoHHost, MinVersion: tls.VersionTLS12},
+	var lastErr error
+	for _, ip := range []string{core.AegisTunnelIP, core.AegisIPv4} {
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				d := &net.Dialer{Timeout: 10 * time.Second}
+				return d.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
+			},
+			TLSClientConfig: &tls.Config{ServerName: core.DoHHost, MinVersion: tls.VersionTLS12},
+		}
+		client := &http.Client{Transport: transport, Timeout: timeout}
+		resp, err := client.Do(req.Clone(req.Context()))
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
 	}
-	client := &http.Client{Transport: transport, Timeout: timeout}
-	return client.Do(req)
+	return nil, lastErr
 }
 
 // doUpdateRequest tries the normal path, then the Aegis fallback when the host
