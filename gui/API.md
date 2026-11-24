@@ -89,8 +89,6 @@ elevation or a service restart. Returns the new `Status`.
 - `transport`: `direct`, `relay` or `offline`.
 - `sharing` means that person's connection is carrying blocked traffic for
   this device.
-- The active peer exit is included even when it is not in the published peer
-  list, so the Home screen can name who is helping.
 - No public keys, tunnel addresses or raw endpoints are exposed.
 
 ## `GET /protection`
