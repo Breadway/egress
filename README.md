@@ -95,10 +95,18 @@ new one.
 
 Strangers go through the site instead: `/apply` takes a name, why they
 need access, and Windows or Linux (no contact info), and hands back a secret
-status link to bookmark. Review applications and link download logins in the admin UI at
+status link to bookmark. Review applications and link download logins in the web admin UI at
 `https://aegis-1.tail4806cb.ts.net:7221/admin` (session login; credentials in
 `/etc/bypass/env` on Aegis). It is served by Tailscale Serve on the tailnet
-only; `bypass.breadway.dev/admin*` returns 404.
+only; `bypass.breadway.dev/admin*` returns 404 from the public internet.
+
+The desktop app has an Admin section for the daily work: Overview,
+Applications and Devices. It uses a Bearer-token JSON API on the same
+bypass service, proxied by the local egress daemon over the tunnel, so it
+works on a filtered network. Caddy accepts `/admin/api/*` only from tunnel
+addresses (`10.88.0.0/24`); every other public `/admin` request still returns
+404, and the web admin remains the fallback for pages the app does not cover
+yet.
 
 Approving an application queues it. A pull-based provisioner on hermes picks
 it up, runs `new-device.sh --os <selected>`, uploads with
