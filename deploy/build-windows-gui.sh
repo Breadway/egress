@@ -12,6 +12,14 @@ cd "$root"
 command -v cargo-xwin >/dev/null 2>&1 || cargo install cargo-xwin
 rustup target add x86_64-pc-windows-msvc >/dev/null
 
+# cargo-xwin provides the MSVC headers and libraries; clang-cl, llvm-rc and
+# lld-link come from the host. Fail with a useful message instead of a deep
+# tauri-winres or cc-rs error.
+for tool in clang-cl llvm-rc lld-link; do
+    command -v "$tool" >/dev/null 2>&1 \
+        || { echo "error: $tool is required for the Windows cross-build (install clang, llvm and lld)" >&2; exit 1; }
+done
+
 (cd gui/frontend && npm ci && npm run build)
 (cd gui/src && cargo xwin build --release --locked --target x86_64-pc-windows-msvc)
 

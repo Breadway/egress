@@ -111,6 +111,14 @@ jobs:
           set -euo pipefail
           command -v cargo-xwin >/dev/null 2>&1 || cargo install cargo-xwin
           rustup target add x86_64-pc-windows-msvc >/dev/null
+          # cargo-xwin supplies the MSVC headers and libraries, but the C
+          # compiler and the resource compiler come from the host.
+          command -v clang-cl >/dev/null 2>&1 \
+            || { echo "::error::clang-cl is missing: install clang and make clang-cl available on the runner"; exit 1; }
+          command -v llvm-rc >/dev/null 2>&1 \
+            || { echo "::error::llvm-rc is missing: install the llvm package on the runner"; exit 1; }
+          command -v lld-link >/dev/null 2>&1 \
+            || { echo "::error::lld-link is missing: install lld on the runner"; exit 1; }
 
       - name: build windows
         run: cd src/gui/src && cargo xwin build --release --locked --target x86_64-pc-windows-msvc
