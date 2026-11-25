@@ -17,6 +17,7 @@
   };
 
   let meta = $derived(pages[$page.url.pathname] ?? pages["/"]);
+  let isAdmin = $derived($page.url.pathname.startsWith("/admin"));
 
   async function toggleConnection() {
     try {
@@ -55,8 +56,10 @@
     <button class="btn ghost" onclick={refresh}>
       <Icon name="refresh" cls="sm" /> Refresh
     </button>
-    <button class="btn primary" onclick={toggleConnection}>
-      <Icon name="power" cls="sm" /> {app.connected ? "Disconnect" : "Connect"}
-    </button>
+    {#if !isAdmin}
+      <button class="btn primary" onclick={toggleConnection}>
+        <Icon name="power" cls="sm" /> {app.connected ? "Disconnect" : "Connect"}
+      </button>
+    {/if}
   </div>
 </header>
