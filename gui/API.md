@@ -222,6 +222,22 @@ Status is sent every two seconds and on connect. The GUI falls back to polling
 every five seconds if the stream is unavailable, and reconnects when the daemon
 restarts.
 
+## Desktop admin proxy
+
+The desktop admin section uses these local endpoints. They require the normal
+local bearer token and an additional `X-Admin-Token` header. The daemon
+forwards to `https://bypass.breadway.dev/admin/api` over the tunnel and never
+stores the admin token.
+
+- `GET /admin/overview`
+- `GET /admin/applications`
+- `GET /admin/devices`
+- `POST /admin/application` with `id` and `action` (`approve`, `reissue`, `delete`)
+- `POST /admin/device` with `action` (`invite`, `revoke`) and `label`/`id`
+
+The web admin stays available as the fallback. List responses omit invite
+tokens and password hashes; a newly created invite returns its token once.
+
 ## Versioning
 
 The path carries `v1`. Additive fields are allowed. Removing or changing the

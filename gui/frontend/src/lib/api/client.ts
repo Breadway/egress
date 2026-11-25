@@ -6,6 +6,7 @@ import type {
   Settings,
   Status
 } from "./types";
+import type { AdminApplication, AdminDevice, AdminInvite, AdminOverview } from "./admin";
 
 // Client for the local egress API. The daemon is the source of truth.
 const BASE = import.meta.env.VITE_EGRESS_API ?? "http://127.0.0.1:7280/api/v1";
@@ -107,6 +108,47 @@ export const api = {
     request<Settings>("/settings", {
       method: "PATCH",
       body: JSON.stringify(patch)
+    })
+};
+
+function adminHeaders(token: string): HeadersInit {
+  return {
+    "X-Admin-Token": token,
+    "Content-Type": "application/x-www-form-urlencoded"
+  };
+}
+
+// Admin calls go through the local daemon so they use its tunnel on filtered
+// networks. The admin token is passed per request and never stored by the
+// daemon.
+export const adminApi = {
+  overview: (token: string) =>
+    request<AdminOverview>("/admin/overview", { headers: { "X-Admin-Token": token } }),
+  applications: (token: string) =>
+    request<{ applications: AdminApplication[] }>("/admin/applications", {
+      headers: { "X-Admin-Token": token }
+    }),
+  devices: (token: string) =>
+    request<{ devices: AdminDevice[] }>("/admin/devices", {
+      headers: { "X-Admin-Token": token }
+    }),
+  applicationAction: (token: string, id: string, action: "approve" | "reissue" | "delete") =>
+    request<{ ok: boolean; state?: string }>("/admin/application", {
+      method: "POST",
+      headers: adminHeaders(token),
+      body: new URLSearchParams({ id, action }).toString()
+    }),
+  invite: (token: string, label: string) =>
+    request<AdminInvite>("/admin/device", {
+      method: "POST",
+      headers: adminHeaders(token),
+      body: new URLSearchParams({ action: "invite", label }).toString()
+    }),
+  revoke: (token: string, id: string) =>
+    request<{ ok: boolean }>("/admin/device", {
+      method: "POST",
+      headers: adminHeaders(token),
+      body: new URLSearchParams({ action: "revoke", id }).toString()
     })
 };
 
