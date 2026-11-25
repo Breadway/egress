@@ -4,9 +4,26 @@ The user-facing desktop app for egress. It shows whether you are protected, who
 is in your circle, which sites were unblocked, and the settings that control
 connection and sharing.
 
-This is not an operator console. It never exposes relay keys, peer IDs, tunnel
-addresses or DERP terminology. The daemon is still the only component that owns
-the tunnel.
+This is not an operator console for everyday use: the user-facing screens never
+expose relay keys, peer IDs, tunnel addresses or DERP terminology. The daemon is
+still the only component that owns the tunnel.
+
+## Admin section
+
+The app also carries an Admin section for the operator: Overview,
+Applications and Devices. It replaces the daily web admin pages without
+retiring the web admin yet.
+
+- The admin token is pasted once and kept in the app's local storage. The
+  daemon forwards it per request and never stores it.
+- Requests go to `POST/GET /api/v1/admin/*` on the local daemon, which proxies
+  an allowlisted set to the bypass service through the tunnel. That is what
+  makes the admin work on a network that blocks `bypass.breadway.dev`.
+- List responses omit invite tokens, password hashes and claim hashes. A new
+  invite token is shown once.
+- The web admin at `https://aegis-1.tail4806cb.ts.net:7221/admin` stays the
+  fallback for download logins, relay, split feed and exits until the app
+  covers those pages.
 
 ## Stack
 
@@ -21,7 +38,7 @@ the tunnel.
 gui/
   API.md                 local daemon API contract
   frontend/              SvelteKit app
-    src/routes/          Home, Friends, Protection, Activity, Settings
+    src/routes/          Home, Friends, Protection, Activity, Settings, Admin
     src/lib/components/  Sidebar, Topbar, Statusbar, Icon, Toggle, Toast, Sparkline
     src/lib/api/         typed client and shared types
     src/lib/data/        fallback data before the daemon answers
