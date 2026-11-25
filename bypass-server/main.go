@@ -210,6 +210,11 @@ func main() {
 	s.mux.HandleFunc("/admin/api/claim", s.adminClaim)
 	s.mux.HandleFunc("/admin/api/release", s.adminRelease)
 	s.mux.HandleFunc("/admin/api/reissue", s.adminReissue)
+	s.mux.HandleFunc("/admin/api/overview", s.adminJSONOverview)
+	s.mux.HandleFunc("/admin/api/applications", s.adminJSONApplications)
+	s.mux.HandleFunc("/admin/api/devices", s.adminJSONDevices)
+	s.mux.HandleFunc("/admin/api/application", s.adminJSONApplication)
+	s.mux.HandleFunc("/admin/api/device", s.adminJSONDevice)
 
 	srv := &http.Server{
 		Addr:         addr,

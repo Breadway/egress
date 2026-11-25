@@ -157,6 +157,9 @@ type Sources struct {
 	Observe       func(domain string)
 	SetConnected  func(connected bool) error
 	ApplySettings func(Settings) error
+	// Admin, when set, serves /api/v1/admin/ for the desktop admin app. The
+	// handlers validate a separate admin token per request.
+	Admin http.Handler
 }
 
 // Server owns the token, the settings file, the activity ring and the SSE
@@ -308,6 +311,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/activity", s.guard(s.Activity))
 	mux.HandleFunc("/api/v1/settings", s.guard(s.Settings))
 	mux.HandleFunc("/api/v1/events", s.guard(s.Events))
+	if s.src.Admin != nil {
+		mux.Handle("/api/v1/admin/", s.guard(s.src.Admin.ServeHTTP))
+	}
 	return cors(mux)
 }
 
@@ -340,7 +346,7 @@ func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Admin-Token")
 		next.ServeHTTP(w, r)
 	})
 }

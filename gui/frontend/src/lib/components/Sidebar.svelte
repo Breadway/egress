@@ -61,6 +61,16 @@
         {item.label}
       </a>
     {/each}
+    <div class="nav-label">Admin</div>
+    <a
+      class="nav-item"
+      class:active={active("/admin")}
+      href="/admin"
+      aria-current={active("/admin") ? "page" : undefined}
+    >
+      <Icon name="shield" />
+      Admin
+    </a>
   </nav>
 
   <div class="side-foot">

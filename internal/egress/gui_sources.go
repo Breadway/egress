@@ -147,6 +147,7 @@ func newGUISources(
 			}
 		},
 		SetConnected: sup.SetConnected,
+		Admin:        newAdminProxy(),
 		ApplySettings: func(s guiapi.Settings) error {
 			applyRuntimeSettings(ctx, sup, peers, splitter, share, relay, s)
 			if s.ConnectAutomatically != !bootDisabled() {
