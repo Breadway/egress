@@ -42,7 +42,11 @@ API and never reads root-owned state directly.
   "data_gb": 1.9,
   "unblocked_today": 42,
   "circle_online": 3,
-  "network": "home|192.168.1.1"
+  "network": "home|192.168.1.1",
+  "exits": [
+    { "id": "hestia", "label": "Hestia", "active": false },
+    { "id": "charon", "label": "Charon", "active": true }
+  ]
 }
 ```
 
@@ -51,6 +55,8 @@ API and never reads root-owned state directly.
   represented by `exit`; `path` describes the transport to the cloud relay.
 - `exit`: `Cloud relay`, or the circle member currently carrying blocked
   traffic. Never a key or tunnel address.
+- `exits`: registered exits the user can choose, in published order. `active`
+  marks the one carrying traffic now. Omitted when no direct exit is offered.
 - `speed_mbps` and `data_gb` come from the tunnel interface counters on Linux.
   Other platforms report zero until a counter source is added.
 - `unblocked_today` is the current blocked-site set, not a midnight rollover.
@@ -174,12 +180,16 @@ or non-hostname value returns 400.
   "notify_site": false,
   "notify_drop": true,
   "text_size": "comfortable",
-  "mode": "automatic"
+  "mode": "automatic",
+  "exit_choice": ""
 }
 ```
 
 `PATCH` accepts any subset and returns the saved set. The daemon applies every
 field that has a backend:
+
+- `exit_choice` pins a registered exit by id; an empty string restores the
+  published order. A choice that is no longer offered falls back safely.
 
 - `connect_automatically` enables or disables the boot service.
 - `relay_fallback` toggles the WebSocket fallback in the supervisor.

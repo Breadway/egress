@@ -165,5 +165,6 @@ export const settings: Settings = {
   notify_site: false,
   notify_drop: true,
   text_size: "comfortable",
-  mode: "automatic"
+  mode: "automatic",
+  exit_choice: ""
 };

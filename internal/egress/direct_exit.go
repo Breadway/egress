@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,7 @@ type directExit struct {
 	// someone else's connection.
 	peerExits  []split.DirectExit
 	preferPeer bool
+	choice     string
 	prefixes   []string
 	tunnel     exitTunnel
 	pubkey     string
@@ -72,7 +74,14 @@ type directExit struct {
 const directExitLocal = "127.0.0.1:7109"
 
 func newDirectExit(plat peerSetter, dev string, relay *derpTransport, logger *log.Logger) *directExit {
-	return &directExit{plat: plat, dev: dev, relay: relay, log: logger, wake: make(chan struct{}, 1)}
+	return &directExit{
+		plat:   plat,
+		dev:    dev,
+		relay:  relay,
+		log:    logger,
+		choice: loadExitChoice(),
+		wake:   make(chan struct{}, 1),
+	}
 }
 
 // SetExits records the exits published with the feed.
@@ -177,7 +186,41 @@ func (d *directExit) first() (split.DirectExit, bool) {
 	if len(d.exits) == 0 {
 		return split.DirectExit{}, false
 	}
+	if d.choice != "" {
+		for _, ex := range d.exits {
+			if ex.ID == d.choice {
+				return ex, true
+			}
+		}
+	}
 	return d.exits[0], true
+}
+
+// SetChoice pins one registered exit by id. An empty id restores automatic
+// order. The choice is persisted so it survives a daemon restart.
+func (d *directExit) SetChoice(id string) error {
+	if err := storeExitChoice(id); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.choice = strings.TrimSpace(id)
+	d.mu.Unlock()
+	d.nudge()
+	return nil
+}
+
+// Choice is the pinned exit id, or empty for automatic.
+func (d *directExit) Choice() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.choice
+}
+
+// Options lists the registered exits in feed order for the app to show.
+func (d *directExit) Options() []split.DirectExit {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]split.DirectExit(nil), d.exits...)
 }
 
 func (d *directExit) snapshot() ([]string, bool) {

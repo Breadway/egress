@@ -36,18 +36,27 @@ const (
 
 // Status is the Home screen's whole model.
 type Status struct {
-	Version        string    `json:"version"`
-	Online         bool      `json:"online"`
-	Connected      bool      `json:"connected"`
-	ConnectedSince time.Time `json:"connected_since"`
-	Mode           Mode      `json:"mode"`
-	Path           string    `json:"path"`
-	Exit           string    `json:"exit"`
-	SpeedMbps      float64   `json:"speed_mbps"`
-	DataGB         float64   `json:"data_gb"`
-	UnblockedToday int       `json:"unblocked_today"`
-	CircleOnline   int       `json:"circle_online"`
-	Network        string    `json:"network"`
+	Version        string       `json:"version"`
+	Online         bool         `json:"online"`
+	Connected      bool         `json:"connected"`
+	ConnectedSince time.Time    `json:"connected_since"`
+	Mode           Mode         `json:"mode"`
+	Path           string       `json:"path"`
+	Exit           string       `json:"exit"`
+	SpeedMbps      float64      `json:"speed_mbps"`
+	DataGB         float64      `json:"data_gb"`
+	UnblockedToday int          `json:"unblocked_today"`
+	CircleOnline   int          `json:"circle_online"`
+	Network        string       `json:"network"`
+	Exits          []ExitOption `json:"exits,omitempty"`
+}
+
+// ExitOption is one registered exit the user can choose. The id stays local;
+// the label is the published name.
+type ExitOption struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Active bool   `json:"active"`
 }
 
 // Person is one device or friend in the circle. No keys, addresses or relay
@@ -124,6 +133,8 @@ type Settings struct {
 	NotifyDrop           bool   `json:"notify_drop"`
 	TextSize             string `json:"text_size"`
 	Mode                 Mode   `json:"mode"`
+	// ExitChoice pins a registered exit id. Empty means automatic order.
+	ExitChoice string `json:"exit_choice"`
 }
 
 // DefaultSettings is what a fresh install starts from.
@@ -143,6 +154,7 @@ func DefaultSettings() Settings {
 		NotifyDrop:           true,
 		TextSize:             "comfortable",
 		Mode:                 ModeAutomatic,
+		ExitChoice:           "",
 	}
 }
 

@@ -114,6 +114,21 @@ func newGUISources(
 			if name := activeExitName(direct); name != "" {
 				st.Exit = name
 			}
+			activeKey := ""
+			if _, _, key, active := direct.ActiveExit(); active {
+				activeKey = key
+			}
+			for _, ex := range direct.Options() {
+				label := ex.Label
+				if label == "" {
+					label = titleName(ex.ID)
+				}
+				st.Exits = append(st.Exits, guiapi.ExitOption{
+					ID:     ex.ID,
+					Label:  label,
+					Active: activeKey != "" && ex.PubKey == activeKey,
+				})
+			}
 		}
 		if splitter != nil {
 			network, domains := splitter.StatusSnapshot()
@@ -150,6 +165,11 @@ func newGUISources(
 		Admin:        newAdminProxy(),
 		ApplySettings: func(s guiapi.Settings) error {
 			applyRuntimeSettings(ctx, sup, peers, splitter, share, relay, s)
+			if direct != nil {
+				if err := direct.SetChoice(s.ExitChoice); err != nil {
+					return fmt.Errorf("exit choice: %w", err)
+				}
+			}
 			if s.ConnectAutomatically != !bootDisabled() {
 				if err := setBootStart(s.ConnectAutomatically); err != nil {
 					return fmt.Errorf("boot start: %w", err)

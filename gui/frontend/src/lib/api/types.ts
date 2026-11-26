@@ -17,6 +17,13 @@ export interface Status {
   unblocked_today: number;
   circle_online: number;
   network: string;
+  exits?: ExitOption[];
+}
+
+export interface ExitOption {
+  id: string;
+  label: string;
+  active: boolean;
 }
 
 export interface Person {
@@ -81,4 +88,5 @@ export interface Settings {
   notify_drop: boolean;
   text_size: "comfortable" | "compact" | "large";
   mode: Mode;
+  exit_choice: string;
 }
