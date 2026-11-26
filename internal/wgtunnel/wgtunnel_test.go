@@ -9,6 +9,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"egress/internal/core"
 )
 
 func TestFrameRoundTrip(t *testing.T) {
@@ -60,6 +62,50 @@ func udpEcho(t *testing.T) (string, func()) {
 // The upgrade path has to carry a real datagram end to end: client UDP socket,
 // framed over a TCP upgrade, server, UDP echo, and back. This is the path
 // WireGuard uses, minus the TLS wrapper that production adds.
+// A tunnel drop takes the DoH listener with it, because that listener needs
+// the tunnel to reach the public resolver. The control relay must still find
+// the seeded Aegis address instead of failing forever.
+func TestResolveFallsBackToSeededControlAddress(t *testing.T) {
+	dead, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dead.Close()
+
+	logger := log.New(os.Stderr, "test: ", 0)
+	tun := NewWithOptions(Options{
+		DoH:            dead.LocalAddr().String(),
+		ResolveTimeout: 100 * time.Millisecond,
+	}, logger)
+
+	got, err := tun.resolve(context.Background())
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got != core.AegisIPv4 {
+		t.Fatalf("fallback address = %q, want %q", got, core.AegisIPv4)
+	}
+}
+
+func TestResolveDoesNotPinAnUnknownHost(t *testing.T) {
+	dead, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dead.Close()
+
+	logger := log.New(os.Stderr, "test: ", 0)
+	tun := NewWithOptions(Options{
+		Host:           "exit.example",
+		DoH:            dead.LocalAddr().String(),
+		ResolveTimeout: 100 * time.Millisecond,
+	}, logger)
+
+	if got, err := tun.resolve(context.Background()); err == nil {
+		t.Fatalf("resolve returned %q for a non-control host, want an error", got)
+	}
+}
+
 func TestTunnelCarriesDatagrams(t *testing.T) {
 	echoAddr, stopEcho := udpEcho(t)
 	defer stopEcho()
