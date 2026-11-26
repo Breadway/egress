@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
+	"egress/internal/core"
 	"errors"
 	"fmt"
 	"log"
@@ -36,6 +37,12 @@ type Options struct {
 	Port  string
 	Path  string
 	DoH   string
+	// Fallback is a known address for Host, used when the local DoH listener
+	// cannot answer. The control relay must not depend on the resolver it
+	// feeds, so the default host falls back to the seeded Aegis address.
+	Fallback string
+	// ResolveTimeout bounds one DoH lookup. Tests shorten it.
+	ResolveTimeout time.Duration
 	// Plain disables TLS. It exists so tests can run against a local server
 	// without certificates; production never sets it.
 	Plain bool
@@ -56,6 +63,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.DoH == "" {
 		o.DoH = DefaultDoH
+	}
+	if o.Fallback == "" && o.Host == DefaultHost {
+		o.Fallback = core.AegisIPv4
+	}
+	if o.ResolveTimeout <= 0 {
+		o.ResolveTimeout = 8 * time.Second
 	}
 	return o
 }
@@ -357,10 +370,17 @@ func (t *Tunnel) resolve(ctx context.Context) (string, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "udp", t.opts.DoH)
 		},
 	}
-	lookup, cancel := context.WithTimeout(ctx, 8*time.Second)
+	lookup, cancel := context.WithTimeout(ctx, t.opts.ResolveTimeout)
 	defer cancel()
 	ips, err := r.LookupIPAddr(lookup, t.opts.Host)
 	if err != nil {
+		if t.opts.Fallback != "" {
+			// The relay carries the tunnel that the DoH listener needs to
+			// reach the public resolver. Falling back to the seeded control
+			// address breaks that deadlock after a tunnel drop.
+			t.log.Printf("relay: resolve %s through DoH failed (%v); using known address %s", t.opts.Host, err, t.opts.Fallback)
+			return t.opts.Fallback, nil
+		}
 		return "", fmt.Errorf("resolve %s: %w", t.opts.Host, err)
 	}
 	for _, ip := range ips {
