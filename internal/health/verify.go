@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -272,11 +273,20 @@ func CheckSystemDNS() error {
 	defer cancel()
 	if _, err := net.DefaultResolver.LookupHost(ctx, "example.com"); err != nil {
 		if servers := resolvServers(); servers != "" {
-			return fmt.Errorf("%v (resolv.conf: %s)", err, servers)
+			hint := ""
+			if tailscaleDNSEnabled() {
+				hint = "; Tailscale MagicDNS is enabled, run `tailscale set --accept-dns=false` so egress can own DNS"
+			}
+			return fmt.Errorf("%v (resolv.conf: %s%s)", err, servers, hint)
 		}
 		return err
 	}
 	return nil
+}
+
+func tailscaleDNSEnabled() bool {
+	out, err := exec.Command("tailscale", "dns", "status").Output()
+	return err == nil && strings.Contains(string(out), "Tailscale DNS: enabled")
 }
 
 // resolvServers returns the nameserver lines for the error message. Empty when

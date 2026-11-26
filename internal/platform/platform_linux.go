@@ -27,6 +27,8 @@ const (
 	linuxResolvBak   = "/etc/resolv.conf.egress.bak"
 	linuxLogPath     = "/var/log/egress.log"
 
+	tailscaleDNSMarker = "tailscale-dns-disabled"
+
 	// SHA-256 of the pinned wstunnel 11.1.0 linux/amd64 binary embedded at
 	// build time. Delivery builds extract this instead of downloading.
 	wstunnelLinuxSHA256 = "62b26d0ee0f2211cef15fa1b85173fe687bc6698121842bf324359b412afc151"
@@ -256,6 +258,12 @@ func (linuxPlatform) RepinEndpoint(gateway, iface string) error {
 }
 
 func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
+	// Egress and Tailscale both want to own resolv.conf. Whichever writes last
+	// wins, and MagicDNS upstreams are unreachable on filtered networks, so
+	// system DNS dies while the egress resolver itself is healthy. Take DNS
+	// away from Tailscale before writing the resolved configuration, and keep
+	// tailnet names on its local proxy.
+	disableTailscaleDNS()
 	if !resolvedActive() {
 		// No systemd-resolved: resolv.conf is the only resolver state. Skip
 		// the drop-in tree entirely so a later-installed resolved does not
@@ -286,7 +294,58 @@ func (p linuxPlatform) ApplyDNS(iface, gateway string) error {
 	// systemd-resolved prefers that scope for names with no routing
 	// domain, so the listener is never consulted for most queries. Claim
 	// the default-route links explicitly.
-	return claimDefaultRouteDNS()
+	if err := claimDefaultRouteDNS(); err != nil {
+		return err
+	}
+	preserveTailscaleNames()
+	return nil
+}
+
+// tailscaleDNSEnabled reports whether Tailscale currently owns resolv.conf.
+// The CLI is absent on machines without Tailscale, so an error means disabled.
+func tailscaleDNSEnabled() bool {
+	out, err := exec.Command("tailscale", "dns", "status").Output()
+	return err == nil && strings.Contains(string(out), "Tailscale DNS: enabled")
+}
+
+// disableTailscaleDNS takes resolv.conf away from Tailscale when it is
+// enabled. The marker records that we changed the preference so disable can
+// put it back instead of leaving the host changed forever.
+func disableTailscaleDNS() {
+	if !tailscaleDNSEnabled() {
+		return
+	}
+	if err := logx.RunLogged("tailscale", "set", "--accept-dns=false"); err != nil {
+		logx.Logger().Printf("could not take DNS from Tailscale (%v); system DNS may stay on MagicDNS", err)
+		return
+	}
+	if err := os.MkdirAll(core.StateDir(), 0700); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(core.StateDir(), tailscaleDNSMarker), []byte("1\n"), 0644)
+	logx.Logger().Printf("disabled Tailscale DNS so egress can own resolv.conf")
+}
+
+// restoreTailscaleDNS puts the preference back when this install changed it.
+func restoreTailscaleDNS() {
+	marker := filepath.Join(core.StateDir(), tailscaleDNSMarker)
+	if _, err := os.Stat(marker); err != nil {
+		return
+	}
+	if err := logx.RunLogged("tailscale", "set", "--accept-dns=true"); err != nil {
+		return
+	}
+	_ = os.Remove(marker)
+}
+
+// preserveTailscaleNames routes only .ts.net to Tailscale's local DNS proxy,
+// which keeps answering tailnet names even with accept-dns off.
+func preserveTailscaleNames() {
+	if _, err := exec.LookPath("tailscale"); err != nil {
+		return
+	}
+	_ = logx.RunLogged("resolvectl", "dns", "tailscale0", "100.100.100.100")
+	_ = logx.RunLogged("resolvectl", "domain", "tailscale0", "~ts.net")
 }
 
 // resolvSymlinkPrefix marks a resolv.conf backup that records a symlink
@@ -414,6 +473,12 @@ func resolvConfPointsAtListener(data []byte) bool {
 }
 
 func (p linuxPlatform) EnsureDNS(iface, gateway string) error {
+	// Tailscale can re-enable MagicDNS after a reboot or a preference change.
+	// Take the file back before checking the drop-in, otherwise a healthy
+	// egress resolver is bypassed by a resolver the network cannot reach.
+	if tailscaleDNSEnabled() {
+		return p.ApplyDNS(iface, gateway)
+	}
 	if !resolvedActive() {
 		// Fallback path converges on resolv.conf contents: no rewrite when
 		// the listener is already the resolver.
@@ -647,6 +712,7 @@ func (linuxPlatform) restoreDNS() error {
 	// makes sense to revert; otherwise the listener that is about to stop
 	// stays the resolver for every name.
 	releaseDefaultRouteDNS()
+	restoreTailscaleDNS()
 	if err := os.Remove(linuxResolved); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", linuxResolved, err)
 	}
