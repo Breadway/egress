@@ -27,6 +27,38 @@ func TestDirectExitPrefersPeerExitOnlyWhenAsked(t *testing.T) {
 	}
 }
 
+func TestDirectExitChoicePinsRegisteredExit(t *testing.T) {
+	t.Setenv("EGRESS_STATE_DIR", t.TempDir())
+	d := &directExit{log: log.New(io.Discard, "", 0), wake: make(chan struct{}, 1)}
+	d.SetExits([]split.DirectExit{
+		{ID: "hestia", Endpoint: "203.0.113.10:7443"},
+		{ID: "charon", Endpoint: "203.0.113.11:7443"},
+	})
+	if ex, ok := d.first(); !ok || ex.ID != "hestia" {
+		t.Fatalf("automatic first = %+v, want hestia", ex)
+	}
+	if err := d.SetChoice("charon"); err != nil {
+		t.Fatal(err)
+	}
+	if ex, ok := d.first(); !ok || ex.ID != "charon" {
+		t.Fatalf("preferred first = %+v, want charon", ex)
+	}
+	// A preferred exit that disappears falls back to the feed instead of
+	// leaving the connection without an exit.
+	if err := d.SetChoice("missing"); err != nil {
+		t.Fatal(err)
+	}
+	if ex, ok := d.first(); !ok || ex.ID != "hestia" {
+		t.Fatalf("missing preferred first = %+v, want hestia", ex)
+	}
+	if err := d.SetChoice(""); err != nil {
+		t.Fatal(err)
+	}
+	if ex, ok := d.first(); !ok || ex.ID != "hestia" {
+		t.Fatalf("automatic after clear first = %+v, want hestia", ex)
+	}
+}
+
 func TestDerpExitTunnelAttaches(t *testing.T) {
 	relay := newTestRelay()
 	key := b64Key(3)
