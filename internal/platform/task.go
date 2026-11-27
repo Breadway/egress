@@ -3,7 +3,21 @@ package platform
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
+
+// taskStatusFromOutput reads the scheduler's Status line (Ready, Running,
+// Disabled) from `schtasks /query /fo list`. It is pure so it can be tested on
+// any platform; an absent line returns empty.
+func taskStatusFromOutput(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if name, value, ok := strings.Cut(line, ":"); ok &&
+			strings.TrimSpace(name) == "Status" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
 
 // Windows task triggers as PowerShell expressions. Callers pass the whole
 // expression so a repeating trigger can carry its own interval.
