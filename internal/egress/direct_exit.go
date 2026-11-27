@@ -130,6 +130,23 @@ func (d *directExit) ActiveExit() (label, kind, pubkey string, active bool) {
 	return label, d.kind, d.pubkey, true
 }
 
+// ActiveExitPeer reports whether the exit currently carrying traffic is one
+// offered by a circle device rather than a published exit server. The app uses
+// this to say "via a friend" only when it is actually a friend.
+func (d *directExit) ActiveExitPeer() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.active {
+		return false
+	}
+	for _, e := range d.peerExits {
+		if e.PubKey == d.pubkey {
+			return true
+		}
+	}
+	return false
+}
+
 // SetPeerExits records the circle's offered exits and whether they should win
 // over the published ones.
 func (d *directExit) SetPeerExits(list []split.DirectExit, prefer bool) {

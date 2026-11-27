@@ -34,6 +34,7 @@ func newGUISources(
 			return guiapi.Protection{Stats: guiapi.ProtectionStats{}, Sites: []guiapi.Site{}}
 		}
 		exitLabel := activeExitName(direct)
+		peerExit := direct != nil && direct.ActiveExitPeer()
 		_, domains := splitter.StatusSnapshot()
 		sites := make([]guiapi.Site, 0, len(domains))
 		stats := guiapi.ProtectionStats{Unblocked: len(domains)}
@@ -43,21 +44,17 @@ func newGUISources(
 				At:     d.LastProbe.UTC().Format(time.RFC3339),
 				Retry:  d.Unserved,
 			}
-			switch {
-			case d.Unserved:
+			if d.Unserved {
 				site.Via, site.Label = "none", "Needs retry"
 				stats.Retry++
-			case d.ServedBy != "" && !strings.EqualFold(d.ServedBy, "aegis") && !strings.EqualFold(d.ServedBy, "cloud"):
-				site.Via, site.Label = "friend", titleName(d.ServedBy)
-				stats.ViaFriend++
-			case exitLabel != "":
-				// The exit router carries blocked traffic through the active
-				// peer exit; the feed's ServedBy field is not always filled.
-				site.Via, site.Label = "friend", exitLabel
-				stats.ViaFriend++
-			default:
-				site.Via, site.Label = "cloud", "Cloud relay"
-				stats.ViaCloud++
+			} else {
+				via, label, cloud := classifySite(d.ServedBy, exitLabel, peerExit)
+				site.Via, site.Label = via, label
+				if cloud {
+					stats.ViaCloud++
+				} else {
+					stats.ViaFriend++
+				}
 			}
 			sites = append(sites, site)
 		}
@@ -225,6 +222,27 @@ func relayRegionCode(setting string) string {
 		return "lax"
 	default:
 		return ""
+	}
+}
+
+// classifySite decides whether a served site went through a friend, a
+// published exit server, or the cloud relay. A published direct exit is not a
+// friend even though it appears in the client's exit list.
+func classifySite(servedBy, exitLabel string, peerExit bool) (via, label string, cloud bool) {
+	servedBy = strings.TrimSpace(servedBy)
+	switch {
+	case servedBy != "" && !strings.EqualFold(servedBy, "aegis") && !strings.EqualFold(servedBy, "cloud"):
+		if exitLabel != "" && strings.EqualFold(servedBy, exitLabel) && !peerExit {
+			return "cloud", titleName(servedBy), true
+		}
+		return "friend", titleName(servedBy), false
+	case exitLabel != "":
+		if peerExit {
+			return "friend", exitLabel, false
+		}
+		return "cloud", exitLabel, true
+	default:
+		return "cloud", "Cloud relay", true
 	}
 }
 
