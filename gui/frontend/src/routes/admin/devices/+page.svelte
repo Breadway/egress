@@ -86,6 +86,7 @@
   {#if admin.devices.length === 0}
     <p class="empty">No devices or invites yet.</p>
   {:else}
+    <p class="faint tiny">Revoking a bound device removes its tunnel access immediately.</p>
     <table class="admin-table">
       <thead>
         <tr><th>Label</th><th>State</th><th>Address</th><th>Created</th><th></th></tr>
@@ -116,15 +117,11 @@
             </td>
             <td>
               <div class="admin-actions">
-                {#if device.status !== "bound"}
-                  {#if confirmRevoke === device.id}
-                    <button class="btn small danger" disabled={admin.busy} onclick={() => revoke(device.id, device.label || device.id)}>Confirm</button>
-                    <button class="btn small ghost" type="button" onclick={() => (confirmRevoke = null)}>Cancel</button>
-                  {:else}
-                    <button class="btn small ghost" disabled={admin.busy} onclick={() => (confirmRevoke = device.id)}>Revoke</button>
-                  {/if}
+                {#if confirmRevoke === device.id}
+                  <button class="btn small danger" disabled={admin.busy} onclick={() => revoke(device.id, device.label || device.id)}>Confirm revoke</button>
+                  <button class="btn small ghost" type="button" onclick={() => (confirmRevoke = null)}>Cancel</button>
                 {:else}
-                  <span class="faint tiny">bound</span>
+                  <button class="btn small ghost" disabled={admin.busy} onclick={() => (confirmRevoke = device.id)}>Revoke</button>
                 {/if}
               </div>
             </td>

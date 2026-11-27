@@ -397,19 +397,31 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 		case "revoke":
 			id := r.FormValue("id")
 			s.devicesMu.Lock()
-			kept := reg.Devices[:0]
-			removed := false
-			for _, d := range reg.Devices {
-				if d.ID == id && d.Status == "issued" {
-					removed = true
-					continue
+			var target *device
+			for i := range reg.Devices {
+				if reg.Devices[i].ID == id {
+					target = &reg.Devices[i]
+					break
 				}
-				kept = append(kept, d)
 			}
-			if removed {
-				reg.Devices = kept
-				_ = saveDevices(s.devicesPath(), reg)
+			if target == nil {
+				s.devicesMu.Unlock()
+				http.Error(w, "no device with that id", http.StatusNotFound)
+				return
 			}
+			if err := s.revokeDevice(*target); err != nil {
+				s.devicesMu.Unlock()
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			kept := reg.Devices[:0]
+			for _, d := range reg.Devices {
+				if d.ID != id {
+					kept = append(kept, d)
+				}
+			}
+			reg.Devices = kept
+			_ = saveDevices(s.devicesPath(), reg)
 			s.devicesMu.Unlock()
 		}
 		reg, loadErr = loadDevices(s.devicesPath())
@@ -443,10 +455,7 @@ func (s *server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			if build == "" {
 				build = "&mdash;"
 			}
-			action := ""
-			if d.Status == "issued" {
-				action = `<form method="post" action="/admin/devices"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><button class="btn ghost small" type="submit">Revoke</button></form>`
-			}
+			action := `<form method="post" action="/admin/devices" onsubmit="return confirm('Revoke this device? It disconnects immediately.')"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="` + template.HTMLEscapeString(d.ID) + `"><button class="btn ghost small" type="submit">Revoke</button></form>`
 			addr := template.HTMLEscapeString(d.IP)
 			if addr == "" {
 				addr = `<span class="muted">unassigned</span>`
