@@ -36,6 +36,11 @@ type Exit struct {
 	Priority    int    `json:"priority,omitempty"`
 	MaxPrefixes int    `json:"max_prefixes,omitempty"`
 	Host        string `json:"host,omitempty"`
+	// Address is the exit's tunnel address on the hub, for example
+	// 10.99.0.2. The router keeps it in the peer's allowed IPs so the hub
+	// can DNAT a destination to the exit itself, not only to a prefix the
+	// exit carries.
+	Address string `json:"address,omitempty"`
 	// Network is the exit's own network id when it also runs as a client.
 	// The learner skips it for domains that network reports blocked.
 	Network string `json:"network,omitempty"`

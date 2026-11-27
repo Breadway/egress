@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -150,6 +151,16 @@ func newHarness(t *testing.T, exits ...Exit) *harness {
 }
 
 func (h *harness) owner(prefix string) string { return h.l.state.Assignments[prefix] }
+
+func TestApplyAllowedIncludesExitAddress(t *testing.T) {
+	h := newHarness(t, Exit{ID: "hestia", PubKey: "hestia-key", Address: "10.99.0.2", Enabled: true})
+	h.l.state.Assignments = map[string]string{"104.18.0.0/16": "hestia"}
+	h.l.applyAllowed("hestia")
+	got := h.allowed["hestia-key"]
+	if !strings.Contains(got, "104.18.0.0/16") || !strings.Contains(got, "10.99.0.2/32") {
+		t.Fatalf("allowed = %q, want the prefix and the exit address", got)
+	}
+}
 
 // route marks a prefix as already routed, as the kernel would after a cycle.
 func (h *harness) route(prefix string) {
