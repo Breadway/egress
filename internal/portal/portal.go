@@ -128,7 +128,7 @@ footer { margin-top: 2rem; color: #888; font-size: .85rem; }
 <div class="banner off"><strong>egress is offline.</strong> The tunnel is not up, so nothing can be routed right now. This is the last state this machine knows, from before the connection dropped.</div>
 {{end}}
 {{if .UnservedCount}}
-<div class="banner warn">{{.UnservedCount}} blocked site{{if ne .UnservedCount 1}}s{{end}} cannot be reached through any available exit. {{if .Online}}They were refused by the cloud exit and by every enrolled exit.{{else}}Nothing can be retried until the tunnel is back.{{end}}</div>
+<div class="banner warn">{{.UnservedCount}} blocked site{{if ne .UnservedCount 1}}s{{end}} cannot be routed through any available exit. {{if .Online}}Their traffic stays on your normal connection, so they are marked direct rather than tunnelled.{{else}}Their traffic stays on your normal connection until the tunnel is back.{{end}}</div>
 {{end}}
 <table>
 <thead><tr><th>site</th><th>status</th><th>why</th><th>checked</th></tr></thead>
@@ -136,8 +136,8 @@ footer { margin-top: 2rem; color: #888; font-size: .85rem; }
 {{range .Domains}}
 <tr>
 <td class="name">{{.Name}}</td>
-<td>{{if .Unserved}}<span class="pill unserved">no path</span>{{else if .ServedBy}}<span class="pill exit">via {{.ServedBy}}</span>{{else}}<span class="pill direct">cloud exit</span>{{end}}</td>
-<td>{{.Evidence}}{{if .Unserved}} · refused by every exit{{else if .ServedBy}} · the cloud exit was refused, {{.ServedBy}} serves it{{end}}</td>
+<td>{{if .Unserved}}<span class="pill direct">direct</span>{{else if .ServedBy}}<span class="pill exit">via {{.ServedBy}}</span>{{else}}<span class="pill direct">cloud exit</span>{{end}}</td>
+<td>{{.Evidence}}{{if .Unserved}} · every exit refused it; traffic uses your normal connection{{else if .ServedBy}} · the cloud exit was refused, {{.ServedBy}} serves it{{end}}</td>
 <td>{{.Checked}}</td>
 </tr>
 {{else}}
@@ -147,7 +147,7 @@ footer { margin-top: 2rem; color: #888; font-size: .85rem; }
 </table>
 <footer>
 <p>This page is served by egress on this machine at <code>http://127.0.0.1:7280/</code>. It is reachable even when the tunnel is not.</p>
-<p>A site marked <em>no path</em> is blocked by the network and refused by every exit egress could try, including the cloud exit. There is nothing on this machine's side to fix; the next check happens automatically.</p>
+<p>A site marked <em>direct</em> is blocked by the network and refused by every exit egress could try, including the cloud exit, so its traffic stays on your normal connection instead of a tunnel. That is the route in use, not a claim that the site is unreachable; the next check happens automatically.</p>
 </footer>
 </body>
 </html>

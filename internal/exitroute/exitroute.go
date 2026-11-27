@@ -189,7 +189,11 @@ type ProbeResult struct {
 	Handshake bool
 	// Status is the HTTP status, zero when the server closed without a reply.
 	Status int
-	Err    error
+	// BlockPage names the filter whose block page answered, empty when the
+	// response is the site's own. A refusal status alone is not a block: an
+	// application can answer 403 to a probe while the path reaches it fine.
+	BlockPage string
+	Err       error
 }
 
 // Works reports whether the path reaches the site. A site may close the
@@ -202,7 +206,10 @@ func (r ProbeResult) Works() bool {
 	}
 	switch r.Status {
 	case 403, 451, 429:
-		return false
+		// Only a filter's own block page proves the path is refused. An
+		// application-level 403 (bot detection, a private API) means the
+		// request reached the site, which is what this check is about.
+		return r.BlockPage == ""
 	}
 	return true
 }

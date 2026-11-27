@@ -31,10 +31,10 @@ func TestPortalShowsHowEachSiteIsReached(t *testing.T) {
 	})
 	for _, want := range []string{
 		"via hestia",
-		"no path",
+		"direct",
 		"cloud exit",
-		"refused by every exit",
-		"cannot be reached through any available exit",
+		"every exit refused it",
+		"cannot be routed through any available exit",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page is missing %q", want)
@@ -52,8 +52,8 @@ func TestPortalOfflineBanner(t *testing.T) {
 	if !strings.Contains(body, "egress is offline") {
 		t.Error("offline snapshot has no offline banner")
 	}
-	if !strings.Contains(body, "Nothing can be retried until the tunnel is back") {
-		t.Error("offline snapshot does not explain that retries are paused")
+	if !strings.Contains(body, "until the tunnel is back") {
+		t.Error("offline snapshot does not explain the direct-only state")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"egress/internal/blockpage"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -345,6 +346,14 @@ func (l *Learner) decide(ctx context.Context, r resolved, handshakes map[string]
 	}
 
 	l.release(r.prefixes)
+	// Every exit refused. Ask the direct path once more before publishing the
+	// verdict: the cloud probe ran before the exits were tried, and a site
+	// that answers directly must not be labelled blocked. Releasing above also
+	// means this probe no longer follows a stale assignment.
+	if l.probeAny(ctx, r.domain, r.ips, CloudMark).Works() {
+		site.State = SiteCloud
+		return site
+	}
 	site.State = SiteUnserved
 	return site
 }
@@ -422,7 +431,8 @@ func (l *Learner) probe(ctx context.Context, domain, ip string, mark int) ProbeR
 	if _, err := tc.Write([]byte(req)); err != nil {
 		return ProbeResult{Handshake: true, Err: err}
 	}
-	line, err := bufio.NewReader(tc).ReadString('\n')
+	br := bufio.NewReader(tc)
+	line, err := br.ReadString('\n')
 	if err != nil {
 		// Handshake done, then the server closed without a reply. The path
 		// works; hosts that only serve files do this for "/".
@@ -436,7 +446,43 @@ func (l *Learner) probe(ctx context.Context, domain, ip string, mark int) ProbeR
 	if convErr != nil {
 		return ProbeResult{Handshake: true, Err: fmt.Errorf("unexpected status %q", fields[1])}
 	}
-	return ProbeResult{Handshake: true, Status: status}
+	sig := ""
+	if status >= 400 {
+		// A refusal status needs the page to prove a filter answered. Reddit
+		// answers 403 to a middlebox-shaped probe while the path is fine, and
+		// treating that as blocked published a working site as unserved.
+		sig = l.readBlockPage(tc, br, status)
+	}
+	return ProbeResult{Handshake: true, Status: status, BlockPage: sig}
+}
+
+// readBlockPage reads a refusal response's body and names the filter whose
+// block page it is, or "" when the page is the site's own. The read is bounded
+// so a slow body cannot hold the cycle.
+func (l *Learner) readBlockPage(conn net.Conn, br *bufio.Reader, status int) string {
+	_ = conn.SetReadDeadline(time.Now().Add(l.opts.Timeout))
+	for {
+		header, err := br.ReadString('\n')
+		if err != nil {
+			return ""
+		}
+		if header == "\r\n" || header == "\n" {
+			break
+		}
+	}
+	var b strings.Builder
+	buf := make([]byte, 4096)
+	for b.Len() < 64<<10 {
+		n, err := br.Read(buf)
+		if n > 0 {
+			b.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	body := b.String()
+	return blockpage.Signature(status, blockpage.Title(body), body)
 }
 
 // ownerOf returns the exit a prefix set is currently assigned to. Conflicting

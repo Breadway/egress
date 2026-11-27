@@ -45,7 +45,11 @@ func newGUISources(
 				Retry:  d.Unserved,
 			}
 			if d.Unserved {
-				site.Via, site.Label = "none", "Needs retry"
+				// The router released the prefixes, so this traffic already
+				// follows the physical link. "Needs retry" claimed the site was
+				// unreachable while it often loads fine direct; name the route
+				// instead. The pill stays clickable to queue a retry.
+				site.Via, site.Label = "direct", "Direct"
 				stats.Retry++
 			} else {
 				via, label, cloud := classifySite(d.ServedBy, exitLabel, peerExit)

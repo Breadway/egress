@@ -19,9 +19,10 @@ func TestProbeWorks(t *testing.T) {
 		{"served", ProbeResult{Handshake: true, Status: 200}, true},
 		{"redirect", ProbeResult{Handshake: true, Status: 302}, true},
 		{"closed after handshake", ProbeResult{Handshake: true}, true},
-		{"forbidden", ProbeResult{Handshake: true, Status: 403}, false},
-		{"legal refusal", ProbeResult{Handshake: true, Status: 451}, false},
-		{"rate limited", ProbeResult{Handshake: true, Status: 429}, false},
+		{"forbidden with a block page", ProbeResult{Handshake: true, Status: 403, BlockPage: "fortigate"}, false},
+		{"application forbidden", ProbeResult{Handshake: true, Status: 403}, true},
+		{"legal refusal with a block page", ProbeResult{Handshake: true, Status: 451, BlockPage: "fortigate"}, false},
+		{"rate limited", ProbeResult{Handshake: true, Status: 429}, true},
 		{"handshake failed", ProbeResult{Err: os.ErrDeadlineExceeded}, false},
 		{"no handshake no status", ProbeResult{}, false},
 	}
@@ -174,7 +175,7 @@ func (h *harness) pathProbe(prefix, id string) {
 		if h.owner(prefix) == id {
 			return ProbeResult{Handshake: true, Status: 200}
 		}
-		return ProbeResult{Handshake: true, Status: 403}
+		return ProbeResult{Handshake: true, Status: 403, BlockPage: "fortigate"}
 	}
 }
 
@@ -189,7 +190,7 @@ func healthyNow(exits ...Exit) map[string]int64 {
 func resolvedSite(domain, prefix string) resolved {
 	return resolved{
 		domain: domain, prefixes: []string{prefix}, ips: []string{"203.0.113.10"},
-		cloud: ProbeResult{Handshake: true, Status: 403}, ok: true,
+		cloud: ProbeResult{Handshake: true, Status: 403, BlockPage: "fortigate"}, ok: true,
 	}
 }
 
@@ -250,7 +251,7 @@ func TestDecideUnserved(t *testing.T) {
 	h.l.state.Assignments["151.101.1.0/24"] = "a"
 	h.route("151.101.1.0/24")
 	h.l.probeFn = func(ctx context.Context, domain, ip string, mark int) ProbeResult {
-		return ProbeResult{Handshake: true, Status: 403}
+		return ProbeResult{Handshake: true, Status: 403, BlockPage: "fortigate"}
 	}
 	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), healthyNow(a), time.Now())
 	if site.State != SiteUnserved {
@@ -261,6 +262,32 @@ func TestDecideUnserved(t *testing.T) {
 	}
 	if h.routes["151.101.1.0/24"] {
 		t.Error("unserved prefix still routed")
+	}
+}
+
+func TestDecideReprobesDirectBeforeUnserved(t *testing.T) {
+	a := Exit{ID: "a", PubKey: "pa", Enabled: true}
+	h := newHarness(t, a)
+	h.l.state.Assignments["151.101.1.0/24"] = "a"
+	h.route("151.101.1.0/24")
+	// The first cloud probe saw a block page, so the site is tentatively
+	// unserved. The direct re-probe reaches it, which must win.
+	h.l.probeFn = func(ctx context.Context, domain, ip string, mark int) ProbeResult {
+		if mark == CloudMark {
+			return ProbeResult{Handshake: true, Status: 200}
+		}
+		return ProbeResult{Handshake: true, Status: 403, BlockPage: "fortigate"}
+	}
+	r := resolvedSite("www.reddit.com", "151.101.1.0/24")
+	site := h.l.decide(context.Background(), r, healthyNow(a), time.Now())
+	if site.State != SiteCloud {
+		t.Fatalf("site %+v, want cloud when the direct path answers", site)
+	}
+	if _, ok := h.l.state.Assignments["151.101.1.0/24"]; ok {
+		t.Error("a direct site stayed assigned to an exit")
+	}
+	if h.routes["151.101.1.0/24"] {
+		t.Error("a direct site stayed routed into the tunnel")
 	}
 }
 
@@ -312,7 +339,7 @@ func TestDecideSkipsExitWhoseNetworkBlocksDomain(t *testing.T) {
 		if tried == "b" {
 			return ProbeResult{Handshake: true, Status: 200}
 		}
-		return ProbeResult{Handshake: true, Status: 403}
+		return ProbeResult{Handshake: true, Status: 403, BlockPage: "fortigate"}
 	}
 	site := h.l.decide(context.Background(), resolvedSite("www.reddit.com", "151.101.1.0/24"), healthyNow(a, b), time.Now())
 	if site.Exit != "b" {
