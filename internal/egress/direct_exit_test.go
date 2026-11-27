@@ -6,8 +6,77 @@ import (
 	"log"
 	"testing"
 
+	"egress/internal/core"
 	"egress/internal/split"
 )
+
+// fakeExitTunnel reports a live tunnel so reconcile reaches the peer split
+// without a real DERP connection.
+type fakeExitTunnel struct{ local string }
+
+func (f *fakeExitTunnel) Ensure(context.Context) error { return nil }
+func (f *fakeExitTunnel) Stop()                        {}
+func (f *fakeExitTunnel) Connected() bool              { return true }
+func (f *fakeExitTunnel) LocalAddr() string            { return f.local }
+
+// Only prefixes Charon assigned to the exit go to the exit peer; the rest stay
+// on the hub so Charon exits them.
+func TestDirectExitSplitsAssignedPrefixes(t *testing.T) {
+	plat := &fakePeerPlatform{}
+	exitKey := b64Key(5)
+	relayKey := b64Key(4)
+	d := newDirectExit(plat, "wg0", newTestRelay(), log.New(io.Discard, "", 0))
+	d.SetExits([]split.DirectExit{{
+		ID: "hestia", Transport: "derp", RelayKey: relayKey, PubKey: exitKey,
+	}})
+	d.SetAssignFunc(func(prefixes []string) map[string][]string {
+		out := map[string][]string{}
+		for _, p := range prefixes {
+			if p == "203.0.113.9" {
+				out["hestia"] = append(out["hestia"], p)
+			} else {
+				out[""] = append(out[""], p)
+			}
+		}
+		return out
+	})
+	// Pre-seed a live tunnel with the same identity so reconcile does not try
+	// to attach a real relay.
+	d.mu.Lock()
+	d.tunnel = &fakeExitTunnel{local: "127.0.0.1:7109"}
+	d.pubkey = exitKey
+	d.kind = "derp"
+	d.relayKey = relayKey
+	d.mu.Unlock()
+	d.SetPrefixes([]string{"203.0.113.9", "198.51.100.7"})
+
+	d.reconcile(context.Background())
+
+	var exitAllowed, hubAllowed []string
+	for _, c := range plat.calls {
+		if c.kind != "set" {
+			continue
+		}
+		switch c.pubkey {
+		case exitKey:
+			exitAllowed = c.allowed
+		case core.AegisPublicKey:
+			hubAllowed = c.allowed
+		}
+	}
+	if !containsPrefix(exitAllowed, "203.0.113.9/32") {
+		t.Fatalf("exit allowed = %v, want the assigned prefix", exitAllowed)
+	}
+	if containsPrefix(exitAllowed, "198.51.100.7/32") {
+		t.Fatalf("exit allowed = %v, must not carry the cloud prefix", exitAllowed)
+	}
+	if !containsPrefix(hubAllowed, "198.51.100.7/32") || !containsPrefix(hubAllowed, core.TunnelSubnet) {
+		t.Fatalf("hub allowed = %v, want the cloud prefix and the subnet", hubAllowed)
+	}
+	if containsPrefix(hubAllowed, "203.0.113.9/32") {
+		t.Fatalf("hub allowed = %v, must not claim the exit prefix", hubAllowed)
+	}
+}
 
 func TestDirectExitPrefersPeerExitOnlyWhenAsked(t *testing.T) {
 	d := &directExit{log: log.New(io.Discard, "", 0), wake: make(chan struct{}, 1)}

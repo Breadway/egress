@@ -1180,3 +1180,42 @@ func TestForcedAllowOverrideDoesNotRoute(t *testing.T) {
 		t.Fatalf("forced allow still routed: %v", calls)
 	}
 }
+
+func TestPrefixExitsUsesServedAndAssignments(t *testing.T) {
+	c := &Controller{
+		blockedIPs: map[string][]string{
+			// Anycast address that is not in Charon's assigned /24.
+			"i.imgur.com":   {"199.232.196.193"},
+			"other.example": {"198.51.100.7"},
+		},
+	}
+	c.SetServed(map[string]string{"i.imgur.com": "hestia"})
+	c.SetAssignments(map[string]string{
+		"146.75.92.0/24":   "hestia",
+		"203.0.113.128/25": "hestia",
+	})
+	got := c.PrefixExits([]string{
+		"199.232.196.193", "146.75.92.9", "203.0.113.200", "203.0.113.10", "198.51.100.7",
+	})
+	if len(got["hestia"]) != 3 ||
+		!containsString(got["hestia"], "199.232.196.193") ||
+		!containsString(got["hestia"], "146.75.92.9") ||
+		!containsString(got["hestia"], "203.0.113.200") {
+		t.Fatalf("hestia = %v, want the served domain and assigned prefixes", got["hestia"])
+	}
+	cloud := got[""]
+	if len(cloud) != 2 ||
+		!containsString(cloud, "203.0.113.10") ||
+		!containsString(cloud, "198.51.100.7") {
+		t.Fatalf("cloud = %v, want the unassigned prefixes", cloud)
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}

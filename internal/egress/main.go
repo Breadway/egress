@@ -765,6 +765,12 @@ func cmdSupervise(args []string) error {
 			// set for both the exit and Aegis, so the routed destinations and
 			// the peer allowed-ips move together.
 			direct = newDirectExit(ps, splitDev, relay, appLogger())
+			direct.SetAssignFunc(func(prefixes []string) map[string][]string {
+				if splitter == nil {
+					return nil
+				}
+				return splitter.PrefixExits(prefixes)
+			})
 			routes.OnChange(direct.SetPrefixes)
 		}
 		splitter = split.NewController(network, iface, routes, appLogger())

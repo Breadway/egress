@@ -65,6 +65,16 @@ type directExit struct {
 	relayKey   string
 	active     bool
 	lastErr    string
+	// assign reports Charon's per-prefix exit assignment. The key is the exit
+	// id, or "" for the cloud exit. Nil means every prefix is cloud.
+	assign func([]string) map[string][]string
+	// used is true while /api/exit/use is announced for useID, so a teardown
+	// withdraws it.
+	used  bool
+	useID string
+	// present is true while the exit peer may exist in the kernel, including
+	// one left by a previous process, so cleanup removes it exactly once.
+	present bool
 
 	wake chan struct{}
 }
@@ -157,6 +167,16 @@ func (d *directExit) SetPeerExits(list []split.DirectExit, prefer bool) {
 	d.nudge()
 }
 
+// SetAssignFunc supplies Charon's per-prefix exit assignment. The key is the
+// exit id and the empty key is the cloud exit. A nil function means every
+// routed prefix belongs to the cloud exit.
+func (d *directExit) SetAssignFunc(fn func([]string) map[string][]string) {
+	d.mu.Lock()
+	d.assign = fn
+	d.mu.Unlock()
+	d.nudge()
+}
+
 // SetPrefixes records the destinations the split controller has routed. It is
 // called under the route manager's lock, so it only stores and signals.
 func (d *directExit) SetPrefixes(prefixes []string) {
@@ -182,9 +202,13 @@ func (d *directExit) Run(ctx context.Context) {
 		case <-ctx.Done():
 			d.mu.Lock()
 			tunnel := d.tunnel
+			used := d.used
 			d.mu.Unlock()
 			if tunnel != nil {
 				tunnel.Stop()
+			}
+			if used {
+				_ = withdrawExitUse(context.Background())
 			}
 			return
 		case <-d.wake:
@@ -257,7 +281,7 @@ func (d *directExit) snapshot() ([]string, bool) {
 func (d *directExit) reconcile(ctx context.Context) {
 	ex, ok := d.first()
 	if !ok {
-		d.fallback()
+		d.fallback(ctx)
 		return
 	}
 	kind := ex.Transport
@@ -268,7 +292,7 @@ func (d *directExit) reconcile(ctx context.Context) {
 	if kind != "derp" {
 		host, port = exitHostPort(ex.Endpoint)
 		if host == "" {
-			d.fallback()
+			d.fallback(ctx)
 			return
 		}
 	}
@@ -291,7 +315,7 @@ func (d *directExit) reconcile(ctx context.Context) {
 				d.relayKey = ex.RelayKey
 				d.mu.Unlock()
 				d.noteError("exit relay: %v", terr)
-				d.fallback()
+				d.fallback(ctx)
 				return
 			}
 			d.tunnel = tunnel
@@ -306,8 +330,11 @@ func (d *directExit) reconcile(ctx context.Context) {
 		d.pubkey = ex.PubKey
 		d.kind = kind
 		d.relayKey = ex.RelayKey
+		// A peer for this exit may survive from a previous process.
+		d.present = true
 	}
 	tunnel := d.tunnel
+	assign := d.assign
 	d.mu.Unlock()
 	if previous != "" {
 		// Two exit peers claiming the same destinations is a coin toss in the
@@ -320,30 +347,40 @@ func (d *directExit) reconcile(ctx context.Context) {
 
 	if err := tunnel.Ensure(ctx); err != nil {
 		d.noteError("exit tunnel: %v", err)
-		d.fallback()
+		d.fallback(ctx)
 		return
 	}
 	prefixes, _ := d.snapshot()
-	if !tunnel.Connected() || len(prefixes) == 0 {
-		d.fallback()
+	groups := map[string][]string{}
+	if assign != nil {
+		groups = assign(prefixes)
+	}
+	// Charon decides which destinations need the residential exit. Only those
+	// go to the exit; the rest stay on the hub so Charon exits them itself.
+	exitPrefixes := groups[ex.ID]
+	cloudPrefixes := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		if !containsPrefix(exitPrefixes, p) {
+			cloudPrefixes = append(cloudPrefixes, p)
+		}
+	}
+	if !tunnel.Connected() || len(exitPrefixes) == 0 {
+		d.fallback(ctx)
 		return
 	}
 
-	allowed := make([]string, 0, len(prefixes))
-	for _, p := range prefixes {
-		allowed = append(allowed, p+"/32")
-	}
+	allowed := prefixSuffix(exitPrefixes)
 	local := tunnel.LocalAddr()
 	if local == "" {
 		d.noteError("exit tunnel has no local address")
-		d.fallback()
+		d.fallback(ctx)
 		return
 	}
 	if cfg, ok := d.plat.(relayPeerConfigurer); ok {
 		restarted, err := cfg.EnsureRelayPeer(d.dev, ex.PubKey, local, allowed)
 		if err != nil {
 			d.noteError("exit config: %v", err)
-			d.fallback()
+			d.fallback(ctx)
 			return
 		}
 		if restarted {
@@ -352,42 +389,84 @@ func (d *directExit) reconcile(ctx context.Context) {
 	}
 	if err := d.plat.SetPeer(d.dev, ex.PubKey, local, allowed); err != nil {
 		d.noteError("exit peer: %v", err)
-		d.fallback()
+		d.fallback(ctx)
 		return
 	}
-	// Aegis keeps only the tunnel subnet while the exit carries the routed
-	// destinations, so the two peers never claim the same prefix.
-	if err := d.plat.SetPeer(d.dev, core.AegisPublicKey, "", []string{core.TunnelSubnet}); err != nil {
+	// The hub keeps every destination Charon did not assign to the exit, so
+	// those still leave through Charon while the assigned ones bypass it.
+	hub := append([]string{core.TunnelSubnet}, prefixSuffix(cloudPrefixes)...)
+	if err := d.plat.SetPeer(d.dev, core.AegisPublicKey, "", hub); err != nil {
 		d.noteError("aegis peer: %v", err)
+	}
+	if ex.Device != "" {
+		d.mu.Lock()
+		needUse := !d.used || d.useID != ex.Device
+		d.mu.Unlock()
+		if needUse {
+			if err := announceExitUse(ctx, ex.Device); err != nil {
+				d.noteError("exit use: %v", err)
+			} else {
+				d.mu.Lock()
+				d.used = true
+				d.useID = ex.Device
+				d.mu.Unlock()
+			}
+		}
 	}
 	d.mu.Lock()
 	was := d.active
 	d.active = true
 	d.mu.Unlock()
 	if !was {
-		d.log.Printf("split: blocked destinations leaving through %s (%s)", ex.ID, ex.Endpoint)
+		d.log.Printf("split: %d blocked prefixes leaving through %s, %d staying on the cloud exit", len(exitPrefixes), ex.ID, len(cloudPrefixes))
 	}
+}
+
+func containsPrefix(list []string, prefix string) bool {
+	for _, p := range list {
+		if p == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 // fallback puts every routed destination back on the Aegis peer and drops the
 // exit peer. Running it when nothing changed is harmless: the commands are
 // idempotent and cheap enough at this cadence.
-func (d *directExit) fallback() {
+func (d *directExit) fallback(ctx context.Context) {
 	d.mu.Lock()
 	pub := d.pubkey
 	was := d.active
+	used := d.used
+	present := d.present
 	prefixes := append([]string(nil), d.prefixes...)
 	d.active = false
+	d.used = false
+	d.useID = ""
 	d.mu.Unlock()
 
-	if was && pub != "" {
+	if pub != "" && present {
+		// Remove the peer even when this process did not mark it active: a
+		// restart can leave the previous run's exit peer in the kernel, and it
+		// would otherwise keep a stale allowed-ips claim.
 		if err := d.plat.RemovePeer(d.dev, pub); err != nil {
 			d.noteError("exit peer removal: %v", err)
 		}
 		if cfg, ok := d.plat.(relayPeerConfigurer); ok {
 			_ = cfg.RemoveRelayPeer(d.dev, pub)
 		}
-		d.log.Printf("split: exit unavailable, blocked destinations back on Aegis")
+		d.mu.Lock()
+		d.present = false
+		d.mu.Unlock()
+		if was {
+			d.log.Printf("split: exit unavailable, blocked destinations back on Aegis")
+		}
+	}
+	if used {
+		if err := withdrawExitUse(ctx); err != nil {
+			d.noteError("exit use withdraw: %v", err)
+		}
 	}
 	allowed := append([]string{core.TunnelSubnet}, prefixSuffix(prefixes)...)
 	if err := d.plat.SetPeer(d.dev, core.AegisPublicKey, "", allowed); err != nil {

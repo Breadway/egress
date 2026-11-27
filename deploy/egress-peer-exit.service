@@ -1,0 +1,12 @@
+[Unit]
+Description=Egress peer exit serving blocked traffic over DERP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/egress exit serve --derp
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

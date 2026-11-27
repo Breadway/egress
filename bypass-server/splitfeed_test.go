@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -175,5 +177,80 @@ func TestClaimRefreshLeasesAndExpires(t *testing.T) {
 	// After the lease expires it can.
 	if after := claimRefresh(&feed, now.Add(splitClaimLease+time.Minute)); len(after) != 1 {
 		t.Fatalf("expired job not re-issued: %v", after)
+	}
+}
+
+func TestSeedPublishesDerpExit(t *testing.T) {
+	dir := t.TempDir()
+	regPath := filepath.Join(dir, "exits.json")
+	t.Setenv("EGRESS_EXIT_REGISTRY", regPath)
+	reg := exitRegistry{Version: 1, Exits: []exitEntry{{
+		ID: "hestia", Label: "hestia", Enabled: true,
+		Transport: "derp", RelayKey: "relay-key", DerpPubKey: "wg-key", Device: "d-5f196bbf",
+	}}}
+	data, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(regPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &server{state: dir}
+	req := httptest.NewRequest(http.MethodGet, "/api/seed?n="+networkID("test-net"), nil)
+	rec := httptest.NewRecorder()
+	s.apiSeed(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed status %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Exits []struct {
+			ID        string `json:"id"`
+			Endpoint  string `json:"endpoint"`
+			PubKey    string `json:"pubkey"`
+			Transport string `json:"transport"`
+			RelayKey  string `json:"relay_key"`
+			Device    string `json:"device"`
+		} `json:"exits"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Exits) != 1 {
+		t.Fatalf("exits = %+v, want one DERP exit", body.Exits)
+	}
+	e := body.Exits[0]
+	if e.Transport != "derp" || e.RelayKey != "relay-key" || e.PubKey != "wg-key" || e.Device != "d-5f196bbf" || e.Endpoint != "" {
+		t.Fatalf("exit = %+v, want the DERP fields and no endpoint", e)
+	}
+}
+
+func TestSeedPublishesAssignments(t *testing.T) {
+	dir := t.TempDir()
+	statusPath := filepath.Join(dir, "status.json")
+	t.Setenv("EGRESS_EXIT_STATUS", statusPath)
+	data, err := json.Marshal(exitStatus{Assignments: map[string]string{"146.75.92.0/24": "hestia"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statusPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &server{state: dir}
+	req := httptest.NewRequest(http.MethodGet, "/api/seed?n="+networkID("test-net"), nil)
+	rec := httptest.NewRecorder()
+	s.apiSeed(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed status %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Assignments map[string]string `json:"assignments"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Assignments["146.75.92.0/24"] != "hestia" {
+		t.Fatalf("assignments = %v, want the router assignment", body.Assignments)
 	}
 }

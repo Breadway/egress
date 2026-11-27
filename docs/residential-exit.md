@@ -103,6 +103,29 @@ State is in `/var/lib/egress-exit/state.json`; the published status is
 `/var/lib/egress-exit/status.json` (0644, no secrets). The learner re-reads the
 kernel every cycle, so a `wg0` restart cannot silently drop a route.
 
+### Client DERP path
+
+The split feed also carries the exit list and the router's assignments. A
+client keeps learning blocked sites as it does today. When a learned site is
+assigned to a residential exit, the client sends only those destinations to
+that exit over the existing DERP transport and leaves every other blocked
+destination on the cloud exit. A site the router has not assigned yet stays on
+the cloud exit and moves on the next feed once the router has probed it, so the
+path is learned rather than static.
+
+An exit registers with `transport: derp`, its `relay_key`, and the WireGuard
+key of the interface that carries the traffic (`derp_pubkey`). On the exit host,
+`egress exit serve --derp` publishes the relay key, adds clients that announce
+use, and forwards their packets through the local WireGuard listener:
+
+```sh
+egress exit serve --derp
+```
+
+The unit is `deploy/egress-peer-exit.service`. The DERP relay itself is the
+existing Tailscale relay used by the other DERP paths; this path changes which
+exit carries the traffic, not the relay.
+
 ### Failure behaviour
 
 - Exit gone: its prefixes move to the next exit that serves them, within one

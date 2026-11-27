@@ -65,7 +65,10 @@ type DirectExit struct {
 	Path      string `json:"path,omitempty"`
 	PubKey    string `json:"pubkey"`
 	RelayKey  string `json:"relay_key,omitempty"`
-	Priority  int    `json:"priority,omitempty"`
+	// Device is the peer-exit device id to announce use against. A registered
+	// DERP exit carries it so the exit server knows which client to add.
+	Device   string `json:"device,omitempty"`
+	Priority int    `json:"priority,omitempty"`
 }
 
 type feedResponse struct {
@@ -74,6 +77,14 @@ type feedResponse struct {
 	Domains   []feedDomain   `json:"domains"`
 	Protocols []feedProtocol `json:"protocols,omitempty"`
 	Exits     []DirectExit   `json:"exits,omitempty"`
+	// Assignments maps a destination prefix to the exit Charon assigned it.
+	// The client routes a learned block to that exit when it needs the
+	// residential path, and to the cloud exit otherwise.
+	Assignments map[string]string `json:"assignments,omitempty"`
+	// Served maps a domain to the exit Charon assigned it. A client uses it
+	// with the addresses it resolved itself, so anycast addresses that differ
+	// from Charon's prefixes still follow the right exit.
+	Served map[string]string `json:"served,omitempty"`
 	// Refresh lists due sites this client has been leased to re-verify.
 	Refresh []feedDomain `json:"refresh,omitempty"`
 }
@@ -122,10 +133,12 @@ type splitReporter struct {
 	refreshFunc func([]feedDomain)
 
 	// test hooks
-	seedURL   string
-	reportURL string
-	mergeFunc func([]feedDomain, []feedProtocol)
-	exitsFunc func([]DirectExit)
+	seedURL    string
+	reportURL  string
+	mergeFunc  func([]feedDomain, []feedProtocol)
+	exitsFunc  func([]DirectExit)
+	assignFunc func(map[string]string)
+	servedFunc func(map[string]string)
 }
 
 func newSplitReporter(network, dir string, logger *log.Logger) *splitReporter {
@@ -366,8 +379,44 @@ func (r *splitReporter) fetchFeed(ctx context.Context) error {
 	log.Printf("split: feed has %d domains and %d protocol notes", len(feed.Domains), len(feed.Protocols))
 	r.merge(feed.Domains, feed.Protocols)
 	r.mergeExits(feed.Exits)
+	r.mergeAssignments(feed.Assignments)
+	r.mergeServed(feed.Served)
 	r.refreshDue(feed.Refresh)
 	return nil
+}
+
+// mergeAssignments hands Charon's prefix-to-exit map to the controller.
+func (r *splitReporter) mergeAssignments(assignments map[string]string) {
+	r.mu.Lock()
+	cb := r.assignFunc
+	r.mu.Unlock()
+	if cb != nil {
+		cb(assignments)
+	}
+}
+
+// SetAssignFunc receives Charon's prefix-to-exit assignments with the feed.
+func (r *splitReporter) SetAssignFunc(fn func(map[string]string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.assignFunc = fn
+}
+
+// mergeServed hands Charon's domain-to-exit map to the controller.
+func (r *splitReporter) mergeServed(served map[string]string) {
+	r.mu.Lock()
+	cb := r.servedFunc
+	r.mu.Unlock()
+	if cb != nil {
+		cb(served)
+	}
+}
+
+// SetServedFunc receives Charon's domain-to-exit map with the feed.
+func (r *splitReporter) SetServedFunc(fn func(map[string]string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.servedFunc = fn
 }
 
 // mergeExits hands the direct exit list to the controller. Exits are optional

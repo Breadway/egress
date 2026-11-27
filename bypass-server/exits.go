@@ -26,6 +26,14 @@ type exitEntry struct {
 	Direct      bool   `json:"direct,omitempty"`
 	Endpoint    string `json:"endpoint,omitempty"`
 	Path        string `json:"path,omitempty"`
+	// Transport is "tls" (default) or "derp". A DERP exit has no public
+	// endpoint: the client reaches it through the shared relay by RelayKey,
+	// and DerpPubKey is the WireGuard key of the exit interface carrying it.
+	Transport  string `json:"transport,omitempty"`
+	RelayKey   string `json:"relay_key,omitempty"`
+	DerpPubKey string `json:"derp_pubkey,omitempty"`
+	// Device is the peer-exit device id the client announces use against.
+	Device string `json:"device,omitempty"`
 }
 
 type exitRegistry struct {

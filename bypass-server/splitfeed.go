@@ -486,30 +486,52 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 	// Direct exits travel with the feed: the client needs an endpoint and a
 	// public key to dial one itself, and the hub router never sees them.
 	type seedExit struct {
-		ID       string `json:"id"`
-		Label    string `json:"label,omitempty"`
-		Endpoint string `json:"endpoint"`
-		Path     string `json:"path,omitempty"`
-		PubKey   string `json:"pubkey"`
-		Priority int    `json:"priority,omitempty"`
+		ID        string `json:"id"`
+		Label     string `json:"label,omitempty"`
+		Endpoint  string `json:"endpoint,omitempty"`
+		Path      string `json:"path,omitempty"`
+		PubKey    string `json:"pubkey"`
+		Transport string `json:"transport,omitempty"`
+		RelayKey  string `json:"relay_key,omitempty"`
+		Device    string `json:"device,omitempty"`
+		Priority  int    `json:"priority,omitempty"`
 	}
 	out := struct {
-		Version   int            `json:"version"`
-		NetworkID string         `json:"network_id"`
-		Domains   []seedDomain   `json:"domains"`
-		Protocols []seedProtocol `json:"protocols,omitempty"`
-		Exits     []seedExit     `json:"exits,omitempty"`
-		Refresh   []seedDomain   `json:"refresh,omitempty"`
+		Version     int               `json:"version"`
+		NetworkID   string            `json:"network_id"`
+		Domains     []seedDomain      `json:"domains"`
+		Protocols   []seedProtocol    `json:"protocols,omitempty"`
+		Exits       []seedExit        `json:"exits,omitempty"`
+		Assignments map[string]string `json:"assignments,omitempty"`
+		Served      map[string]string `json:"served,omitempty"`
+		Refresh     []seedDomain      `json:"refresh,omitempty"`
 	}{Version: splitFeedVersion, NetworkID: id}
 
 	if reg, rerr := loadExitRegistry(exitRegistryPath()); rerr == nil {
 		for _, e := range reg.Exits {
-			if !e.Enabled || !e.Direct || e.Endpoint == "" || e.PubKey == "" {
+			if !e.Enabled {
+				continue
+			}
+			transport := strings.ToLower(strings.TrimSpace(e.Transport))
+			if transport == "" {
+				transport = "tls"
+			}
+			pubkey := e.PubKey
+			if transport == "derp" {
+				// A DERP exit has no public endpoint. The client reaches it
+				// through the shared relay by its relay key and uses the exit
+				// interface's WireGuard key as the peer.
+				if e.RelayKey == "" || e.DerpPubKey == "" {
+					continue
+				}
+				pubkey = e.DerpPubKey
+			} else if !e.Direct || e.Endpoint == "" || e.PubKey == "" {
 				continue
 			}
 			out.Exits = append(out.Exits, seedExit{
 				ID: e.ID, Label: e.Label, Endpoint: e.Endpoint,
-				Path: e.Path, PubKey: e.PubKey, Priority: e.Priority,
+				Path: e.Path, PubKey: pubkey, Transport: transport,
+				RelayKey: e.RelayKey, Device: e.Device, Priority: e.Priority,
 			})
 		}
 		sort.Slice(out.Exits, func(i, j int) bool {
@@ -526,6 +548,19 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(names)
 	exits := s.exitDomainState()
+	// The router's prefix assignments are the authority for what needs the
+	// residential exit. Publishing them lets a client route a freshly learned
+	// block to the right exit without waiting for a per-domain verdict.
+	if status, serr := loadExitStatus(exitStatusPath()); serr == nil {
+		out.Assignments = status.Assignments
+		served := map[string]string{}
+		for domain, site := range status.Sites {
+			if site.Exit != "" {
+				served[domain] = site.Exit
+			}
+		}
+		out.Served = served
+	}
 	for _, domain := range names {
 		entry := feed.Domains[domain]
 		if entry.State != "blocked" {

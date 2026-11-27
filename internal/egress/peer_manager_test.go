@@ -12,6 +12,7 @@ import (
 
 type peerCall struct {
 	kind     string // set, remove
+	pubkey   string
 	endpoint string
 	allowed  []string
 	allowedN bool // allowed was not nil
@@ -22,12 +23,12 @@ type fakePeerPlatform struct {
 }
 
 func (f *fakePeerPlatform) SetPeer(dev, pubkey, endpoint string, allowed []string) error {
-	f.calls = append(f.calls, peerCall{kind: "set", endpoint: endpoint, allowed: allowed, allowedN: allowed != nil})
+	f.calls = append(f.calls, peerCall{kind: "set", pubkey: pubkey, endpoint: endpoint, allowed: allowed, allowedN: allowed != nil})
 	return nil
 }
 
 func (f *fakePeerPlatform) RemovePeer(dev, pubkey string) error {
-	f.calls = append(f.calls, peerCall{kind: "remove"})
+	f.calls = append(f.calls, peerCall{kind: "remove", pubkey: pubkey})
 	return nil
 }
 

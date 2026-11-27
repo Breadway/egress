@@ -43,6 +43,12 @@ type Controller struct {
 	blockedIPs map[string][]string
 	// exits are the direct exits published with the feed.
 	exits []DirectExit
+	// assignments is Charon's prefix-to-exit map from the feed. It decides
+	// which learned blocks need the residential exit.
+	assignments map[string]string
+	// served maps a blocked domain to the exit Charon assigned it. It is the
+	// primary signal because anycast addresses can differ from Charon's.
+	served map[string]string
 	// shareReports controls outbound learning only. The feed is still read, so
 	// a device that stops sharing keeps receiving the circle's blocks.
 	shareReports atomic.Bool
@@ -67,6 +73,8 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	c.reporter = newSplitReporter(network, ProfileDir(), logger)
 	c.reporter.SetMergeFunc(c.mergeFeed)
 	c.reporter.SetRefreshFunc(c.refreshSites)
+	c.reporter.SetAssignFunc(c.SetAssignments)
+	c.reporter.SetServedFunc(c.SetServed)
 	go c.refreshProtocols()
 	return c
 }
@@ -182,6 +190,88 @@ func (c *Controller) HandleAnswer(domain string, ips []net.IP, ttl time.Duration
 		return
 	}
 	c.startProbe(domain, probeCooldown)
+}
+
+// SetAssignments records Charon's prefix-to-exit map. The client keeps learning
+// blocks as usual; the map only decides where each learned block leaves.
+func (c *Controller) SetAssignments(assignments map[string]string) {
+	c.mu.Lock()
+	c.assignments = assignments
+	c.mu.Unlock()
+}
+
+// SetServed records Charon's domain-to-exit map. It is the primary signal
+// because the client resolves its own anycast addresses.
+func (c *Controller) SetServed(served map[string]string) {
+	c.mu.Lock()
+	c.served = served
+	c.mu.Unlock()
+}
+
+// PrefixExits groups routed prefixes by the exit Charon assigned. A learned
+// block whose domain Charon says needs the residential exit goes there even
+// when its anycast address differs from Charon's prefix. Without a domain
+// verdict the most specific matching prefix wins, and a block with neither
+// stays on the cloud exit (the empty key). This is adaptive: a freshly learned
+// block defaults to Charon and moves to the residential exit on the next feed
+// once Charon has probed it.
+func (c *Controller) PrefixExits(prefixes []string) map[string][]string {
+	c.mu.Lock()
+	assignments := make(map[string]string, len(c.assignments))
+	for prefix, exit := range c.assignments {
+		assignments[prefix] = exit
+	}
+	served := make(map[string]string, len(c.served))
+	for domain, exit := range c.served {
+		served[domain] = exit
+	}
+	ipExit := map[string]string{}
+	for domain, ips := range c.blockedIPs {
+		exit := served[domain]
+		if exit == "" {
+			continue
+		}
+		for _, ip := range ips {
+			ipExit[ip] = exit
+		}
+	}
+	c.mu.Unlock()
+
+	type assignedNet struct {
+		net  *net.IPNet
+		exit string
+		ones int
+	}
+	nets := make([]assignedNet, 0, len(assignments))
+	for prefix, exit := range assignments {
+		_, block, err := net.ParseCIDR(prefix)
+		if err != nil {
+			continue
+		}
+		ones, _ := block.Mask.Size()
+		nets = append(nets, assignedNet{net: block, exit: exit, ones: ones})
+	}
+
+	out := map[string][]string{}
+	for _, p := range prefixes {
+		exit := ipExit[p]
+		if exit == "" {
+			if ip := net.ParseIP(p); ip != nil {
+				best := -1
+				for _, candidate := range nets {
+					if !candidate.net.Contains(ip) {
+						continue
+					}
+					if candidate.ones > best {
+						best = candidate.ones
+						exit = candidate.exit
+					}
+				}
+			}
+		}
+		out[exit] = append(out[exit], p)
+	}
+	return out
 }
 
 // tunnelStatus fetches the same URL over the tunnel interface. Split mode
