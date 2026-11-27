@@ -645,6 +645,9 @@ func runInstall(plat platform, args []string) (err error) {
 	}
 
 	results := describeSplit(runChecks(plat, tcfg), tcfg)
+	// The per-user Windows half has run at this point; record it separately
+	// from the relay tunnel so a successful report cannot imply it either way.
+	results = describeBrowserPath(results, tcfg.Split && runtime.GOOS == "windows", true, nil)
 	if data, err := buildReport(tcfg, results, nil, false); err == nil {
 		if err := sendReport(data); err != nil {
 			debugf("install report unsent, spooled: %v", err)
@@ -668,6 +671,13 @@ const updatePollInterval = time.Minute
 // never masks the original error.
 func parkInstall(plat platform, tcfg tunnelConfig, results checkResults, cause error) {
 	results = describeSplit(results, tcfg)
+	// Any parked install failed before the per-user Windows half completed, so
+	// the browser path is unconfigured even when the relay tunnel is up. Say so
+	// instead of letting "split: ok" stand alone in the report.
+	results = describeBrowserPath(results, tcfg.Split && runtime.GOOS == "windows", false, nil)
+	if results.Browser != "" && results.Browser != "ok" {
+		fmt.Fprintf(os.Stderr, "browser path: %s\n", results.Browser)
+	}
 	if err := plat.Disable(); err != nil {
 		fmt.Fprintf(os.Stderr, "park: %v\n", err)
 	} else {

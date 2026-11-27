@@ -15,6 +15,7 @@ var (
 	runChecks           = health.RunChecks
 	verifyAll           = health.VerifyAll
 	describeSplit       = health.DescribeSplit
+	describeBrowserPath = health.DescribeBrowserPath
 	buildReport         = health.BuildReport
 	sendReport          = health.SendReport
 	spoolReport         = health.SpoolReport

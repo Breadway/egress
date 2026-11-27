@@ -108,17 +108,56 @@ type Results struct {
 	// Supervisor holds the error when the boot service is not our live
 	// supervisor, even if something else answers on the DNS port.
 	Supervisor string `json:"supervisor,omitempty"`
-	// Split reports the Windows split client: "ok", an error, or empty when
-	// the platform has no split client to check.
+	// Split reports the relay tunnel verdict. It is downgraded when the
+	// browser half is known to be unconfigured, so it can never read ok on a
+	// run that failed before the per-user setup. Empty when the platform has
+	// no split client to check.
 	Split string `json:"split,omitempty"`
+	// Browser reports the Windows per-user client setup separately from the
+	// relay tunnel. A failed install can leave the tunnel up while the browser
+	// half never ran, which is how a report said "split: ok" on a device whose
+	// browser was not protected. Empty when the platform has nothing to set up.
+	Browser string `json:"browser,omitempty"`
+}
+
+// BrowserNotConfigured is the browser verdict for a Windows run whose per-user
+// client setup never ran. It names the recovery because that is the only thing
+// the reader of a parked install report needs.
+const BrowserNotConfigured = "not configured; run `egress enable` as administrator to apply the Windows client setup"
+
+// DescribeBrowserPath records the Windows per-user client setup on a run that
+// attempted it. applicable is false outside a Windows split install, where
+// there is no browser half. It never touches Split: the relay tunnel and the
+// browser path fail independently and the report has to say which one did.
+func DescribeBrowserPath(r Results, applicable, configured bool, err error) Results {
+	if !applicable {
+		return r
+	}
+	switch {
+	case err != nil:
+		r.Browser = fmt.Sprintf("%v; run `egress enable` as administrator to retry the Windows client setup", err)
+	case configured:
+		r.Browser = "ok"
+	default:
+		r.Browser = BrowserNotConfigured
+	}
+	// A down browser path must not leave the split verdict reading ok just
+	// because the relay tunnel is up: that single word is what made a support
+	// report say everything worked while the browser was unprotected.
+	if r.Browser != "ok" && r.Split == "ok" {
+		r.Split = "relay tunnel is up; browser path is not configured"
+	}
+	return r
 }
 
 // describeSplit adds the Windows split client's state to a result set. It is
 // deliberately not part of runChecks: install verifies before split setup has
 // run, so a split probe there would fail every fresh install.
-// DescribeSplit judges the split path by its tunnel. The per-user proxy and
-// PAC are being retired: blocked destinations are routed into WireGuard, so a
-// running relay tunnel is what "split works" now means.
+// DescribeSplit judges the relay tunnel only. The per-user proxy and PAC are
+// retired: blocked destinations are routed into WireGuard, so a running relay
+// tunnel is what "split works" now means. The Windows client setup is reported
+// separately in Browser, because a run can fail before it and leave the tunnel
+// up while the browser path is unconfigured.
 func DescribeSplit(r Results, tcfg core.TunnelConfig) Results {
 	if !tcfg.Split {
 		return r
@@ -173,6 +212,12 @@ func (r Results) Grade() string {
 	if r.Split != "" && r.Split != "ok" {
 		return "failed"
 	}
+	// A parked install can have an up tunnel and an unconfigured browser, which
+	// used to grade functional. Never report a browser path that is not set up
+	// as healthy.
+	if r.Browser != "" && r.Browser != "ok" {
+		return "failed"
+	}
 	if (r.Tunnel == "up" || r.Tunnel == "skipped") &&
 		(r.Probe == "ok" || r.Probe == "skipped") &&
 		(r.Exit == "" || r.Exit == core.AegisIPv4 || r.Exit == "split") {
@@ -214,6 +259,15 @@ func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) er
 			fmt.Println("[ok]   split routing: relay tunnel is up")
 		} else {
 			fmt.Printf("[FAIL] split client: %s\n", r.Split)
+			failed = true
+		}
+	}
+
+	if r.Browser != "" {
+		if r.Browser == "ok" {
+			fmt.Println("[ok]   browser path: Windows client setup is applied")
+		} else {
+			fmt.Printf("[FAIL] browser path: %s\n", r.Browser)
 			failed = true
 		}
 	}
