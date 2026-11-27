@@ -197,10 +197,7 @@ func (d *directExit) Run(ctx context.Context) {
 func (d *directExit) first() (split.DirectExit, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.preferPeer && len(d.peerExits) > 0 {
-		return d.peerExits[0], true
-	}
-	if len(d.exits) == 0 {
+	if d.choice == cloudExitChoice {
 		return split.DirectExit{}, false
 	}
 	if d.choice != "" {
@@ -210,17 +207,28 @@ func (d *directExit) first() (split.DirectExit, bool) {
 			}
 		}
 	}
+	if d.preferPeer && len(d.peerExits) > 0 {
+		return d.peerExits[0], true
+	}
+	if len(d.exits) == 0 {
+		return split.DirectExit{}, false
+	}
 	return d.exits[0], true
 }
 
-// SetChoice pins one registered exit by id. An empty id restores automatic
-// order. The choice is persisted so it survives a daemon restart.
+// SetChoice pins one registered exit by id, or "cloud" to force the cloud
+// relay. An empty id restores automatic order. The choice is persisted so it
+// survives a daemon restart.
 func (d *directExit) SetChoice(id string) error {
+	id = strings.TrimSpace(id)
+	if strings.EqualFold(id, "cloud") || strings.EqualFold(id, "aegis") {
+		id = cloudExitChoice
+	}
 	if err := storeExitChoice(id); err != nil {
 		return err
 	}
 	d.mu.Lock()
-	d.choice = strings.TrimSpace(id)
+	d.choice = id
 	d.mu.Unlock()
 	d.nudge()
 	return nil

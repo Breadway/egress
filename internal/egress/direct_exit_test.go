@@ -59,6 +59,42 @@ func TestDirectExitChoicePinsRegisteredExit(t *testing.T) {
 	}
 }
 
+func TestDirectExitChoiceCanForceCloudRelay(t *testing.T) {
+	t.Setenv("EGRESS_STATE_DIR", t.TempDir())
+	d := &directExit{log: log.New(io.Discard, "", 0), wake: make(chan struct{}, 1)}
+	d.SetExits([]split.DirectExit{
+		{ID: "hestia", Endpoint: "203.0.113.10:7443"},
+		{ID: "charon", Endpoint: "203.0.113.11:7443"},
+	})
+	d.SetPeerExits([]split.DirectExit{{ID: "friend", Endpoint: "203.0.113.12:7443", PubKey: "friend-key"}}, true)
+
+	if err := d.SetChoice("cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if ex, ok := d.first(); ok {
+		t.Fatalf("cloud choice returned direct exit %+v", ex)
+	}
+	if got := d.Choice(); got != cloudExitChoice {
+		t.Fatalf("choice = %q, want %q", got, cloudExitChoice)
+	}
+
+	// An explicit direct exit beats the peer preference.
+	if err := d.SetChoice("charon"); err != nil {
+		t.Fatal(err)
+	}
+	if ex, ok := d.first(); !ok || ex.ID != "charon" {
+		t.Fatalf("charon choice = %+v, want charon", ex)
+	}
+
+	// Automatic keeps the peer preference.
+	if err := d.SetChoice(""); err != nil {
+		t.Fatal(err)
+	}
+	if ex, ok := d.first(); !ok || ex.ID != "friend" {
+		t.Fatalf("automatic choice = %+v, want the peer exit", ex)
+	}
+}
+
 func TestDerpExitTunnelAttaches(t *testing.T) {
 	relay := newTestRelay()
 	key := b64Key(3)

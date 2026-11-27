@@ -188,8 +188,9 @@ or non-hostname value returns 400.
 `PATCH` accepts any subset and returns the saved set. The daemon applies every
 field that has a backend:
 
-- `exit_choice` pins a registered exit by id; an empty string restores the
-  published order. A choice that is no longer offered falls back safely.
+- `exit_choice` pins a registered direct exit by id, or `cloud` to force the
+  cloud relay. An empty string restores automatic order. A direct choice that
+  is no longer offered falls back safely.
 
 - `connect_automatically` enables or disables the boot service.
 - `relay_fallback` toggles the WebSocket fallback in the supervisor.

@@ -8,6 +8,9 @@ import (
 	"egress/internal/core"
 )
 
+// cloudExitChoice forces the cloud relay even when a direct exit is offered.
+const cloudExitChoice = "cloud"
+
 // exit-choice pins one registered exit by id. An empty file means the first
 // exit in the feed, which is the historical behaviour.
 func exitChoicePath() string {
