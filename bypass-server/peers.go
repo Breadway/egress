@@ -19,6 +19,15 @@ func circleOf(d device) string {
 	return d.Circle
 }
 
+// roleOf is the device's role. Missing means a person, so existing records do
+// not have to be migrated.
+func roleOf(d device) string {
+	if d.Role == "" {
+		return "person"
+	}
+	return d.Role
+}
+
 var circleRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 // normalizeCircle keeps circle names to one readable form. An empty or invalid
@@ -45,7 +54,7 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	circle, ok := s.callerCircle(r)
+	circle, role, ok := s.callerIdentity(r)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="egress"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -66,6 +75,7 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		Endpoint   string `json:"endpoint,omitempty"`
 		DerpPubKey string `json:"derp_pubkey,omitempty"`
 		Circle     string `json:"circle"`
+		Role       string `json:"role,omitempty"`
 	}
 	peers := make([]peer, 0, len(reg.Devices))
 	for _, d := range reg.Devices {
@@ -75,6 +85,11 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		if circleOf(d) != circle {
 			continue
 		}
+		// Exit servers stay in the circle so they can serve it, but a person
+		// should not see them as friends. An exit caller still sees everyone.
+		if roleOf(d) == "exit" && role != "exit" {
+			continue
+		}
 		peers = append(peers, peer{
 			Label:      d.Label,
 			PubKey:     d.PubKey,
@@ -82,6 +97,7 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 			Endpoint:   endpoints[d.PubKey],
 			DerpPubKey: d.DerpPubKey,
 			Circle:     circleOf(d),
+			Role:       roleOf(d),
 		})
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].IP < peers[j].IP })
@@ -99,29 +115,38 @@ func (s *server) apiPeers(w http.ResponseWriter, r *http.Request) {
 // authenticated, in the default circle; the credential only ever exists for a
 // bound device.
 func (s *server) callerCircle(r *http.Request) (string, bool) {
+	circle, _, ok := s.callerIdentity(r)
+	return circle, ok
+}
+
+// callerIdentity authenticates the request and resolves the caller's circle
+// and role. A valid relay credential whose device cannot be matched still
+// counts as authenticated, as a person in the default circle; the credential
+// only ever exists for a bound device.
+func (s *server) callerIdentity(r *http.Request) (string, string, bool) {
 	reg, err := loadDevices(s.devicesPath())
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	user, pass, ok := r.BasicAuth()
 	if ok && validRelayCredential(user, pass) {
 		for _, d := range reg.Devices {
 			if d.Status == "bound" && d.RelayUser == user {
-				return circleOf(d), true
+				return circleOf(d), roleOf(d), true
 			}
 		}
-		return "bread", true
+		return "bread", "person", true
 	}
 	key := strings.TrimSpace(r.URL.Query().Get("k"))
 	if key == "" {
-		return "", false
+		return "", "", false
 	}
 	for _, d := range reg.Devices {
 		if d.Status == "bound" && d.PubKey == key {
-			return circleOf(d), true
+			return circleOf(d), roleOf(d), true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // loadEndpoints reads the map Aegis publishes from the live WireGuard

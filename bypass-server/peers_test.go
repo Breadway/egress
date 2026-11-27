@@ -105,6 +105,44 @@ func TestPeersSkipUnboundDevices(t *testing.T) {
 	}
 }
 
+func TestPeersHideExitServersFromPeople(t *testing.T) {
+	s := peersTestServer(t,
+		device{ID: "d-1", PubKey: "alice-key", IP: "10.88.0.20", Status: "bound"},
+		device{ID: "d-2", PubKey: "exit-key", IP: "10.88.0.29", Status: "bound", Role: "exit", Label: "hestia-exit"},
+		device{ID: "d-3", PubKey: "bob-key", IP: "10.88.0.21", Status: "bound"},
+	)
+	var payload struct {
+		Peers []struct {
+			PubKey string `json:"pubkey"`
+			Role   string `json:"role"`
+		} `json:"peers"`
+	}
+
+	w := getPeers(t, s, "alice-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("alice = %d, want 200", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Peers) != 2 {
+		t.Fatalf("person sees %d peers, want 2 people", len(payload.Peers))
+	}
+	for _, p := range payload.Peers {
+		if p.PubKey == "exit-key" {
+			t.Fatal("a person must not see an exit server as a friend")
+		}
+	}
+
+	w = getPeers(t, s, "exit-key")
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Peers) != 3 {
+		t.Fatalf("exit sees %d peers, want the full circle", len(payload.Peers))
+	}
+}
+
 func TestNormalizeCircle(t *testing.T) {
 	cases := map[string]string{
 		"":          "bread",
