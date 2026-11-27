@@ -31,7 +31,7 @@ jobs:
             echo "pwsh unavailable on this runner; skipping"
             exit 0
           fi
-          go test -run TestWindowsTaskScriptParses -count=1 -v ./internal/egress
+          go test -run TestWindowsTaskScriptParses -count=1 -v ./internal/platform
       - name: clean-tree build
         # A fresh clone has no gitignored vendor assets; the default build
         # must compile and test without them (delivery tag embeds them).
