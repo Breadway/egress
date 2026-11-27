@@ -24,6 +24,14 @@ import (
 
 const fallbackCooldown = 2 * time.Minute
 
+// fallbackBudget bounds the whole public fallback chain. The chain must not
+// inherit the caller's context: by the time the primary request and its retry
+// have spent that deadline, every fallback would fail immediately and arm its
+// cooldown, which is how DNS wedged for five minutes with two working public
+// resolvers. Each request already has an 8s client timeout, so two resolvers
+// need about 16s.
+const fallbackBudget = 16 * time.Second
+
 type fallback struct {
 	url    string
 	host   string

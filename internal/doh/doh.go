@@ -316,8 +316,13 @@ func (r *Resolver) exchange(ctx context.Context, query []byte) ([]byte, error) {
 	}
 	// The primary path is dead for this query. Try a public resolver rather
 	// than handing the application a failure: on a blocked network the
-	// difference is "no internet" versus "works, unfiltered".
-	if body, ferr := r.exchangeFallbacks(ctx, query); ferr == nil {
+	// difference is "no internet" versus "works, unfiltered". The fallback
+	// chain gets its own bounded context: the caller's deadline has usually
+	// been spent by the primary and its retry, and inheriting it would fail
+	// every fallback instantly and arm their cooldowns.
+	fbCtx, cancel := context.WithTimeout(context.Background(), fallbackBudget)
+	defer cancel()
+	if body, ferr := r.exchangeFallbacks(fbCtx, query); ferr == nil {
 		r.failures.Store(0)
 		return body, nil
 	}

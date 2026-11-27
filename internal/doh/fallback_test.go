@@ -37,6 +37,36 @@ func TestFallbackAnswersWhenPrimaryFails(t *testing.T) {
 	}
 }
 
+// TestFallbackIgnoresSpentPrimaryContext proves the fallback chain does not
+// inherit a deadline the primary already used. On a filtered network the
+// primary request and its retry consume the caller's context, and passing it
+// on made every public resolver fail instantly and arm its cooldown.
+func TestFallbackIgnoresSpentPrimaryContext(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	r := New("192.0.2.1", log.New(io.Discard, "", 0))
+	r.fallbacks = []*fallback{{url: srv.URL, host: "fallback.test", client: srv.Client()}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the primary path already spent the caller's deadline
+
+	resp, err := r.exchange(ctx, dnsQuery(0x4242, "example.com"))
+	if err != nil {
+		t.Fatalf("fallback after a spent primary context: %v", err)
+	}
+	if got := binary.BigEndian.Uint16(resp[0:2]); got != 0x4242 {
+		t.Errorf("id = %#x, want 0x4242", got)
+	}
+	if got := r.failures.Load(); got != 0 {
+		t.Errorf("failures = %d, want 0 after a fallback answer", got)
+	}
+}
+
 // TestFallbackCooldownSkipsDeadServer proves a failed fallback is skipped for a
 // while, so a broken public resolver costs one timeout rather than one per
 // query.
