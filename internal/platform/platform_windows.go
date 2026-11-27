@@ -486,6 +486,20 @@ func writeStartLauncher(exePath string, args []string) (string, error) {
 }
 
 func (windowsPlatform) StartService() error {
+	// An upgrade can run while the boot task is intentionally disabled. Some
+	// Windows versions refuse /run on a disabled task or start it without the
+	// task's settings, which leaves the old supervisor serving and the new
+	// readiness marker missing. Enable it only for this start, then restore the
+	// preference so the install does not silently turn boot start back on.
+	disabled := strings.EqualFold(taskStatus(), "Disabled")
+	if disabled {
+		if err := logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/enable"); err != nil {
+			return fmt.Errorf("enable the supervisor task for the install: %w", err)
+		}
+		defer func() {
+			_ = logx.RunLogged("schtasks", "/change", "/tn", winTaskName, "/disable")
+		}()
+	}
 	_ = logx.RunLogged("schtasks", "/end", "/tn", winTaskName)
 	// /end returns before the process exits: the task reports Ready while the
 	// old supervisor still holds the DNS port. Starting the new one then
@@ -552,20 +566,20 @@ func waitListenerGone(addr string, timeout time.Duration) {
 	}
 }
 
+// taskStatus returns the scheduler's Status line (Ready, Running, Disabled).
+// An absent task or an unreadable query returns empty.
+func taskStatus() string {
+	out, err := exec.Command("schtasks", "/query", "/tn", winTaskName, "/fo", "list").Output()
+	if err != nil {
+		return ""
+	}
+	return taskStatusFromOutput(string(out))
+}
+
 // ServiceActive reports whether the scheduled task is currently running. A
 // quiet check: verification calls it on every run.
 func (windowsPlatform) ServiceActive() bool {
-	out, err := exec.Command("schtasks", "/query", "/tn", winTaskName, "/fo", "list").Output()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if name, value, ok := strings.Cut(line, ":"); ok &&
-			strings.TrimSpace(name) == "Status" {
-			return strings.TrimSpace(value) == "Running"
-		}
-	}
-	return false
+	return strings.EqualFold(taskStatus(), "Running")
 }
 
 func (p windowsPlatform) Enable() error {

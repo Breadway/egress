@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+func TestTaskStatusFromOutput(t *testing.T) {
+	cases := []struct{ out, want string }{
+		{"", ""},
+		{"HostName: HAINESY\nTaskName: \\egress\nStatus: Disabled\n", "Disabled"},
+		{"TaskName: \\egress\nStatus: Running\n", "Running"},
+	}
+	for _, tc := range cases {
+		if got := taskStatusFromOutput(tc.out); got != tc.want {
+			t.Errorf("taskStatusFromOutput(%q) = %q, want %q", tc.out, got, tc.want)
+		}
+	}
+}
+
 func TestWindowsTaskScriptPowerSettings(t *testing.T) {
 	script, err := TaskScript("egress", `C:\ProgramData\egress\egress.exe`, "supervise --debug", TriggerStartup, SystemPrincipal, true)
 	if err != nil {
