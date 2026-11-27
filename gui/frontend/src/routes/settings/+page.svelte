@@ -55,12 +55,13 @@
           </select>
         </div>
       </div>
-      {#if (app.status.exits?.length ?? 0) > 1}
+      {#if (app.status.exits?.length ?? 0) >= 1}
         <div class="setting">
-          <div class="copy"><strong>Preferred exit</strong><span>Choose which exit carries blocked sites. Automatic follows the published order.</span></div>
+          <div class="copy"><strong>Preferred exit</strong><span>Choose which exit carries blocked sites. Automatic prefers a direct exit, then the cloud relay.</span></div>
           <div class="control">
             <select class="select" bind:value={app.settings.exit_choice} onchange={() => save("exit_choice")}>
               <option value="">Automatic</option>
+              <option value="cloud">Cloud relay</option>
               {#each app.status.exits ?? [] as exit}
                 <option value={exit.id}>{exit.label}{exit.active ? " (active)" : ""}</option>
               {/each}
