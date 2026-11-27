@@ -550,9 +550,23 @@ func (l *Learner) applyAllowed(id string) {
 		return
 	}
 	var prefixes []string
+	seen := map[string]bool{}
 	for prefix, owner := range l.state.Assignments {
-		if owner == id {
+		if owner == id && !seen[prefix] {
 			prefixes = append(prefixes, prefix)
+			seen[prefix] = true
+		}
+	}
+	if exit.Address != "" {
+		addr := exit.Address
+		if ip := net.ParseIP(addr); ip != nil {
+			addr = ip.String() + "/32"
+		} else if !strings.Contains(addr, "/") {
+			addr += "/32"
+		}
+		if !seen[addr] {
+			prefixes = append(prefixes, addr)
+			seen[addr] = true
 		}
 	}
 	sort.Strings(prefixes)
@@ -561,7 +575,7 @@ func (l *Learner) applyAllowed(id string) {
 		return
 	}
 	if prev, seen := l.lists[id]; !seen || len(strings.Split(prev, ",")) != len(prefixes) || (prev == "" && len(prefixes) > 0) {
-		l.opts.Logf("exit: %s carries %d prefixes", id, len(prefixes))
+		l.opts.Logf("exit: %s carries %d allowed entries", id, len(prefixes))
 	}
 	if l.opts.DryRun {
 		l.lists[id] = list

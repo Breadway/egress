@@ -93,15 +93,17 @@ if network:
     entry["network"] = network
 elif "network" in entry:
     entry.pop("network")
+# Index for the host's tunnel address, stable for the life of the entry.
+ids = [e["id"] for e in exits]
+index = ids.index(ident) + 2
+entry["address"] = "10.99.0.%d" % index
 reg["version"] = 1
 os.makedirs(os.path.dirname(path), exist_ok=True)
 tmp = path + ".tmp"
 open(tmp, "w").write(json.dumps(reg, indent=2, sort_keys=True) + "\n")
 os.chmod(tmp, 0o644)
 os.replace(tmp, path)
-# Index for the host's tunnel address, stable for the life of the entry.
-ids = [e["id"] for e in exits]
-print(ids.index(ident) + 2)
+print(index)
 PY
 )
 [ -n "$index" ] || die "could not write the registry"

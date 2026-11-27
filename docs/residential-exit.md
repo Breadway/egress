@@ -28,6 +28,17 @@ carries only the prefixes assigned to it. `wg0.conf` sets `Table = off`, which
 keeps an exit's `0.0.0.0/0` mapping from installing a default route; the routes
 are managed by the router.
 
+An exit can also be the target of a DNAT from the hub, not only the owner of a
+prefix. The router keeps the exit's tunnel address (`address` in the registry,
+for example `10.99.0.2`) in the peer's allowed IPs, so the hub can redirect a
+destination straight to the exit's own address. The Hestia relay uses this: the
+hub DNATs the fake Microsoft address and the Cloudflare ranges to the exit's
+`10.99.0.2:7106`, and the exit resolves the real host from the TLS SNI.
+
+Allowed IPs are rebuilt from `state.json` every cycle, so a learned prefix is
+runtime state. A restart re-adds the current assignments and the learner
+re-derives anything still missing on the next cycle.
+
 ### Registry
 
 `/var/lib/bypass/exits.json`, owned by `bypass` so the web admin can flip the
