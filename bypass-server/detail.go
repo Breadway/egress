@@ -179,9 +179,7 @@ func (s *server) adminDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		pairs = append(pairs, "Platform", esc(dev.Platform+"/"+dev.Arch))
 	}
 	b.WriteString(detailList(pairs...))
-	if dev.Status == "issued" {
-		fmt.Fprintf(&b, `<div class="card"><h2>Actions</h2><div class="row-actions"><form method="post" action="/admin/devices"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="%s"><button class="btn danger" type="submit">Revoke invite</button></form></div></div>`, esc(dev.ID))
-	}
+	fmt.Fprintf(&b, `<div class="card"><h2>Actions</h2><div class="row-actions"><form method="post" action="/admin/devices" onsubmit="return confirm('Revoke this device? It disconnects immediately.')"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="%s"><button class="btn danger" type="submit">Revoke device</button></form></div></div>`, esc(dev.ID))
 	s.renderNav(w, true, "devices", dev.Label, b.String())
 }
 

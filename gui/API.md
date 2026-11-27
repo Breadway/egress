@@ -248,6 +248,8 @@ stores the admin token.
 
 The web admin stays available as the fallback. List responses omit invite
 tokens and password hashes; a newly created invite returns its token once.
+`revoke` removes an open invite or a bound device. For a bound device it removes
+the WireGuard peer and relay credential before deleting the record.
 
 ## Versioning
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,6 +73,58 @@ func TestAdminJSONListsAndDeviceInvite(t *testing.T) {
 	}
 	if len(devices.Devices) != 1 || devices.Devices[0].Label != "Desk" || devices.Devices[0].Status != "issued" {
 		t.Fatalf("devices = %+v", devices.Devices)
+	}
+}
+
+func TestAdminJSONRevokeBoundDevice(t *testing.T) {
+	s := claimTestServer(t)
+	relayAuth := filepath.Join(s.state, "relay-auth")
+	t.Setenv("BYPASS_RELAY_AUTH", relayAuth)
+	if err := os.WriteFile(relayAuth, []byte("dev-10-88-0-99-12345678:secret\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	dev := device{
+		ID: "d-1234abcd", Label: "Bound", Status: "bound",
+		PubKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		IP:     "10.88.0.99", RelayUser: "dev-10-88-0-99-12345678",
+	}
+	reg := deviceRegistry{Version: 1, Devices: []device{dev}}
+	data, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.state, "devices.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	old := revokePeerForDevice
+	var revoked string
+	revokePeerForDevice = func(key string) error { revoked = key; return nil }
+	defer func() { revokePeerForDevice = old }()
+
+	rec := httptest.NewRecorder()
+	s.adminJSONDevice(rec, bearerPost("/admin/api/device", url.Values{
+		"action": {"revoke"}, "id": {dev.ID},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if revoked != dev.PubKey {
+		t.Fatalf("revoked peer = %q, want %q", revoked, dev.PubKey)
+	}
+	after, err := loadDevices(filepath.Join(s.state, "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Devices) != 0 {
+		t.Fatalf("device still present: %+v", after.Devices)
+	}
+	users, err := readRelayAuth(relayAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := users[dev.RelayUser]; ok {
+		t.Fatal("relay credential was not removed")
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -219,8 +221,34 @@ func (s *server) adminJSONApplication(w http.ResponseWriter, r *http.Request) {
 	}()})
 }
 
-// adminJSONDevice creates or revokes an unbound invite. The created token is
-// returned once, exactly like the web page.
+// revokePeerForDevice is a variable so tests can avoid the root helper.
+var revokePeerForDevice = revokePeer
+
+// revokeDevice removes a bound device's access. The WireGuard peer goes first;
+// if that fails the device stays so the operator can retry instead of
+// believing access was revoked. Relay credentials are deleted after the peer.
+func (s *server) revokeDevice(d device) error {
+	if d.Status == "bound" && d.PubKey != "" {
+		if err := revokePeerForDevice(d.PubKey); err != nil {
+			return fmt.Errorf("remove WireGuard peer: %w", err)
+		}
+	}
+	if d.RelayUser != "" {
+		users, err := readRelayAuth(relayAuthFilePath())
+		if err != nil {
+			log.Printf("revoke %s: relay auth not readable: %v", d.ID, err)
+		} else if _, ok := users[d.RelayUser]; ok {
+			delete(users, d.RelayUser)
+			if err := writeRelayAuth(relayAuthFilePath(), users); err != nil {
+				log.Printf("revoke %s: relay auth not saved: %v", d.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// adminJSONDevice creates or revokes an invite or bound device. The created
+// token is returned once, exactly like the web page.
 func (s *server) adminJSONDevice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -272,18 +300,26 @@ func (s *server) adminJSONDevice(w http.ResponseWriter, r *http.Request) {
 		writeAdminJSON(w, map[string]any{"ok": true, "id": d.ID, "label": label, "token": token, "expires": d.Expires})
 	case "revoke":
 		id := strings.TrimSpace(r.FormValue("id"))
-		kept := reg.Devices[:0]
-		removed := false
-		for _, d := range reg.Devices {
-			if d.ID == id && d.Status == "issued" {
-				removed = true
-				continue
+		var target *device
+		for i := range reg.Devices {
+			if reg.Devices[i].ID == id {
+				target = &reg.Devices[i]
+				break
 			}
-			kept = append(kept, d)
 		}
-		if !removed {
-			http.Error(w, "no open invite with that id", http.StatusNotFound)
+		if target == nil {
+			http.Error(w, "no device with that id", http.StatusNotFound)
 			return
+		}
+		if err := s.revokeDevice(*target); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		kept := reg.Devices[:0]
+		for _, d := range reg.Devices {
+			if d.ID != id {
+				kept = append(kept, d)
+			}
 		}
 		reg.Devices = kept
 		if err := saveDevices(s.devicesPath(), reg); err != nil {
