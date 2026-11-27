@@ -98,6 +98,17 @@ func checkExitIP() (string, error) {
 	return "", err
 }
 
+// Tunnel convergence budget. On a network where UDP is blocked the supervisor
+// needs one failed probe and a relay handshake before the tunnel address
+// answers, which was measured at about 26 seconds. Verification used to probe
+// once immediately after the service started, so it failed and rolled back an
+// install that would have come up fine, destroying the only working path.
+// A bounded wait is cheap next to that.
+const (
+	TunnelConvergeWindow = 60 * time.Second
+	TunnelConvergePoll   = 2 * time.Second
+)
+
 // Results holds one install verification as data, so the CLI output and
 // the phone-home report describe the same run.
 type Results struct {
@@ -147,6 +158,19 @@ func RunChecks(p platform.Interface, tcfg core.TunnelConfig) Results {
 		r.Probe = "skipped"
 		return r
 	}
+	refreshTunnel(&r, p, tcfg)
+	return r
+}
+
+// refreshTunnel rereads the tunnel-derived fields without repeating the DNS
+// and supervisor checks, so a convergence wait only pays for what can still
+// change.
+func refreshTunnel(r *Results, p platform.Interface, tcfg core.TunnelConfig) {
+	if tcfg.PrivateKey == "" {
+		r.Tunnel = "skipped"
+		r.Probe = "skipped"
+		return
+	}
 	if p.TunnelUp() {
 		r.Tunnel = "up"
 	} else {
@@ -160,6 +184,37 @@ func RunChecks(p platform.Interface, tcfg core.TunnelConfig) Results {
 	// Split is the only mode: ordinary traffic stays on the physical link, so
 	// the public exit address is not Aegis and is not checked.
 	r.Exit = "split"
+}
+
+// tunnelUnsettled reports whether a retry could still change the outcome. A
+// failed supervisor or DNS check is a real failure and must not be waited on.
+func tunnelUnsettled(r Results) bool {
+	if r.DNS != "" || r.Supervisor != "" {
+		return false
+	}
+	if r.Tunnel == "down" {
+		return true
+	}
+	// In split mode a ping failure is only a warning: some networks drop ICMP
+	// at the exit, and the tunnel handshake is the authority there.
+	return r.Probe == "failed" && r.Exit != "split"
+}
+
+// convergeTunnel re-runs the tunnel and probe checks until they settle or the
+// window expires. refresh is injected so the loop is testable without a live
+// platform. A zero window means a single check, the old behaviour.
+func convergeTunnel(r Results, window, poll time.Duration, refresh func(*Results)) Results {
+	if window <= 0 || poll <= 0 || !tunnelUnsettled(r) {
+		return r
+	}
+	deadline := time.Now().Add(window)
+	for time.Now().Before(deadline) {
+		time.Sleep(poll)
+		refresh(&r)
+		if !tunnelUnsettled(r) {
+			return r
+		}
+	}
 	return r
 }
 
@@ -189,7 +244,21 @@ func (r Results) failed() bool {
 }
 
 func VerifyAll(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool) error {
+	return VerifyAllWithin(p, tcfg, checkSplit, 0)
+}
+
+// VerifyAllWithin is VerifyAll with a bounded window for the tunnel and probe
+// to converge, used by install where the WebSocket fallback is still coming
+// up. A zero window keeps the immediate behaviour.
+func VerifyAllWithin(p platform.Interface, tcfg core.TunnelConfig, checkSplit bool, window time.Duration) error {
 	r := RunChecks(p, tcfg)
+	if window > 0 && tunnelUnsettled(r) {
+		fmt.Printf("[wait] %s is not reachable yet; waiting up to %s for the tunnel to converge\n",
+			core.AegisTunnelIP, window)
+		r = convergeTunnel(r, window, TunnelConvergePoll, func(r *Results) {
+			refreshTunnel(r, p, tcfg)
+		})
+	}
 	if checkSplit {
 		r = DescribeSplit(r, tcfg)
 	}

@@ -623,7 +623,11 @@ func runInstall(plat platform, args []string) (err error) {
 	time.Sleep(500 * time.Millisecond)
 
 	fmt.Println()
-	if err := verifyAll(plat, tcfg, false); err != nil {
+	// Install starts the service and verifies immediately, but on a network
+	// with UDP blocked the WebSocket fallback needs a failed probe and a relay
+	// handshake (about 26s) before the exit answers. Wait for it instead of
+	// parking and tearing down a setup that is still coming up.
+	if err := verifyAllWithin(plat, tcfg, false, tunnelConvergeWindow); err != nil {
 		// Networking goes back to its pre-install state first, so a failed
 		// install never leaves the user offline, then the install parks for
 		// the next release. The report carries what went wrong.

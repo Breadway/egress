@@ -12,21 +12,23 @@ type checkResults = health.Results
 type deviceIdentity = health.DeviceIdentity
 
 var (
-	runChecks           = health.RunChecks
-	verifyAll           = health.VerifyAll
-	describeSplit       = health.DescribeSplit
-	buildReport         = health.BuildReport
-	sendReport          = health.SendReport
-	spoolReport         = health.SpoolReport
-	checkSupervisorLive = health.CheckSupervisorLive
-	checkSystemDNS      = health.CheckSystemDNS
-	readyMarkerMaxAge   = health.ReadyMarkerMaxAge
-	flushPendingReport  = health.FlushPendingReport
-	loadDeviceIdentity  = health.LoadDeviceIdentity
-	saveDeviceIdentity  = health.SaveDeviceIdentity
-	removeReadyMarker   = health.RemoveReadyMarker
-	writeReadyMarker    = health.WriteReadyMarker
-	writeDiagnose       = health.WriteDiagnose
+	runChecks            = health.RunChecks
+	verifyAll            = health.VerifyAll
+	verifyAllWithin      = health.VerifyAllWithin
+	tunnelConvergeWindow = health.TunnelConvergeWindow
+	describeSplit        = health.DescribeSplit
+	buildReport          = health.BuildReport
+	sendReport           = health.SendReport
+	spoolReport          = health.SpoolReport
+	checkSupervisorLive  = health.CheckSupervisorLive
+	checkSystemDNS       = health.CheckSystemDNS
+	readyMarkerMaxAge    = health.ReadyMarkerMaxAge
+	flushPendingReport   = health.FlushPendingReport
+	loadDeviceIdentity   = health.LoadDeviceIdentity
+	saveDeviceIdentity   = health.SaveDeviceIdentity
+	removeReadyMarker    = health.RemoveReadyMarker
+	writeReadyMarker     = health.WriteReadyMarker
+	writeDiagnose        = health.WriteDiagnose
 )
 
 var _ = core.BuildVersion
