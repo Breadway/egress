@@ -31,9 +31,27 @@ and 20 Mbit on the relay.
 ## Shared block table
 
 Devices on the same network share what they learn. The network is identified by
-a hash of the SSID (peppered, truncated to 32 hex characters), so the server
-stores no plaintext network name. The hash is obfuscation, not secrecy: an SSID
-has a small search space.
+a canonical ID derived from stable signals: the Wi-Fi SSID together with the
+gateway MAC, or with the DHCP DNS suffix when the MAC cannot be read. Wired
+links use the MAC, then the suffix. Each signal is normalized and hashed on its
+own before it leaves the device, so the server stores no plaintext SSID, MAC or
+address. The hashes are obfuscation, not secrecy: an SSID has a small search
+space.
+
+The gateway address is not an identity: DHCP can move it on the same network.
+A client resolves its live signals against a local store, scores the saved
+networks, and only accepts a fuzzy match when a strong anchor (SSID, DNS suffix
+or gateway MAC) agrees. The same SSID at two sites is separated by the suffix
+or gateway MAC. When the signals are ambiguous, saved expectations for a few
+blocked domains are probed before the saved profile is adopted. If nothing
+verifies, the client creates a new ID, so a weak signal alone never merges two
+networks.
+
+A gateway or router change keeps the old ID. The new signal combination is
+stored as an alias, and clients send their aliases with the feed request. The
+server folds the old gateway-keyed feeds into the canonical feed as reports
+arrive, so an upgraded device starts with the domains and protocol picture the
+fleet already learned. Only canonical IDs and aliases (all hashes) are sent.
 
 The table carries two kinds of observation:
 

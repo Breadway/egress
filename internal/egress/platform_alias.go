@@ -28,6 +28,8 @@ func checkTunnelIdentity(p platform, tcfg core.TunnelConfig) error {
 	return sysplatform.CheckTunnelIdentity(p, tcfg)
 }
 
+func currentSSID() string { return sysplatform.SSID("") }
+
 func logPath() string  { return sysplatform.LogPath() }
 func spoolDir() string { return sysplatform.SpoolDir() }
 

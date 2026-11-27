@@ -96,12 +96,84 @@ func TestAddBlocked(t *testing.T) {
 }
 
 func TestNetworkKeyAndPath(t *testing.T) {
-	if got := NetworkKey("NCC", "10.179.160.1"); got != "NCC|10.179.160.1" {
-		t.Errorf("network key: %q", got)
+	if got := NetworkKey("NCC", "10.179.160.1"); got != "NCC" {
+		t.Errorf("ssid network key: %q", got)
 	}
-	path := ProfilePath("NCC 4|10.179.160.1")
-	if filepath.Base(path) != "split-NCC_4_10.179.160.1.json" {
+	if got := NetworkKey("", "10.179.160.1"); got != "unknown|10.179.160.1" {
+		t.Errorf("gateway fallback: %q", got)
+	}
+	path := ProfilePath("NCC 4")
+	if filepath.Base(path) != "split-NCC_4.json" {
 		t.Errorf("profile path: %q", path)
+	}
+}
+
+func TestMigrateLegacyProfile(t *testing.T) {
+	dir := t.TempDir()
+	legacy := ProfilePathIn(dir, "unknown|10.179.160.1")
+	const body = `{"network":"unknown|10.179.160.1","entries":{}}`
+	if err := os.WriteFile(legacy, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	MigrateLegacyProfile(dir, "canonical-net", "unknown|10.179.160.1", "NCC|10.179.160.1")
+	got, err := os.ReadFile(ProfilePathIn(dir, "canonical-net"))
+	if err != nil {
+		t.Fatalf("new profile: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("migrated profile = %q", got)
+	}
+}
+
+func TestMigrateLegacyProfileUsesSSIDKey(t *testing.T) {
+	dir := t.TempDir()
+	const body = `{"network":"NCC|10.179.160.40","entries":{"blocked.example":{"state":"blocked"}}}`
+	if err := os.WriteFile(ProfilePathIn(dir, "NCC|10.179.160.40"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	MigrateLegacyProfile(dir, "canonical-net", "unknown|10.179.160.40", "NCC|10.179.160.40")
+	got, err := os.ReadFile(ProfilePathIn(dir, "canonical-net"))
+	if err != nil {
+		t.Fatalf("new profile: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("migrated profile = %q", got)
+	}
+	// An existing profile keeps its own entries and gains the missing legacy
+	// ones instead of being replaced.
+	cur := NewProfile("canonical-net")
+	cur.Entries["own.example"] = DomainEntry{State: StateAllowed}
+	if err := cur.Save(ProfilePathIn(dir, "canonical-net")); err != nil {
+		t.Fatal(err)
+	}
+	MigrateLegacyProfile(dir, "canonical-net", "NCC|10.179.160.40")
+	merged, err := LoadProfile(ProfilePathIn(dir, "canonical-net"), "canonical-net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Entries["own.example"].State != StateAllowed {
+		t.Fatalf("migration dropped the current entry: %+v", merged.Entries)
+	}
+	if merged.Entries["blocked.example"].State != StateBlocked {
+		t.Fatalf("migration did not add the legacy entry: %+v", merged.Entries)
+	}
+}
+
+func TestNetworkIDPassesCanonicalHexThrough(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	if got := NetworkID(id); got != id {
+		t.Fatalf("canonical id hashed again: %q", got)
+	}
+	if got := NetworkID("NCC|10.0.0.1"); got == "NCC|10.0.0.1" {
+		t.Fatal("legacy key was not hashed")
+	}
+}
+
+func TestLegacyGatewayAliasMatchesKnownFeed(t *testing.T) {
+	// The school feed was learned before the network identity existed and is
+	// keyed by the old gateway. Sending this as an alias must reach it.
+	if got := NetworkID("unknown|10.179.160.1"); got != "914b1f2e3c5fb2fba54edcb3d5a72022" {
+		t.Fatalf("legacy gateway alias = %q", got)
 	}
 }
 

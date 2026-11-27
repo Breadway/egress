@@ -95,6 +95,7 @@ type splitReport struct {
 	Device    string                `json:"device"`
 	Network   string                `json:"network,omitempty"`
 	NetworkID string                `json:"network_id,omitempty"`
+	Aliases   []string              `json:"aliases,omitempty"`
 	Domains   []splitDomainReport   `json:"domains"`
 	Protocols []splitProtocolReport `json:"protocols,omitempty"`
 }
@@ -237,6 +238,55 @@ func containsState(states []string, want string) bool {
 	return false
 }
 
+// mergeAliases folds feeds from legacy network IDs into the canonical feed.
+// The old gateway-keyed feeds remain readable for older clients, while a new
+// canonical client starts with the domains already learned on this network.
+func (s *server) mergeAliases(feed *networkFeed, aliases []string) bool {
+	if len(aliases) > 8 {
+		aliases = aliases[:8]
+	}
+	merged := false
+	for _, raw := range aliases {
+		alias := strings.TrimSpace(strings.ToLower(raw))
+		if !splitNetworkIDRe.MatchString(alias) || alias == feed.NetworkID {
+			continue
+		}
+		src := s.loadFeed(alias)
+		for domain, entry := range src.Domains {
+			if len(feed.Domains) >= maxSplitDomains {
+				break
+			}
+			dst, ok := feed.Domains[domain]
+			if !ok {
+				feed.Domains[domain] = entry
+				merged = true
+				continue
+			}
+			if entry.State == "blocked" && dst.State != "blocked" {
+				dst.State = entry.State
+				dst.Evidence = entry.Evidence
+				dst.LastSeen = entry.LastSeen
+				merged = true
+			}
+			if entry.Count > dst.Count {
+				dst.Count = entry.Count
+				merged = true
+			}
+			if entry.LastSeen > dst.LastSeen {
+				dst.LastSeen = entry.LastSeen
+			}
+			feed.Domains[domain] = dst
+		}
+		for proto, entry := range src.Protocols {
+			if _, ok := feed.Protocols[proto]; !ok {
+				feed.Protocols[proto] = entry
+				merged = true
+			}
+		}
+	}
+	return merged
+}
+
 // apiBlockedReport merges one device's observations. Blocked and allowed
 // observations about the same domain contest it; the blocked device and the
 // allowing device are then asked to re-check, and any blocked answer keeps the
@@ -275,6 +325,10 @@ func (s *server) apiBlockedReport(w http.ResponseWriter, r *http.Request) {
 	feed := s.loadFeed(networkID(raw))
 	now := time.Now().UTC().Format(time.RFC3339)
 	added := 0
+	if s.mergeAliases(&feed, rep.Aliases) {
+		feed.Updated = now
+		_ = s.saveFeed(feed)
+	}
 
 	if len(rep.Domains) > maxSplitReport {
 		rep.Domains = rep.Domains[:maxSplitReport]
@@ -403,6 +457,9 @@ func (s *server) apiSeed(w http.ResponseWriter, r *http.Request) {
 	id := networkID(raw)
 	s.feedMu.Lock()
 	feed := s.loadFeed(id)
+	if s.mergeAliases(&feed, strings.Split(r.URL.Query().Get("alias"), ",")) {
+		_ = s.saveFeed(feed)
+	}
 	claimed := claimRefresh(&feed, time.Now())
 	if len(claimed) > 0 {
 		_ = s.saveFeed(feed)

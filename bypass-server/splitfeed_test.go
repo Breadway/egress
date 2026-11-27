@@ -1,9 +1,78 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestMergeAliasesFoldsLegacyFeed(t *testing.T) {
+	s := &server{state: t.TempDir()}
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	alias := networkID("unknown|10.179.160.1")
+	legacy := s.loadFeed(alias)
+	legacy.Domains["blocked.example"] = feedEntry{State: "blocked", Evidence: "tls-stall", Count: 2, LastSeen: stamp}
+	legacy.Domains["allowed.example"] = feedEntry{State: "allowed", Evidence: "connect-ok", Count: 1, LastSeen: stamp}
+	legacy.Protocols["udp"] = protocolEntry{State: "blocked", Count: 1, LastSeen: stamp}
+	if err := s.saveFeed(legacy); err != nil {
+		t.Fatal(err)
+	}
+	feed := s.loadFeed(networkID("canonical"))
+	if !s.mergeAliases(&feed, []string{alias, "not-a-network-id"}) {
+		t.Fatal("alias feed was not merged")
+	}
+	if feed.Domains["blocked.example"].State != "blocked" {
+		t.Fatalf("blocked entry not merged: %+v", feed.Domains)
+	}
+	if feed.Protocols["udp"].State != "blocked" {
+		t.Fatalf("protocol not merged: %+v", feed.Protocols)
+	}
+	// A later direct block must not be downgraded by an allowed alias entry.
+	feed.Domains["own.example"] = feedEntry{State: "blocked", Evidence: "cert-substitution", Count: 3, LastSeen: stamp}
+	legacy.Domains["own.example"] = feedEntry{State: "allowed", Evidence: "connect-ok", Count: 9, LastSeen: stamp}
+	if err := s.saveFeed(legacy); err != nil {
+		t.Fatal(err)
+	}
+	s.mergeAliases(&feed, []string{alias})
+	if feed.Domains["own.example"].State != "blocked" {
+		t.Fatalf("alias downgraded a block: %+v", feed.Domains["own.example"])
+	}
+}
+
+func TestSeedServesAliasDomains(t *testing.T) {
+	s := &server{state: t.TempDir()}
+	alias := networkID("unknown|10.179.160.1")
+	legacy := s.loadFeed(alias)
+	legacy.Domains["blocked.example"] = feedEntry{
+		State: "blocked", Evidence: "tls-stall", Count: 1,
+		LastSeen: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.saveFeed(legacy); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/split/seed?n="+networkID("canonical")+"&alias="+alias, nil)
+	rec := httptest.NewRecorder()
+	s.apiSeed(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed status %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		NetworkID string `json:"network_id"`
+		Domains   []struct {
+			Domain string `json:"domain"`
+		} `json:"domains"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.NetworkID != networkID("canonical") || len(body.Domains) != 1 ||
+		body.Domains[0].Domain != "blocked.example" {
+		t.Fatalf("seed body = %+v", body)
+	}
+}
 
 func TestNetworkIDHashesAndIsStable(t *testing.T) {
 	raw := "HomeNet|192.168.1.1"

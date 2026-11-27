@@ -44,7 +44,7 @@ func proxyNetworkAllowed() bool {
 	if len(split.LoadNetworks(dir)) == 0 {
 		return true
 	}
-	ssid, _ := currentSSID()
+	ssid := currentSSID()
 	if split.NetworkAllowed(dir, ssid) {
 		return true
 	}
@@ -378,7 +378,7 @@ func trayStatusLines(p *split.Proxy) []string {
 		fmt.Sprintf("Blocked: %d (contested %d), allowed: %d", blocked, contested, allowed),
 	}
 	if len(split.LoadNetworks(split.ProfileDir())) > 0 {
-		ssid, _ := currentSSID()
+		ssid := currentSSID()
 		state := "not listed"
 		if split.NetworkAllowed(split.ProfileDir(), ssid) {
 			state = "allowed"

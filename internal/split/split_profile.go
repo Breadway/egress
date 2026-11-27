@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,6 +94,7 @@ type splitProtocolReport struct {
 type splitReport struct {
 	Device    string                `json:"device"`
 	NetworkID string                `json:"network_id"`
+	Aliases   []string              `json:"aliases,omitempty"`
 	Domains   []splitDomainReport   `json:"domains"`
 	Protocols []splitProtocolReport `json:"protocols,omitempty"`
 }
@@ -105,6 +107,7 @@ type splitReporter struct {
 	feedMu   sync.Mutex
 	device   string
 	network  string
+	aliases  []string
 	dir      string
 	queue    map[string]Evidence
 	client   *http.Client
@@ -158,6 +161,39 @@ func (r *splitReporter) SetNetwork(network string) {
 		return
 	}
 	r.network = network
+}
+
+// SetAliases converts legacy keys to feed IDs and remembers them for the next
+// report and feed fetch. Legacy gateway keys are kept ahead of older canonical
+// IDs, and the list is capped to the server's merge limit.
+func (r *splitReporter) SetAliases(aliases []string) {
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(aliases))
+	legacy := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" {
+			continue
+		}
+		id := NetworkID(alias)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if strings.Contains(alias, "|") {
+			legacy = append(legacy, id)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	const maxAliases = 8
+	merged := append(legacy, ids...)
+	if len(merged) > maxAliases {
+		merged = merged[:maxAliases]
+	}
+	r.mu.Lock()
+	r.aliases = merged
+	r.mu.Unlock()
 }
 
 func (r *splitReporter) Report(domain string, evidence Evidence) {
@@ -243,6 +279,7 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	}
 	network := r.network
 	device := r.device
+	aliases := append([]string(nil), r.aliases...)
 	batch := make([]splitDomainReport, 0, len(r.queue))
 	for domain, evidence := range r.queue {
 		batch = append(batch, splitDomainReport{Domain: domain, State: "blocked", Evidence: string(evidence)})
@@ -259,6 +296,7 @@ func (r *splitReporter) flush(ctx context.Context) error {
 	payload, err := json.Marshal(splitReport{
 		Device:    device,
 		NetworkID: NetworkID(network),
+		Aliases:   aliases,
 		Domains:   batch,
 		Protocols: protocols,
 	})
@@ -299,9 +337,13 @@ func (r *splitReporter) fetchFeed(ctx context.Context) error {
 	defer r.feedMu.Unlock()
 	r.mu.Lock()
 	network := r.network
+	aliases := append([]string(nil), r.aliases...)
 	r.mu.Unlock()
 
 	u := r.seedURL + "?n=" + NetworkID(network)
+	if len(aliases) > 0 {
+		u += "&alias=" + url.QueryEscape(strings.Join(aliases, ","))
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
@@ -400,10 +442,12 @@ func (r *splitReporter) ReportObservation(ctx context.Context, domain, state, ev
 	r.mu.Lock()
 	network := r.network
 	device := r.device
+	aliases := append([]string(nil), r.aliases...)
 	r.mu.Unlock()
 	payload, err := json.Marshal(splitReport{
 		Device:    device,
 		NetworkID: NetworkID(network),
+		Aliases:   aliases,
 		Domains:   []splitDomainReport{{Domain: domain, State: state, Evidence: evidence, Final: final}},
 	})
 	if err != nil {
@@ -617,12 +661,25 @@ func NewProfile(network string) *Profile {
 		Entries: map[string]DomainEntry{}, Protocols: map[string]string{}}
 }
 
-// NetworkID is the key the shared table uses. It hashes the SSID so the server
-// never stores the name. The pepper makes the hash domain-specific, not secret:
-// an SSID has a small search space.
+// NetworkID is the key the shared table uses. A canonical 32-hex identity is
+// already a hash and is passed through; legacy SSID/gateway keys are hashed so
+// the server never stores the name. The pepper is obfuscation, not secrecy.
 func NetworkID(network string) string {
-	sum := sha256.Sum256([]byte("egress-split-v1:" + strings.ToLower(strings.TrimSpace(network))))
+	n := strings.TrimSpace(network)
+	if len(n) == 32 && isHex(n) {
+		return n
+	}
+	sum := sha256.Sum256([]byte("egress-split-v1:" + strings.ToLower(n)))
 	return hex.EncodeToString(sum[:])[:32]
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // UDPBlocked reports whether the stored protocol picture says outbound UDP is
@@ -636,18 +693,95 @@ func UDPBlocked(network string) bool {
 	return profile.Protocols["udp"] == "blocked"
 }
 
-// NetworkKey identifies a network by SSID and gateway. Roaming between APs on
-// the same gateway keeps one profile; a new gateway starts a new one.
+// NetworkKey identifies a network. A readable Wi-Fi SSID is the stable name:
+// DHCP can move the gateway on the same network, and keying on it fragmented
+// the profile and the shared table. A wired link has no SSID, so the gateway
+// remains the fallback.
 func NetworkKey(ssid, gateway string) string {
 	ssid = strings.TrimSpace(ssid)
+	if ssid != "" && !strings.EqualFold(ssid, "unknown") {
+		return ssid
+	}
 	gateway = strings.TrimSpace(gateway)
-	if ssid == "" {
-		ssid = "unknown"
-	}
 	if gateway == "" {
-		gateway = "unknown"
+		return "unknown"
 	}
-	return ssid + "|" + gateway
+	return "unknown|" + gateway
+}
+
+// MigrateLegacyProfile folds a legacy-keyed profile into the new network key
+// the first time the daemon starts after the network identity changed. When
+// the destination is absent the legacy bytes are copied verbatim; when it
+// already exists, missing domains and protocols are merged in without
+// overwriting anything the canonical profile already learned. Callers pass the
+// old gateway-keyed names, which differ by whether the SSID could be read.
+func MigrateLegacyProfile(dir, network string, legacy ...string) {
+	network = strings.TrimSpace(network)
+	if network == "" || strings.HasPrefix(network, "unknown") {
+		return
+	}
+	dstPath := ProfilePathIn(dir, network)
+	_, statErr := os.Stat(dstPath)
+	dstExists := statErr == nil
+
+	var dst *Profile
+	if dstExists {
+		var err error
+		dst, err = LoadProfile(dstPath, network)
+		if err != nil {
+			// An unreadable canonical profile must not be clobbered by an old
+			// copy; the splitter will surface the parse error.
+			return
+		}
+	}
+
+	for _, key := range legacy {
+		key = strings.TrimSpace(key)
+		if key == "" || key == network {
+			continue
+		}
+		srcPath := ProfilePathIn(dir, key)
+		srcData, err := os.ReadFile(srcPath)
+		if err != nil {
+			continue
+		}
+		if !dstExists {
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				return
+			}
+			_ = os.WriteFile(dstPath, srcData, 0600)
+			return
+		}
+		src, err := LoadProfile(srcPath, network)
+		if err != nil {
+			continue
+		}
+		changed := false
+		if dst.Entries == nil {
+			dst.Entries = map[string]DomainEntry{}
+		}
+		for domain, entry := range src.Entries {
+			if _, ok := dst.Entries[domain]; ok {
+				continue
+			}
+			dst.Entries[domain] = entry
+			changed = true
+		}
+		if dst.Protocols == nil {
+			dst.Protocols = map[string]string{}
+		}
+		for proto, state := range src.Protocols {
+			if _, ok := dst.Protocols[proto]; ok {
+				continue
+			}
+			dst.Protocols[proto] = state
+			changed = true
+		}
+		if changed {
+			_ = dst.Save(dstPath)
+		}
+		return
+	}
 }
 
 // State returns the current state, expiring stale allowed verdicts.

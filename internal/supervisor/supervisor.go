@@ -57,6 +57,10 @@ type Supervisor struct {
 
 	Iface   string
 	Gateway string
+	// NetworkID optionally resolves the full network identity and the legacy
+	// aliases that share its feed. When nil the supervisor falls back to the
+	// SSID plus gateway key.
+	NetworkID func(iface, gateway string) (string, []string)
 
 	// Candidate default routes, best first, with the index currently
 	// pinned. On sustained probe failure the pin walks the list so one dead
@@ -188,11 +192,30 @@ func (s *Supervisor) Fallback() bool {
 	return s.manageFallback
 }
 
+func (s *Supervisor) networkKey() (string, []string) {
+	if s.NetworkID != nil {
+		if id, aliases := s.NetworkID(s.Iface, s.Gateway); id != "" {
+			return id, aliases
+		}
+	}
+	return split.NetworkKey(platform.SSID(s.Iface), s.Gateway), nil
+}
+
+// setSplitNetwork applies a resolved network and its aliases to the splitter.
+func (s *Supervisor) setSplitNetwork() {
+	network, aliases := s.networkKey()
+	if s.Split != nil {
+		s.Split.SetNetworkAliases(aliases)
+		s.Split.SetNetwork(network, s.Iface)
+	}
+}
+
 func (s *Supervisor) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- s.resolver.Serve(ctx) }()
 	if s.Split != nil {
-		network := split.NetworkKey("", s.Gateway)
+		network, aliases := s.networkKey()
+		s.Split.SetNetworkAliases(aliases)
 		s.Split.SetNetwork(network, s.Iface)
 		s.resolver.SetObserver(func(domain string, ips []net.IP, ttl time.Duration) {
 			s.Split.HandleAnswer(domain, ips, ttl)
@@ -308,7 +331,7 @@ func (s *Supervisor) loop(ctx context.Context) error {
 					s.dnsWedgeSince = time.Time{}
 					s.lastDNSRecovery = time.Time{}
 					if s.Split != nil {
-						s.Split.SetNetwork(split.NetworkKey("", s.Gateway), s.Iface)
+						s.setSplitNetwork()
 					}
 					if state == pathWebSocket {
 						lastTrial = time.Time{}
