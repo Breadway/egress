@@ -53,6 +53,10 @@ type device struct {
 	// visible inside a circle; an empty value is the original "bread" circle,
 	// so existing devices keep working unchanged.
 	Circle string `json:"circle,omitempty"`
+	// Role marks infrastructure devices that are not people. Exit servers keep
+	// the same circle so they can serve it, but ordinary clients do not list
+	// them as friends.
+	Role string `json:"role,omitempty"`
 	// DerpPubKey is the device's relay identity. It is separate from the
 	// WireGuard key on purpose: the relay learns this key, and it must not be
 	// the key that protects the tunnel.
