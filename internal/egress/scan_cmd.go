@@ -95,11 +95,11 @@ func cmdScan(args []string) error {
 	}
 
 	plat := newPlatform()
-	_, gateway, err := plat.DefaultRoute()
+	dev, gateway, err := plat.DefaultRoute()
 	if err != nil {
 		return fmt.Errorf("find the default route: %w", err)
 	}
-	network := split.NetworkKey("", gateway)
+	network, _ := currentNetwork(dev, gateway)
 
 	// Scanning while DNS is broken records allowed and inconclusive results
 	// that say nothing about the network. Refuse instead.

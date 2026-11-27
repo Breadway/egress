@@ -757,6 +757,7 @@ func cmdSupervise(args []string) error {
 	} else {
 		appLogger().Printf("derp: unavailable: %v", derr)
 	}
+	network, ident := currentNetwork(iface, gateway)
 	if !*noTunnel || *relayTunnel {
 		routes := split.NewRouteManager(splitDev, appLogger())
 		if ps, ok := plat.(peerSetter); ok {
@@ -766,7 +767,8 @@ func cmdSupervise(args []string) error {
 			direct = newDirectExit(ps, splitDev, relay, appLogger())
 			routes.OnChange(direct.SetPrefixes)
 		}
-		splitter = split.NewController(split.NetworkKey("", gateway), iface, routes, appLogger())
+		splitter = split.NewController(network, iface, routes, appLogger())
+		splitter.SetNetworkAliases(ident.Aliases)
 		if direct != nil {
 			splitter.SetExitsHandler(direct.SetExits)
 		}
@@ -779,9 +781,13 @@ func cmdSupervise(args []string) error {
 
 	sup := supervisor.New(plat, resolver, wst, appLogger(), !*noTunnel, !*noFallback)
 	sup.Iface, sup.Gateway = iface, gateway
+	sup.NetworkID = func(iface, gateway string) (string, []string) {
+		id, rec := currentNetwork(iface, gateway)
+		return id, rec.Aliases
+	}
 	// A protocol picture shared by another device on this network may already
 	// say UDP is blocked; start on the relay instead of failing over.
-	sup.PreferRelay = split.UDPBlocked(split.NetworkKey("", gateway))
+	sup.PreferRelay = split.UDPBlocked(network)
 	sup.Split = splitter
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

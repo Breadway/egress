@@ -81,11 +81,12 @@ func cmdProxy(args []string) (err error) {
 	}
 
 	plat := newPlatform()
-	_, gateway, err := plat.DefaultRoute()
+	iface, gateway, err := plat.DefaultRoute()
 	if err != nil {
 		appLogger().Printf("proxy: no default route yet (%v)", err)
 	}
-	p := split.NewProxy(split.NetworkKey("", gateway), split.ProfileDir(), *listen, *relay, user, pass, appLogger())
+	network, _ := currentNetwork(iface, gateway)
+	p := split.NewProxy(network, split.ProfileDir(), *listen, *relay, user, pass, appLogger())
 	// The tunnel service query costs a process spawn, so do not repeat it per
 	// connection; five seconds is far below the time a tunnel stays down.
 	var tunnelChecked time.Time

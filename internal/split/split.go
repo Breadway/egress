@@ -71,6 +71,12 @@ func NewController(network, iface string, routes *RouteManager, logger *log.Logg
 	return c
 }
 
+// SetNetworkAliases records old network keys or IDs that should still map to
+// this network's shared feed. The server merges their domains once.
+func (c *Controller) SetNetworkAliases(aliases []string) {
+	c.reporter.SetAliases(aliases)
+}
+
 // SetShareReports enables or disables outbound learning. Incoming feed data
 // and local probing continue either way.
 func (c *Controller) SetShareReports(on bool) { c.shareReports.Store(on) }
