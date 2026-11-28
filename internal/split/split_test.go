@@ -289,7 +289,7 @@ func TestHeadFetch(t *testing.T) {
 		_, _ = server.Read(buf)
 		_, _ = server.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 5\r\n\r\nnope!"))
 	}()
-	status, body, err := headFetch(client, "example.com", "test", time.Second)
+	status, body, location, err := headFetch(client, "example.com", "test", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +298,41 @@ func TestHeadFetch(t *testing.T) {
 	}
 	if body != "nope!" {
 		t.Errorf("body %q, want the bytes after the headers", body)
+	}
+	if location != "" {
+		t.Errorf("location %q, want empty", location)
+	}
+}
+
+// A filter can answer with a redirect whose Location is the only place the
+// appliance names itself, and a 200 block page can put its title past the old
+// 8 KB read limit.
+func TestHeadFetchKeepsRedirectLocationAndDeepBody(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	page := "<html><head><title>Web Filter Violation</title></head><body>" +
+		strings.Repeat(" ", 10000) + "<h1>FortiGuard</h1></body></html>"
+	go func() {
+		defer server.Close()
+		buf := make([]byte, 512)
+		_, _ = server.Read(buf)
+		_, _ = server.Write([]byte("HTTP/1.1 302 Found\r\nLocation: https://blocked.fortinet.com/blocked\r\n\r\n" + page))
+	}()
+	status, body, location, err := headFetch(client, "example.com", "test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 302 {
+		t.Errorf("status %d, want 302", status)
+	}
+	if location != "https://blocked.fortinet.com/blocked" {
+		t.Errorf("location %q", location)
+	}
+	if len(body) < 10000 || !strings.Contains(body, "Web Filter Violation") {
+		t.Errorf("body was not read past the old 8 KB limit: %d bytes", len(body))
+	}
+	if got := blockPageSignature(status, htmlTitle(body), body, location); got != "fortigate" {
+		t.Errorf("signature %q, want fortigate", got)
 	}
 }
 
@@ -1044,24 +1079,30 @@ const fortigateBlockPage = `<html><head><title>Web Filter Violation</title></hea
 
 func TestBlockPageSignature(t *testing.T) {
 	cases := []struct {
-		name   string
-		status int
-		title  string
-		body   string
-		want   string
+		name     string
+		status   int
+		title    string
+		body     string
+		location string
+		want     string
 	}{
-		{"real fortigate page", 403, "Web Filter Violation", fortigateBlockPage, "fortigate"},
-		{"title alone", 200, "Web Filter Violation", "<html></html>", "fortigate"},
-		{"vendor url alone", 200, "", `<a href="https://globalurl.fortinet.net/rate/submit.php?id=1">x</a>`, "fortigate"},
-		{"refusal with vendor name", 403, "", "<p>Fortinet Unified Threat Management</p>", "fortigate"},
+		{name: "real fortigate page", status: 403, title: "Web Filter Violation", body: fortigateBlockPage, want: "fortigate"},
+		{name: "title alone", status: 200, title: "Web Filter Violation", body: "<html></html>", want: "fortigate"},
+		{name: "vendor url alone", status: 200, body: `<a href="https://globalurl.fortinet.net/rate/submit.php?id=1">x</a>`, want: "fortigate"},
+		{name: "refusal with vendor name", status: 403, body: "<p>Fortinet Unified Threat Management</p>", want: "fortigate"},
+		{name: "fortigate redirect location", status: 302, location: "https://blocked.fortinet.com/blocked", want: "fortigate"},
+		{name: "ordinary redirect", status: 302, location: "https://www.example.com/", want: ""},
+		// A vendor's own site is not its block page.
+		{name: "fortinet site redirect", status: 302, location: "https://www.fortinet.com/", want: ""},
+		{name: "deep 200 block page", status: 200, title: "Web Filter Violation", body: strings.Repeat(" ", 10000) + fortigateBlockPage, want: "fortigate"},
 		// A security site discussing the appliance is not a block page.
-		{"article about fortinet", 200, "Why FortiGuard blocks sites", "<p>Fortinet and FortiGuard explained.</p>", ""},
-		{"ordinary site", 200, "Poki - Free Online Games", "<p>Play free games.</p>", ""},
-		{"ordinary 403", 403, "Access denied", "<p>Cloudflare Ray ID: abc</p>", ""},
-		{"empty", 0, "", "", ""},
+		{name: "article about fortinet", status: 200, title: "Why FortiGuard blocks sites", body: "<p>Fortinet and FortiGuard explained.</p>", want: ""},
+		{name: "ordinary site", status: 200, title: "Poki - Free Online Games", body: "<p>Play free games.</p>", want: ""},
+		{name: "ordinary 403", status: 403, title: "Access denied", body: "<p>Cloudflare Ray ID: abc</p>", want: ""},
+		{name: "empty", status: 0, want: ""},
 	}
 	for _, c := range cases {
-		if got := blockPageSignature(c.status, c.title, c.body); got != c.want {
+		if got := blockPageSignature(c.status, c.title, c.body, c.location); got != c.want {
 			t.Errorf("%s: signature = %q, want %q", c.name, got, c.want)
 		}
 	}

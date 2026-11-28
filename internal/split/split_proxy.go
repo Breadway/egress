@@ -210,10 +210,9 @@ func ProbeDomain(ctx context.Context, domain string, opts ProbeOptions) ProbeRes
 }
 
 const (
-	// probeHeadBytes is enough to see a normal site's title and framing.
-	probeHeadBytes = 8 << 10
-	// probeBlockBytes covers an appliance block page, which can carry a large
-	// inline stylesheet ahead of the text that identifies it.
+	// probeBlockBytes covers an appliance block page. A 200-status block page
+	// can carry tens of kilobytes of inline CSS ahead of its title, so every
+	// response is read this far, not only a refusal.
 	probeBlockBytes = 64 << 10
 )
 
@@ -246,7 +245,7 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 	}
 	defer tconn.Close()
 
-	status, body, err := headFetch(tconn, domain, ua, timeout)
+	status, body, location, err := headFetch(tconn, domain, ua, timeout)
 	if err != nil {
 		res.Err = err
 		if isTimeout(err) {
@@ -257,7 +256,7 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 	}
 	res.Status = status
 	res.Title = htmlTitle(body)
-	if sig := blockPageSignature(status, res.Title, body); sig != "" {
+	if sig := blockPageSignature(status, res.Title, body, location); sig != "" {
 		res.State, res.Evidence = StateBlocked, Evidence(string(EvidenceInterceptPage)+":"+sig)
 		res.Transient = false
 		return res
@@ -297,42 +296,42 @@ func probeIP(ctx context.Context, domain, ip string, timeout time.Duration, ua s
 // the body. A HEAD would be cheaper, but a filter that intercepts TLS answers
 // 200 with its own block page, and only the body distinguishes that from the
 // real site.
-func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, string, error) {
+func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, string, string, error) {
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	req := "GET / HTTP/1.1\r\nHost: " + domain + "\r\nUser-Agent: " + ua +
 		"\r\nAccept: text/html,*/*\r\nRange: bytes=0-65535\r\nConnection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, req); err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	br := bufio.NewReader(conn)
 	line, err := br.ReadString('\n')
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	fields := strings.Fields(line)
 	if len(fields) < 2 {
-		return 0, "", fmt.Errorf("bad status line %q", line)
+		return 0, "", "", fmt.Errorf("bad status line %q", line)
 	}
 	status, err := strconv.Atoi(fields[1])
 	if err != nil {
-		return 0, "", fmt.Errorf("bad status line %q", line)
+		return 0, "", "", fmt.Errorf("bad status line %q", line)
 	}
+	location := ""
 	for {
 		header, herr := br.ReadString('\n')
 		if herr != nil || header == "\r\n" || header == "\n" {
 			break
 		}
+		if strings.HasPrefix(strings.ToLower(header), "location:") {
+			location = strings.TrimSpace(header[len("location:"):])
+		}
 	}
-	// A real page only needs its head to be judged, so stop early. A refusal
-	// needs more: an appliance's block page can put tens of kilobytes of inline
-	// CSS before its title, and a title found at 34 KB is what turned a 403
-	// into a false "allowed" here.
-	limit := probeHeadBytes
-	if status >= 400 {
-		limit = probeBlockBytes
-	}
+	// Read the same amount for every status. A block page served with 200 can
+	// put tens of kilobytes of inline CSS before its title, and a 302 can carry
+	// the appliance's block-page URL only in Location.
+	limit := probeBlockBytes
 	body := make([]byte, 0, 4096)
 	buf := make([]byte, 4096)
 	for len(body) < limit {
@@ -344,7 +343,7 @@ func headFetch(conn net.Conn, domain, ua string, timeout time.Duration) (int, st
 			break
 		}
 	}
-	return status, string(body), nil
+	return status, string(body), location, nil
 }
 
 // Block pages are identified by structure, not prose. A school appliance can
@@ -382,7 +381,18 @@ var blockPageVendors = []struct{ name, marker string }{
 // blockPageSignature names the appliance whose block page this is, or "" when
 // the response does not look like one. The name is recorded as evidence, so a
 // report says which filter produced the page.
-func blockPageSignature(status int, title, body string) string {
+func blockPageSignature(status int, title, body, location string) string {
+	// A filter often answers with a redirect to its block page. The target is
+	// the only place the appliance names itself, so inspect it before the body
+	// and do not treat the redirect as allowed.
+	if location != "" {
+		loc := strings.ToLower(location)
+		for _, sig := range blockPageURLs {
+			if strings.Contains(loc, sig.marker) {
+				return sig.name
+			}
+		}
+	}
 	lower := strings.ToLower(body)
 	for _, sig := range blockPageURLs {
 		if strings.Contains(lower, sig.marker) {

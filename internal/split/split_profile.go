@@ -642,7 +642,7 @@ type DomainEntry struct {
 // check that produced it, so when the check improves, old "allowed" verdicts
 // must be re-probed. Blocked verdicts are kept: they only ever cause an
 // attempt through the relay, which cannot make a working site fail.
-const probeVersion = 3
+const probeVersion = 4
 
 type Profile struct {
 	Version      int                    `json:"version"`
